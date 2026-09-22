@@ -18,6 +18,7 @@ import {
   type RosterEntry,
 } from '../shared/types.js';
 import { City } from './city.js';
+import { paintSurface, windowsPattern } from './surfaces.js';
 
 /** Outline colour used for everything. */
 export const INK = '#1b1030';
@@ -26,7 +27,6 @@ const CYAN = '#00e1ff';
 const MAGENTA = '#ff2e88';
 const YELLOW = '#ffd93d';
 const BUMPER_TOP = '#ff3d8b';
-const BUMPER_SHADE = '#b81f5e';
 const VOID = '#140e38';
 
 /** World-space outline widths. */
@@ -288,7 +288,7 @@ function hatch(ctx: CanvasRenderingContext2D, pxPerUnit: number): CanvasPattern 
   return pat;
 }
 
-/** Sparkle spots on the ice (fraction of radius, angle in degrees). */
+/** Rain-puddle glints on the rooftop (fraction of radius, angle in degrees). */
 const GLINTS: readonly [number, number][] = [
   [0.52, 205],
   [0.34, 248],
@@ -302,9 +302,9 @@ export const FONT = '"Arial Black", "Arial Rounded MT Bold", "Helvetica Neue", H
 
 /**
  * Paints a map in world units at the current transform: shadow, slab,
- * cel-shaded ice, holes and bumpers. Shared by the game and the thumbnails.
+ * cel-shaded rooftop, facade, vents and bumpers. Shared by the game and the thumbnails.
  */
-/** The ice's shadow, cast onto whatever is far below it. */
+/** The platform's shadow, cast onto the city far below it. */
 function paintMapShadow(ctx: CanvasRenderingContext2D, map: MapDef, R: number, dx: number, dy: number): void {
   ctx.save();
   ctx.translate(dx, dy);
@@ -329,13 +329,18 @@ function paintMap(
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
 
-  // Slab side: two flat tones and an ink outline.
+  // Slab side: a building facade with lit windows, two flat tones and an ink outline.
   ctx.fillStyle = t.side;
   arenaPath(ctx, map, R, slab);
   ctx.fill();
   ctx.save();
   ctx.clip();
-  ctx.fillStyle = t.sideShade;
+  const windows = windowsPattern(ctx, pxPerUnit);
+  if (windows) {
+    ctx.fillStyle = windows;
+    ctx.fillRect(-R * 2, -R * 2, R * 4, R * 4);
+  }
+  ctx.fillStyle = rgba(t.sideShade, 0.8);
   ctx.fillRect(R * 0.35, -R * 2, R * 2, R * 4);
   const lines = hatch(ctx, pxPerUnit);
   if (lines) {
@@ -358,16 +363,28 @@ function paintMap(
   ctx.beginPath();
   addArenaPath(ctx, map, R * 0.97, -R * 0.07, -R * 0.09);
   ctx.fill();
-  // Halftone dots over the shadow band only (arena minus the lit face).
-  const dots = halftone(ctx, pxPerUnit);
-  if (dots) {
-    ctx.fillStyle = dots;
+  // The rooftop's own markings (helipad, tiles, parking bays...), shrinking with the arena.
+  ctx.save();
+  ctx.scale(mapScale(R), mapScale(R));
+  paintSurface(ctx, map, time);
+  ctx.restore();
+  // Shade the band again over the markings, then halftone dots (arena minus the lit face).
+  const band = (): void => {
     ctx.beginPath();
     addArenaPath(ctx, map, R * 1.05, 0, 0);
     addArenaPath(ctx, map, R * 0.97, -R * 0.07, -R * 0.09);
+  };
+  ctx.fillStyle = rgba(INK, 0.16);
+  band();
+  ctx.fill('evenodd');
+  const dots = halftone(ctx, pxPerUnit);
+  if (dots) {
+    ctx.fillStyle = dots;
+    band();
     ctx.fill('evenodd');
   }
-  ctx.strokeStyle = '#ffffff';
+  // Rain-slick sheen.
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
   ctx.lineWidth = 0.32;
   ctx.beginPath();
   ctx.arc(0, 0, R * 0.8, Math.PI * 1.08, Math.PI * 1.32);
@@ -424,11 +441,22 @@ function paintMap(
       ctx.fill('evenodd');
     }
     ctx.restore();
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = LINE;
+    // Metal vent frames with an ink edge.
     for (const h of holes) {
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = LINE + 0.2;
       ctx.beginPath();
-      ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+      ctx.arc(h.x, h.y, h.r + 0.08, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#b4bdd0';
+      ctx.lineWidth = 0.12;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, h.r + 0.08, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 0.05;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, h.r + 0.08, Math.PI * 1.1, Math.PI * 1.5);
       ctx.stroke();
     }
   }
@@ -464,14 +492,14 @@ function paintMap(
     ctx.beginPath();
     ctx.ellipse(b.x + 0.12, b.y + post + 0.12, b.r, b.r * 0.85, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = BUMPER_SHADE;
+    ctx.fillStyle = mix(t.bumper, INK, 0.4);
     ctx.strokeStyle = INK;
     ctx.lineWidth = LINE;
     ctx.beginPath();
     ctx.arc(b.x, b.y + post, b.r, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = BUMPER_TOP;
+    ctx.fillStyle = t.bumper;
     ctx.beginPath();
     ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
     ctx.fill();

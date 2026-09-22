@@ -2,7 +2,7 @@
 
 An online party brawler for 2 to 8 players. You can't walk: the only way to
 move is to shoot, and every shot kicks you backwards. Hits knock people back
-harder the more damage they've taken, and the ice keeps shrinking. The last
+harder the more damage they've taken, and the rooftop keeps shrinking. The last
 player standing wins the round, and the first to 5 round wins takes the match.
 
 - **Quick play:** jump into a public room with anyone online. It starts by
@@ -12,13 +12,18 @@ player standing wins the round, and the first to 5 round wins takes the match.
   from a carousel (or picks Random for the spinner) and starts the match.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
-- **12 maps:** Frozen Pond, Donut, Pinball, The Box, Swiss Ice, Pillars,
-  Hex Rink, Diamond, Moat, Canyon, Bumper Alley, and Hive. Arenas can be
-  circles, squares, hexagons, or diamonds, with holes and pinball bumpers.
+- **12 floating rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
+  Vent Farm, Chimneys, Hex Plaza, Billboard, Sky Garden, Split Level, Parking
+  Deck, and Solar Farm. Each has its own surface art and a building facade
+  with lit windows. Arenas can be circles, squares, hexagons, or diamonds,
+  with open vents to fall through and bumpers such as chimneys and traffic
+  cones.
 - **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, and Heal.
 - **Spider-Verse-style comic visuals, all drawn in code:**
-  - The ice floats above a city at dusk, with rooftops, moving cars, and
-    clouds below it, and the ice casts its shadow onto the streets.
+  - The rooftops float above a city at dusk. The streets are an irregular
+    tilted grid with a diagonal boulevard and a roundabout, traffic includes
+    sedans, taxis, trucks, and buses, and clouds drift below you. Each
+    platform casts its shadow onto the city.
   - Off-register cyan and magenta printing and Ben-Day halftone dots.
   - Colored cel shadows and ink hatching.
   - Comic "POW!" words, manga speed lines, and a glitch on knockouts.

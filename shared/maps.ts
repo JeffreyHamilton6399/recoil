@@ -9,15 +9,33 @@ export interface Circle {
   r: number;
 }
 
+/** What the rooftop is covered with (drawn by the client). */
+export type Surface =
+  | 'helipad'
+  | 'gravel'
+  | 'neon'
+  | 'tar'
+  | 'plate'
+  | 'tiles'
+  | 'paving'
+  | 'billboard'
+  | 'garden'
+  | 'plywood'
+  | 'parking'
+  | 'solar';
+
 export interface MapTheme {
-  /** Lit ice surface. */
+  /** Lit rooftop surface. */
   top: string;
-  /** Shadowed ice surface. */
+  /** Shadowed rooftop surface. */
   shade: string;
-  /** Slab side. */
+  /** Building facade under the roof. */
   side: string;
-  /** Slab side in shadow. */
+  /** Facade in shadow. */
   sideShade: string;
+  surface: Surface;
+  /** Bumper colour (pinball bumpers, chimneys, traffic cones...). */
+  bumper: string;
 }
 
 /** Arena outline. Hex and diamond are regular polygons scaled to feel about as big as the circle. */
@@ -27,7 +45,7 @@ export interface MapDef {
   name: string;
   blurb: string;
   shape: MapShape;
-  /** Fall in if your centre is inside one. */
+  /** Open vents / skylights: fall in if your centre is inside one. */
   holes: Circle[];
   /** Bouncy posts that knock players (and bullets) away. */
   bumpers: Circle[];
@@ -41,88 +59,88 @@ const polar = (r: number, deg: number, size: number): Circle => {
 
 export const MAPS: readonly MapDef[] = [
   {
-    name: 'Frozen Pond',
-    blurb: 'Plain ice. Pure skill.',
+    name: 'Helipad',
+    blurb: 'A clean landing pad. Pure skill.',
     shape: 'circle',
     holes: [],
     bumpers: [],
-    theme: { top: '#c9f1ff', shade: '#94d3f0', side: '#4f9ccc', sideShade: '#35729f' },
+    theme: { top: '#b9c3d6', shade: '#8d98b3', side: '#5b5f86', sideShade: '#3f4166', surface: 'helipad', bumper: '#ff3d8b' },
   },
   {
-    name: 'Donut',
-    blurb: "Don't fall through the middle.",
+    name: 'Skylight',
+    blurb: "Don't fall through the skylight.",
     shape: 'circle',
     holes: [{ x: 0, y: 0, r: 2 }],
     bumpers: [],
-    theme: { top: '#c8f7e1', shade: '#8fdcb8', side: '#3fa87c', sideShade: '#2c7c5b' },
+    theme: { top: '#d8cfc4', shade: '#b3a797', side: '#7a5f6e', sideShade: '#5a4152', surface: 'gravel', bumper: '#ff3d8b' },
   },
   {
-    name: 'Pinball',
-    blurb: 'Bumpers fling you. Hard.',
+    name: 'Arcade Roof',
+    blurb: 'Neon pinball bumpers fling you. Hard.',
     shape: 'circle',
     holes: [],
     bumpers: [{ x: 0, y: 0, r: 1 }, polar(6.3, 0, 0.8), polar(6.3, 90, 0.8), polar(6.3, 180, 0.8), polar(6.3, 270, 0.8)],
-    theme: { top: '#e3dcff', shade: '#b9aaf2', side: '#7a63cc', sideShade: '#5a45a3' },
+    theme: { top: '#3b2a6b', shade: '#2a1d52', side: '#2c2158', sideShade: '#1b1440', surface: 'neon', bumper: '#ff2e88' },
   },
   {
-    name: 'The Box',
-    blurb: 'Corners are a trap.',
+    name: 'The Block',
+    blurb: 'A tar roof. Corners are a trap.',
     shape: 'square',
     holes: [],
     bumpers: [],
-    theme: { top: '#ffe6cc', shade: '#f5c396', side: '#d0844a', sideShade: '#a65f2d' },
+    theme: { top: '#55566d', shade: '#3e3f55', side: '#6b4a5a', sideShade: '#4d3342', surface: 'tar', bumper: '#ff3d8b' },
   },
   {
-    name: 'Swiss Ice',
-    blurb: 'Full of holes. Watch your step.',
+    name: 'Vent Farm',
+    blurb: 'Open vents everywhere. Watch your step.',
     shape: 'circle',
     holes: [polar(2.4, 90, 0.9), polar(2.4, 210, 0.9), polar(2.4, 330, 0.9), polar(6.8, 30, 0.8), polar(6.8, 150, 0.8), polar(6.8, 270, 0.8)],
     bumpers: [],
-    theme: { top: '#fff4c4', shade: '#f2d98a', side: '#c9a23e', sideShade: '#9c7a26' },
+    theme: { top: '#a9b8c6', shade: '#8293a8', side: '#4f6a82', sideShade: '#374d63', surface: 'plate', bumper: '#ff3d8b' },
   },
   {
-    name: 'Pillars',
-    blurb: 'A square with posts to hide behind.',
+    name: 'Chimneys',
+    blurb: 'Terracotta tiles and chimneys to hide behind.',
     shape: 'square',
     holes: [],
     bumpers: [polar(2.6, 0, 0.75), polar(2.6, 90, 0.75), polar(2.6, 180, 0.75), polar(2.6, 270, 0.75)],
-    theme: { top: '#ffdcee', shade: '#f5aacd', side: '#cc5c93', sideShade: '#a13f70' },
+    theme: { top: '#e08462', shade: '#b85e44', side: '#6d4a6a', sideShade: '#4f324d', surface: 'tiles', bumper: '#9c3b31' },
   },
   {
-    name: 'Hex Rink',
+    name: 'Hex Plaza',
     blurb: 'Six sides, six ways to go out.',
     shape: 'hex',
     holes: [],
     bumpers: [],
-    theme: { top: '#d9e8ff', shade: '#a9c4f0', side: '#5b7fc4', sideShade: '#3f5f9c' },
+    theme: { top: '#e3d8c4', shade: '#c2b39b', side: '#7d6a8a', sideShade: '#5d4c6b', surface: 'paving', bumper: '#ff3d8b' },
   },
   {
-    name: 'Diamond',
-    blurb: 'Sharp corners. Sharper players.',
+    name: 'Billboard',
+    blurb: 'Fight on top of an ad. Sharp corners.',
     shape: 'diamond',
     holes: [],
     bumpers: [{ x: 0, y: 0, r: 0.9 }],
-    theme: { top: '#d6fbff', shade: '#9fe6ef', side: '#3eb3c2', sideShade: '#2b8795' },
+    theme: { top: '#ffd93d', shade: '#f0b21e', side: '#3a3f7a', sideShade: '#282b5c', surface: 'billboard', bumper: '#ff2e88' },
   },
   {
-    name: 'Moat',
-    blurb: 'A ring of holes guards the edge.',
+    name: 'Sky Garden',
+    blurb: 'Mind the open drains around the lawn.',
     shape: 'circle',
     holes: [0, 1, 2, 3, 4, 5, 6, 7].map((k) => polar(6.6, 22.5 + k * 45, 0.8)),
     bumpers: [],
-    theme: { top: '#e6ffd9', shade: '#b8eba0', side: '#6cb04a', sideShade: '#4e8a32' },
+    theme: { top: '#74d27e', shade: '#4fa85c', side: '#5a6a8a', sideShade: '#3f4d6b', surface: 'garden', bumper: '#ff3d8b' },
   },
   {
-    name: 'Canyon',
-    blurb: 'A crack splits the ice in two.',
+    name: 'Split Level',
+    blurb: 'A construction gap splits the roof in two.',
     shape: 'circle',
     holes: [-5.8, -3.5, -1.2, 1.2, 3.5, 5.8].map((y) => ({ x: 0, y, r: 1.05 })),
     bumpers: [],
-    theme: { top: '#ffe9dc', shade: '#f4c3a6', side: '#c46f45', sideShade: '#9a5230' },
+    theme: { top: '#e6bb7e', shade: '#c4955a', side: '#6a5a7a', sideShade: '#4c3f5c', surface: 'plywood', bumper: '#ff3d8b' },
   },
   {
-    name: 'Bumper Alley',
-    blurb: 'Six bumpers. Total chaos.',
+    name: 'Parking Deck',
+    blurb: 'Six traffic cones. Total chaos.',
     shape: 'square',
     holes: [],
     bumpers: [
@@ -133,15 +151,15 @@ export const MAPS: readonly MapDef[] = [
       { x: 0, y: -5.4, r: 0.7 },
       { x: 0, y: 5.4, r: 0.7 },
     ],
-    theme: { top: '#f0e0ff', shade: '#d3b3f5', side: '#9660cf', sideShade: '#7143a6' },
+    theme: { top: '#5c5f74', shade: '#46485c', side: '#8a8fa3', sideShade: '#666a80', surface: 'parking', bumper: '#ff7a1a' },
   },
   {
-    name: 'Hive',
-    blurb: 'Honeycomb holes and a sticky centre.',
+    name: 'Solar Farm',
+    blurb: 'Panels, open hatches and a pylon in the middle.',
     shape: 'hex',
     holes: [0, 1, 2, 3, 4, 5].map((k) => polar(6.2, 30 + k * 60, 0.85)),
     bumpers: [{ x: 0, y: 0, r: 0.85 }],
-    theme: { top: '#fff1c9', shade: '#f5d68a', side: '#d19a2a', sideShade: '#a4761a' },
+    theme: { top: '#3a5ea3', shade: '#29467f', side: '#56607a', sideShade: '#3c455c', surface: 'solar', bumper: '#ffd93d' },
   },
 ];
 
