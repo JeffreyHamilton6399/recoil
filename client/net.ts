@@ -10,10 +10,17 @@ export interface NetHandlers {
 }
 
 function serverUrl(): string {
-  const configured = import.meta.env.VITE_SERVER_URL;
-  if (typeof configured === 'string' && configured.length > 0) return configured;
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/ws`;
+  const secure = location.protocol === 'https:';
+  const configured = (import.meta.env.VITE_SERVER_URL ?? '').trim();
+  if (!configured) return `${secure ? 'wss:' : 'ws:'}//${location.host}/ws`;
+  // Forgive common mistakes: an http(s):// address, ws:// on an https page,
+  // a bare host name, or a missing /ws path.
+  let url = configured.replace(/^http(s?):\/\//i, 'ws$1://');
+  if (!/^wss?:\/\//i.test(url)) url = `wss://${url}`;
+  if (secure) url = url.replace(/^ws:\/\//i, 'wss://');
+  url = url.replace(/\/+$/, '');
+  if (!/\/ws$/.test(url)) url += '/ws';
+  return url;
 }
 
 export class Net {
@@ -28,7 +35,14 @@ export class Net {
   /** Opens a connection if there isn't one already. */
   connect(): void {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
-    const ws = new WebSocket(serverUrl());
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(serverUrl());
+    } catch (err) {
+      console.error('[recoil] bad server URL', err);
+      this.handlers.onClose();
+      return;
+    }
     this.ws = ws;
     ws.onopen = () => {
       if (this.ws === ws) this.handlers.onOpen();
