@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#140e38" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="description" content="RECOIL: a two-player arena duel where the only way to move is to shoot." />
+    <meta name="description" content="RECOIL: an online party brawler for up to 8 players where the only way to move is to shoot." />
     <title>RECOIL</title>
     <link
       rel="icon"
@@ -45,7 +45,7 @@
         -webkit-touch-callout: none;
         -webkit-tap-highlight-color: transparent;
       }
-      canvas {
+      #game {
         position: fixed;
         inset: 0;
         display: block;
@@ -69,6 +69,7 @@
         background:
           radial-gradient(circle, rgba(255, 255, 255, 0.07) 1.6px, transparent 1.8px) 0 0 / 16px 16px,
           rgba(20, 14, 56, 0.55);
+        overflow-x: hidden;
         overflow-y: auto;
       }
       .panel {
@@ -146,6 +147,33 @@
         text-decoration: underline;
         text-underline-offset: 4px;
         margin-top: 4px;
+      }
+      .btn.big {
+        font-size: 22px;
+        padding: 16px 18px;
+      }
+      .sub {
+        margin: -2px 0 12px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      #btn-pick-map {
+        margin-top: 8px;
+        padding: 9px 12px;
+        font-size: 15px;
+        background: var(--yellow);
+      }
+      #btn-pick-map:disabled {
+        background: #9ff0b8;
+        opacity: 1;
+      }
+      .carousel.locked .carousel-arrow,
+      .carousel.locked + #carousel-dots {
+        display: none;
+      }
+      .map-card.random .map-name {
+        color: #fff;
       }
       .or {
         margin: 18px 0 10px;
@@ -267,6 +295,303 @@
         }
       }
 
+
+      /* Profile: name + colour swatches ------------------------------- */
+      .field-label {
+        margin: 4px 0 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        text-align: left;
+      }
+      .text-input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 3px solid var(--ink);
+        border-radius: 12px;
+        background: #fff;
+        color: var(--ink);
+        font-family: var(--font);
+        font-size: 18px;
+        box-shadow: inset 0 4px 0 rgba(27, 16, 48, 0.12);
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .text-input:focus {
+        outline: 3px solid var(--yellow);
+        outline-offset: 2px;
+      }
+      .swatches {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 6px;
+        margin: 10px 0 16px;
+      }
+      .swatch {
+        aspect-ratio: 1;
+        min-width: 0;
+        padding: 0;
+        border: 3px solid var(--ink);
+        border-radius: 50%;
+        background: var(--c);
+        box-shadow: 0 3px 0 var(--ink);
+        cursor: pointer;
+        position: relative;
+      }
+      .swatch.selected {
+        transform: translateY(-3px) scale(1.08);
+        box-shadow: 0 5px 0 var(--ink), 0 0 0 3px var(--paper), 0 0 0 6px var(--ink);
+      }
+      .swatch:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      .swatch:disabled::after {
+        content: '';
+        position: absolute;
+        inset: 42% -4px;
+        background: var(--ink);
+        transform: rotate(-45deg);
+        border-radius: 2px;
+      }
+
+      /* Lobby panel ------------------------------------------------------ */
+      #lobby {
+        position: fixed;
+        z-index: 5;
+        top: max(60px, env(safe-area-inset-top));
+        left: max(12px, env(safe-area-inset-left));
+        width: min(330px, 46vw);
+        max-height: calc(100% - 72px);
+        overflow-x: hidden;
+        overflow-y: auto;
+        padding: 14px 16px 12px;
+        border: 4px solid var(--ink);
+        border-radius: 18px;
+        background: var(--paper);
+        box-shadow: 7px 7px 0 var(--ink);
+      }
+      @media (orientation: portrait), (max-width: 519px) {
+        #lobby {
+          left: 50%;
+          width: min(360px, calc(100% - 24px));
+          transform: translateX(-50%);
+          max-height: 46%;
+        }
+      }
+      #lobby.collapsed .lobby-body {
+        display: none;
+      }
+      .lobby-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 10px;
+      }
+      .lobby-head .code {
+        margin: 0;
+        font-size: clamp(22px, 7vw, 30px);
+        padding: 2px 8px 2px 16px;
+        box-shadow: 3px 3px 0 var(--ink);
+      }
+      .lobby-head .btn {
+        width: auto;
+        flex: 1 1 90px;
+        padding: 8px 10px;
+        font-size: 14px;
+        margin: 0;
+      }
+      .mini-btn {
+        width: 34px;
+        height: 34px;
+        flex: none;
+        border: 3px solid var(--ink);
+        border-radius: 10px;
+        background: #fff;
+        font-family: var(--font);
+        cursor: pointer;
+        box-shadow: 0 3px 0 var(--ink);
+      }
+      #lobby.collapsed #btn-lobby-toggle {
+        transform: rotate(180deg);
+      }
+      #lobby .url {
+        margin: 8px 0 4px;
+        font-size: 11px;
+        text-align: left;
+      }
+      .section-title {
+        margin: 12px 0 6px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        text-align: left;
+      }
+      #player-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+        gap: 5px;
+      }
+      #player-list li {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        padding: 5px 7px;
+        border: 2px solid var(--ink);
+        border-radius: 9px;
+        background: #fff;
+        font-size: 13px;
+        font-weight: 800;
+      }
+      #player-list li.me {
+        background: var(--paper-2);
+      }
+      #player-list li.offline {
+        opacity: 0.55;
+      }
+      #player-list li.empty {
+        border-style: dashed;
+        border-color: rgba(27, 16, 48, 0.25);
+        background: transparent;
+        color: #b0a6c6;
+        font-weight: 700;
+      }
+      .pdot {
+        width: 14px;
+        height: 14px;
+        flex: none;
+        border: 2px solid var(--ink);
+        border-radius: 50%;
+        background: var(--c);
+      }
+      .pname {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ptag {
+        margin-left: auto;
+        padding: 0 4px;
+        border-radius: 5px;
+        background: #e6e0f5;
+        font-size: 9px;
+        letter-spacing: 0.06em;
+      }
+      .ptag.host {
+        background: var(--yellow);
+        border: 1.5px solid var(--ink);
+      }
+      #lobby .swatches {
+        margin: 4px 0 8px;
+      }
+      #lobby .text-input {
+        font-size: 15px;
+        padding: 7px 10px;
+      }
+      #btn-start {
+        margin-top: 12px;
+      }
+      #lobby-status {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      /* Map carousel ----------------------------------------------------- */
+      .carousel {
+        position: relative;
+        overflow: hidden;
+        border: 3px solid var(--ink);
+        border-radius: 14px;
+        background: #261c66;
+      }
+      #carousel-track {
+        display: flex;
+        transition: transform 0.45s cubic-bezier(0.34, 1.4, 0.64, 1);
+      }
+      .map-card {
+        flex: 0 0 100%;
+        min-width: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 10px 40px;
+        text-align: center;
+        color: #fff;
+      }
+      .map-thumb {
+        width: min(120px, 100%);
+        height: auto;
+        aspect-ratio: 1;
+        border: 3px solid var(--ink);
+        border-radius: 10px;
+      }
+      .map-name {
+        margin-top: 2px;
+        font-family: var(--font);
+        font-size: 17px;
+        color: var(--yellow);
+        -webkit-text-stroke: 1px var(--ink);
+        paint-order: stroke fill;
+        text-shadow: 2px 2px 0 var(--ink);
+      }
+      .map-blurb {
+        font-size: 13px;
+        font-weight: 700;
+        color: #e6e0ff;
+      }
+      .carousel-arrow {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border: 2px solid var(--ink);
+        border-radius: 50%;
+        background: var(--paper);
+        font-family: var(--font);
+        font-size: 12px;
+        cursor: pointer;
+        box-shadow: 0 2px 0 var(--ink);
+      }
+      #carousel-prev {
+        left: 6px;
+      }
+      #carousel-next {
+        right: 6px;
+      }
+      #carousel-dots {
+        display: flex;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .cdot {
+        width: 10px;
+        height: 10px;
+        padding: 0;
+        border: 2px solid var(--ink);
+        border-radius: 50%;
+        background: #fff;
+        cursor: pointer;
+      }
+      .cdot.on {
+        background: var(--yellow);
+        transform: scale(1.25);
+      }
+
       /* HUD ------------------------------------------------------------- */
       #hud {
         position: fixed;
@@ -356,17 +681,6 @@
         text-align: center;
         pointer-events: none;
       }
-      #match-end {
-        position: fixed;
-        left: 50%;
-        top: 58%;
-        transform: translateX(-50%);
-        width: min(320px, calc(100% - 32px));
-      }
-      #match-end .btn.ghost {
-        color: #fff;
-      }
-
       /* Touch controls -------------------------------------------------- */
       #touch {
         position: fixed;
@@ -426,7 +740,7 @@
     <canvas id="game" aria-label="RECOIL arena"></canvas>
 
     <div id="hud" class="hidden">
-      <button id="btn-leave" class="hud-btn" aria-label="Leave game" title="Leave">✕</button>
+      <button id="btn-leave" class="hud-btn" aria-label="Leave room" title="Leave">✕</button>
       <div id="hud-right">
         <span id="room-tag"></span>
         <span id="ping" data-q="bad">– ms</span>
@@ -442,41 +756,66 @@
 
     <div id="banner" class="hidden"></div>
 
-    <section id="menu" class="overlay">
+    <section id="menu" class="overlay scroll">
       <div class="panel">
         <h1 class="logo">RECOIL</h1>
-        <p class="tag">You can't walk. Every shot kicks you backwards.<br />Knock your rival off the shrinking ice.</p>
+        <p class="tag">You can't walk. Every shot kicks you backwards.<br />Last one on the ice wins. Up to 8 players.</p>
 
-        <div id="menu-home">
-          <button id="btn-create" class="btn primary">Create game</button>
-          <div class="or">or join with a code</div>
-          <form id="join-form" class="join">
-            <input id="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" aria-label="Room code" />
-            <button class="btn" type="submit">Join</button>
-          </form>
-          <p id="menu-error" class="error" role="alert"></p>
-          <div class="help">
-            Aim <kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd><br />
-            Hold <kbd>Space</kbd>, <kbd>W</kbd> or <kbd>↑</kbd> to charge, release to fire<br />
-            First to 5 knockouts wins
-          </div>
-        </div>
+        <div class="field-label">Your name</div>
+        <input id="name-input" class="text-input" autocomplete="off" spellcheck="false" placeholder="Player" aria-label="Your name" />
+        <div class="field-label" style="margin-top: 12px">Your colour</div>
+        <div id="menu-colors" class="swatches"></div>
 
-        <div id="menu-lobby" class="hidden">
-          <div class="label">Room code</div>
-          <div id="lobby-code" class="code">----</div>
-          <div id="lobby-url" class="url"></div>
-          <button id="btn-copy" class="btn primary">Copy link</button>
-          <p class="waiting"><span class="dot"></span>Waiting for an opponent…</p>
-          <button id="btn-lobby-leave" class="btn ghost">Leave</button>
+        <button id="btn-quick" class="btn primary big">Quick play</button>
+        <div class="sub">Jump into a public game with anyone online</div>
+        <button id="btn-create" class="btn">Create private game</button>
+        <div class="sub">Invite friends with a link and pick the map</div>
+        <div class="or">or join with a code</div>
+        <form id="join-form" class="join">
+          <input id="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" aria-label="Room code" />
+          <button class="btn" type="submit">Join</button>
+        </form>
+        <p id="menu-error" class="error" role="alert"></p>
+        <div class="help">
+          Aim <kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd><br />
+          Hold <kbd>Space</kbd>, <kbd>W</kbd> or <kbd>↑</kbd> to charge, release to fire<br />
+          Grab power-ups. Knock everyone off. First to 5 wins.
         </div>
       </div>
     </section>
 
-    <section id="match-end" class="hidden">
-      <button id="btn-rematch" class="btn primary">Rematch</button>
-      <button id="btn-menu" class="btn ghost">Back to menu</button>
-    </section>
+    <aside id="lobby" class="hidden scroll">
+      <div class="lobby-head">
+        <div id="lobby-code" class="code">----</div>
+        <button id="btn-copy" class="btn primary">Copy link</button>
+        <button id="btn-lobby-toggle" class="mini-btn" aria-label="Collapse lobby" title="Collapse">▲</button>
+      </div>
+      <div class="lobby-body">
+        <div id="lobby-url" class="url"></div>
+
+        <div class="section-title">Players</div>
+        <ul id="player-list"></ul>
+
+        <div>
+          <div class="section-title">You</div>
+          <input id="lobby-name" class="text-input" autocomplete="off" spellcheck="false" placeholder="Your name" aria-label="Your name" />
+          <div id="lobby-colors" class="swatches"></div>
+        </div>
+
+        <div id="maps-title" class="section-title">Maps</div>
+        <div id="carousel" class="carousel">
+          <div id="carousel-track"></div>
+          <button id="carousel-prev" class="carousel-arrow" aria-label="Previous map">◀</button>
+          <button id="carousel-next" class="carousel-arrow" aria-label="Next map">▶</button>
+        </div>
+        <div id="carousel-dots"></div>
+        <button id="btn-pick-map" class="btn hidden">Play this map</button>
+
+        <button id="btn-start" class="btn primary hidden">Start match</button>
+        <p id="lobby-status"></p>
+        <button id="btn-lobby-leave" class="btn ghost">Leave room</button>
+      </div>
+    </aside>
 
     <div id="touch" class="hidden">
       <div id="t-left" class="tbtn aim" role="button" aria-label="Aim left">◀</div>

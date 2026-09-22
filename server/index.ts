@@ -1,5 +1,6 @@
-// RECOIL server: serves the built client over HTTP, hosts rooms over
-// WebSocket at /ws, and runs every room's simulation at a fixed 30Hz.
+// RECOIL server: serves the built client over HTTP, hosts rooms of up to
+// MAX_PLAYERS over WebSocket at /ws, and runs every room's simulation at a
+// fixed 30Hz.
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -7,17 +8,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import * as C from '../shared/constants.js';
-import { NO_INPUT, createGame, playerSnap, startMatch, startRound, step } from '../shared/sim.js';
+import { MAPS } from '../shared/maps.js';
+import { NO_INPUT, addPlayer, createGame, enterLobby, playerSnap, removePlayer, setMapChoice, startMatch, step } from '../shared/sim.js';
 import {
+  POWERUP_KINDS,
   ROOM_CODE_PATTERN,
   type BulletSnap,
   type ClientMessage,
-  type GameEvent,
   type GameState,
   type InputState,
-  type PlayerIndex,
+  type PlayerId,
+  type PowerupSnap,
+  type RosterEntry,
   type ServerMessage,
-  type SlotStatus,
   type Snapshot,
 } from '../shared/types.js';
 
@@ -32,33 +35,42 @@ const STATIC_DIR = path.resolve(process.env.STATIC_DIR ?? path.join(HERE, '../..
 
 interface Client {
   ws: WebSocket;
-  /** Random id the browser keeps per tab, used to reclaim a slot after a drop. */
+  /** Random id the browser keeps per tab, used to reclaim a seat after a drop. */
   id: string;
   room: Room | null;
-  slot: PlayerIndex | -1;
+  seat: PlayerId | -1;
   lastSeen: number;
 }
 
-interface Slot {
+interface Seat {
   clientId: string;
   client: Client | null;
+  name: string;
+  color: number;
   input: InputState;
   /** Set when fire is pressed, so a tap shorter than one tick still registers. */
   fireLatch: boolean;
   disconnectedAt: number;
+  /** Join order; the earliest connected player is the host. */
+  joinedAt: number;
 }
 
 interface Room {
   code: string;
   state: GameState;
-  slots: [Slot | null, Slot | null];
+  seats: (Seat | null)[];
   spectators: Set<Client>;
-  rematch: [boolean, boolean];
   emptySince: number | null;
+  lastRoster: string;
+  /** Public (quick play) room: no host, starts itself, random map with the spinner. */
+  pub: boolean;
+  /** Public rooms: when the match starts automatically (ms), or null. */
+  autoStartAt: number | null;
 }
 
 const rooms = new Map<string, Room>();
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ'; // no I, L or O: easy to read aloud
+let joinCounter = 0;
 
 function newRoomCode(): string {
   for (;;) {
@@ -68,119 +80,190 @@ function newRoomCode(): string {
   }
 }
 
-function createRoom(): Room {
+function createRoom(pub: boolean): Room {
   const room: Room = {
     code: newRoomCode(),
-    state: createGame(),
-    slots: [null, null],
+    state: createGame(Math.floor(Math.random() * 0xffffffff)),
+    seats: new Array<Seat | null>(C.MAX_PLAYERS).fill(null),
     spectators: new Set(),
-    rematch: [false, false],
     emptySince: null,
+    lastRoster: '',
+    pub,
+    autoStartAt: null,
   };
   rooms.set(room.code, room);
-  log(`room ${room.code} created (${rooms.size} total)`);
+  log(`${pub ? 'public' : 'private'} room ${room.code} created (${rooms.size} total)`);
   return room;
-}
-
-function closeRoom(room: Room, msg: string): void {
-  for (const c of roomClients(room)) {
-    send(c, { t: 'closed', msg });
-    c.room = null;
-    c.slot = -1;
-  }
-  rooms.delete(room.code);
-  log(`room ${room.code} closed: ${msg} (${rooms.size} left)`);
 }
 
 function roomClients(room: Room): Client[] {
   const out: Client[] = [...room.spectators];
-  for (const s of room.slots) if (s?.client) out.push(s.client);
+  for (const s of room.seats) if (s?.client) out.push(s.client);
   return out;
 }
 
-function joinRoom(client: Client, room: Room): void {
-  leaveRoom(client);
-  const { slots } = room;
-  const pick = (pred: (s: Slot | null) => boolean): PlayerIndex | -1 => (pred(slots[0]) ? 0 : pred(slots[1]) ? 1 : -1);
+function seatsUsed(room: Room): number {
+  return room.seats.filter((s) => s !== null).length;
+}
 
-  // Prefer your own old slot, then an empty one, then any abandoned one.
-  let slot = pick((s) => s !== null && s.clientId === client.id);
-  if (slot === -1) slot = pick((s) => s === null);
-  if (slot === -1) slot = pick((s) => s !== null && s.client === null);
+/** Quick play: the fullest public room still in its lobby, then one mid-match with space, else a new one. */
+function findPublicRoom(): Room {
+  const open = [...rooms.values()].filter((r) => r.pub && seatsUsed(r) < C.MAX_PLAYERS);
+  const byFullest = (a: Room, b: Room): number => seatsUsed(b) - seatsUsed(a);
+  const waiting = open.filter((r) => r.state.phase === 'lobby').sort(byFullest);
+  const playing = open.filter((r) => r.state.phase !== 'lobby').sort(byFullest);
+  return waiting[0] ?? playing[0] ?? createRoom(true);
+}
+
+function startRoomMatch(room: Room): void {
+  // Anyone still reconnecting from last match loses their seat now.
+  room.seats.forEach((s, id) => {
+    if (s && !s.client) freeSeat(room, id);
+  });
+  room.autoStartAt = null;
+  startMatch(room.state);
+  log(`room ${room.code}: match started with ${seatsUsed(room)} players`);
+}
+
+/** The host of a private room: the earliest-joined connected player. Public rooms have none. */
+function hostId(room: Room): PlayerId | -1 {
+  if (room.pub) return -1;
+  let best: PlayerId | -1 = -1;
+  room.seats.forEach((s, id) => {
+    if (s?.client && (best === -1 || s.joinedAt < (room.seats[best]?.joinedAt ?? Infinity))) best = id;
+  });
+  return best;
+}
+
+function colorTaken(room: Room, color: number, except: PlayerId | -1): boolean {
+  return room.seats.some((s, id) => s !== null && id !== except && s.color === color);
+}
+
+function freeColor(room: Room, wanted: number, except: PlayerId | -1): number {
+  if (!colorTaken(room, wanted, except)) return wanted;
+  for (let c = 0; c < C.PLAYER_PALETTE.length; c++) if (!colorTaken(room, c, except)) return c;
+  return wanted;
+}
+
+function cleanName(name: string, id: PlayerId): string {
+  // Printable characters only, trimmed and length-limited.
+  const clean = name.replace(/[^\p{L}\p{N}\p{P}\p{Zs}]/gu, '').replace(/\s+/g, ' ').trim().slice(0, C.NAME_MAX);
+  return clean || `Player ${id + 1}`;
+}
+
+function joinRoom(client: Client, room: Room, name: string, color: number): void {
+  leaveRoom(client);
+  const { seats } = room;
+
+  // Prefer your own old seat (same browser tab), then any empty seat.
+  let seat: PlayerId | -1 = seats.findIndex((s) => s !== null && s.clientId === client.id);
+  if (seat === -1) seat = seats.findIndex((s) => s === null);
 
   client.room = room;
-  client.slot = slot;
-  if (slot === -1) {
+  client.seat = seat;
+  if (seat === -1) {
     room.spectators.add(client);
   } else {
-    const prev = slots[slot];
-    // Same browser reconnecting before we noticed its old socket died: take over.
+    const prev = seats[seat];
+    // Same tab reconnecting before we noticed its old socket died: take over.
     if (prev?.client && prev.client !== client) {
       prev.client.room = null;
-      prev.client.slot = -1;
+      prev.client.seat = -1;
       prev.client.ws.close();
     }
-    const wasAbandoned = prev !== null && prev.client === null;
-    slots[slot] = { clientId: client.id, client, input: { ...NO_INPUT }, fireLatch: false, disconnectedAt: 0 };
-    // Coming back mid-round restarts that round so nobody gets a cheap KO.
-    const ph = room.state.phase;
-    if (wasAbandoned && (ph === 'countdown' || ph === 'playing')) startRound(room.state);
+    seats[seat] = {
+      clientId: client.id,
+      client,
+      name: cleanName(name, seat),
+      color: freeColor(room, color, seat),
+      input: { ...NO_INPUT },
+      fireLatch: false,
+      disconnectedAt: 0,
+      joinedAt: prev?.joinedAt ?? joinCounter++,
+    };
+    addPlayer(room.state, seat);
   }
-  send(client, { t: 'joined', code: room.code, slot });
-  log(`room ${room.code}: ${slot === -1 ? 'spectator' : `player ${slot + 1}`} joined`);
+  send(client, { t: 'joined', code: room.code, you: seat });
+  room.lastRoster = ''; // force a roster update
+  log(`room ${room.code}: ${seat === -1 ? 'spectator' : `seat ${seat + 1}`} joined`);
+}
+
+function freeSeat(room: Room, id: PlayerId): void {
+  room.seats[id] = null;
+  removePlayer(room.state, id);
 }
 
 function leaveRoom(client: Client): void {
   const room = client.room;
   if (!room) return;
-  if (client.slot === -1) {
+  if (client.seat === -1) {
     room.spectators.delete(client);
   } else {
-    const slot = room.slots[client.slot];
-    if (slot && slot.client === client) {
-      if (room.state.phase === 'waiting') {
-        // Match never started, so just free the seat.
-        room.slots[client.slot] = null;
+    const seat = room.seats[client.seat];
+    if (seat && seat.client === client) {
+      if (room.state.phase === 'lobby') {
+        // No match running, so just free the seat.
+        freeSeat(room, client.seat);
       } else {
-        slot.client = null;
-        slot.input = { ...NO_INPUT };
-        slot.fireLatch = false;
-        slot.disconnectedAt = Date.now();
+        // Keep the seat (and score) for a while so they can rejoin.
+        seat.client = null;
+        seat.input = { ...NO_INPUT };
+        seat.fireLatch = false;
+        seat.disconnectedAt = Date.now();
       }
     }
   }
   client.room = null;
-  client.slot = -1;
+  client.seat = -1;
 }
 
 function handleMessage(client: Client, msg: ClientMessage): void {
   switch (msg.t) {
     case 'create':
       client.id = msg.id;
-      joinRoom(client, createRoom());
+      joinRoom(client, createRoom(false), msg.name, msg.color);
       break;
+    case 'quick':
+      client.id = msg.id;
+      joinRoom(client, findPublicRoom(), msg.name, msg.color);
+      break;
+    case 'map': {
+      const room = client.room;
+      if (room && !room.pub && room.state.phase === 'lobby' && hostId(room) === client.seat) setMapChoice(room.state, msg.choice);
+      break;
+    }
     case 'join': {
       client.id = msg.id;
       const room = rooms.get(msg.code);
-      if (room) joinRoom(client, room);
+      if (room) joinRoom(client, room, msg.name, msg.color);
       else send(client, { t: 'error', msg: `Room ${msg.code} not found. It may have expired.` });
       break;
     }
+    case 'profile': {
+      const room = client.room;
+      const seat = room && client.seat !== -1 ? room.seats[client.seat] : null;
+      if (!room || !seat || seat.client !== client) break;
+      seat.name = cleanName(msg.name, client.seat);
+      if (!colorTaken(room, msg.color, client.seat)) seat.color = msg.color;
+      break;
+    }
+    case 'start': {
+      const room = client.room;
+      if (!room || room.state.phase !== 'lobby' || hostId(room) !== client.seat) break;
+      const ready = room.seats.filter((s) => s?.client).length;
+      if (ready >= C.MIN_PLAYERS) startRoomMatch(room);
+      break;
+    }
     case 'input': {
-      const slot = client.room && client.slot !== -1 ? client.room.slots[client.slot] : null;
-      if (!slot || slot.client !== client) break;
-      if (msg.f && !slot.input.firing) slot.fireLatch = true;
-      slot.input = { aimLeft: msg.l, aimRight: msg.r, firing: msg.f };
+      const seat = client.room && client.seat !== -1 ? client.room.seats[client.seat] : null;
+      if (!seat || seat.client !== client) break;
+      if (msg.f && !seat.input.firing) seat.fireLatch = true;
+      seat.input = { aimLeft: msg.l, aimRight: msg.r, firing: msg.f };
       break;
     }
     case 'ping':
       send(client, { t: 'pong', c: msg.c });
       break;
-    case 'rematch': {
-      const room = client.room;
-      if (room && client.slot !== -1 && room.state.phase === 'matchEnd') room.rematch[client.slot] = true;
-      break;
-    }
     case 'leave':
       leaveRoom(client);
       break;
@@ -201,6 +284,14 @@ function isId(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0 && v.length <= 64;
 }
 
+function asName(v: unknown): string {
+  return typeof v === 'string' ? v.slice(0, 64) : '';
+}
+
+function asColor(v: unknown): number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < C.PLAYER_PALETTE.length ? v : 0;
+}
+
 function parseMessage(data: RawData): ClientMessage | null {
   let v: unknown;
   try {
@@ -212,19 +303,27 @@ function parseMessage(data: RawData): ClientMessage | null {
   const m = v as Record<string, unknown>;
   switch (m.t) {
     case 'create':
-      return isId(m.id) ? { t: 'create', id: m.id } : null;
+      return isId(m.id) ? { t: 'create', id: m.id, name: asName(m.name), color: asColor(m.color) } : null;
     case 'join': {
       const code = typeof m.code === 'string' ? m.code.trim().toUpperCase() : '';
-      return ROOM_CODE_PATTERN.test(code) && isId(m.id) ? { t: 'join', code, id: m.id } : null;
+      return ROOM_CODE_PATTERN.test(code) && isId(m.id) ? { t: 'join', code, id: m.id, name: asName(m.name), color: asColor(m.color) } : null;
     }
+    case 'quick':
+      return isId(m.id) ? { t: 'quick', id: m.id, name: asName(m.name), color: asColor(m.color) } : null;
+    case 'map':
+      return typeof m.choice === 'number' && Number.isInteger(m.choice) && m.choice >= -1 && m.choice < MAPS.length
+        ? { t: 'map', choice: m.choice }
+        : null;
+    case 'profile':
+      return { t: 'profile', name: asName(m.name), color: asColor(m.color) };
+    case 'start':
+      return { t: 'start' };
     case 'input':
       return typeof m.l === 'boolean' && typeof m.r === 'boolean' && typeof m.f === 'boolean'
         ? { t: 'input', l: m.l, r: m.r, f: m.f }
         : null;
     case 'ping':
       return typeof m.c === 'number' && Number.isFinite(m.c) ? { t: 'ping', c: m.c } : null;
-    case 'rematch':
-      return { t: 'rematch' };
     case 'leave':
       return { t: 'leave' };
     default:
@@ -250,53 +349,39 @@ function sendRaw(client: Client, data: string): void {
   if (client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 256 * 1024) client.ws.send(data);
 }
 
-function slotStatus(s: Slot | null): SlotStatus {
-  return s === null ? 0 : s.client ? 1 : 2;
-}
-
 // ---------------------------------------------------------------------------
 // Game loop
 // ---------------------------------------------------------------------------
 
 function tickRoom(room: Room, now: number): void {
-  const { state, slots } = room;
-  const connected = slots.map((s) => s?.client != null);
-  const bothConnected = connected[0] && connected[1];
+  const { state, seats } = room;
 
-  if (state.phase === 'waiting' && bothConnected) startMatch(state);
-  if (state.phase !== 'matchEnd') room.rematch = [false, false];
-  if (state.phase === 'matchEnd' && room.rematch[0] && room.rematch[1]) {
-    room.rematch = [false, false];
-    startMatch(state);
-  }
+  // Seats of players who never came back are released.
+  seats.forEach((s, id) => {
+    if (s && !s.client && now - s.disconnectedAt > C.REJOIN_WINDOW * 1000) freeSeat(room, id);
+  });
 
-  let events: GameEvent[] = [];
-  if (state.phase !== 'waiting' && bothConnected) {
-    const inputs = slots.map((s): InputState => {
-      if (!s) return NO_INPUT;
-      return { ...s.input, firing: s.input.firing || s.fireLatch };
-    }) as [InputState, InputState];
-    events = step(state, inputs);
-    for (const s of slots) if (s) s.fireLatch = false;
-  } else {
-    // Paused or waiting: keep the tick counting so it still works as a clock.
-    state.tick++;
-  }
+  // Not enough players left for a match: everyone back to the lobby.
+  const seated = seats.filter((s) => s !== null).length;
+  if (state.phase !== 'lobby' && seated < C.MIN_PLAYERS) enterLobby(state);
 
-  // A player dropped: give them REJOIN_WINDOW seconds to come back.
-  let closesIn: number | null = null;
-  if (state.phase !== 'waiting') {
-    for (const s of slots) {
-      if (s && !s.client) {
-        const left = C.REJOIN_WINDOW - (now - s.disconnectedAt) / 1000;
-        closesIn = closesIn === null ? left : Math.min(closesIn, left);
-      }
+  // Public rooms start by themselves once enough people are in.
+  if (room.pub && state.phase === 'lobby') {
+    const online = seats.filter((s) => s?.client).length;
+    if (online < C.MIN_PLAYERS) room.autoStartAt = null;
+    else {
+      room.autoStartAt ??= now + C.PUBLIC_START_DELAY * 1000;
+      if (online >= C.MAX_PLAYERS) room.autoStartAt = Math.min(room.autoStartAt, now + C.PUBLIC_FULL_START_DELAY * 1000);
+      if (now >= room.autoStartAt) startRoomMatch(room);
     }
   }
-  if (closesIn !== null && closesIn <= 0) {
-    closeRoom(room, 'Your opponent did not come back.');
-    return;
-  }
+
+  const inputs = new Map<PlayerId, InputState>();
+  seats.forEach((s, id) => {
+    if (s?.client) inputs.set(id, { ...s.input, firing: s.input.firing || s.fireLatch });
+  });
+  const events = step(state, inputs);
+  for (const s of seats) if (s) s.fireLatch = false;
 
   const clients = roomClients(room);
   if (clients.length === 0) {
@@ -309,22 +394,39 @@ function tickRoom(room: Room, now: number): void {
   }
   room.emptySince = null;
 
+  // Roster only goes out when something in it changed.
+  const host = hostId(room);
+  const roster: RosterEntry[] = [];
+  seats.forEach((s, id) => {
+    if (s) roster.push({ id, name: s.name, color: s.color, score: state.scores[id] ?? 0, online: s.client !== null, host: id === host });
+  });
+  const startsIn = room.autoStartAt === null ? -1 : Math.max(0, Math.ceil((room.autoStartAt - now) / 1000));
+  const rosterMsg = JSON.stringify({
+    t: 'roster',
+    players: roster,
+    spectators: room.spectators.size,
+    pub: room.pub,
+    mapChoice: state.mapChoice,
+    startsIn,
+  } satisfies ServerMessage);
+  if (rosterMsg !== room.lastRoster) {
+    room.lastRoster = rosterMsg;
+    for (const c of clients) sendRaw(c, rosterMsg);
+  }
+
   const snap: Snapshot = {
     t: 'snap',
     k: state.tick,
     ph: state.phase,
     pt: state.phaseTime,
     r: state.arenaRadius,
-    s: state.scores,
-    p: [playerSnap(state.players[0]), playerSnap(state.players[1])],
+    m: state.mapIndex,
+    p: state.players.filter((p) => p.inRound).map(playerSnap),
     b: state.bullets.map((b): BulletSnap => [b.id, b.owner, b.x, b.y, b.radius]),
+    u: state.powerups.map((u): PowerupSnap => [u.id, POWERUP_KINDS.indexOf(u.kind), u.x, u.y, u.age]),
     e: events,
-    rr: state.roundResult,
+    rw: state.roundWinner,
     mw: state.matchWinner,
-    sl: [slotStatus(slots[0]), slotStatus(slots[1])],
-    cl: closesIn === null ? -1 : Math.ceil(closesIn),
-    rm: room.rematch,
-    sp: room.spectators.size,
   };
   const data = JSON.stringify(snap, compactReplacer);
   for (const c of clients) sendRaw(c, data);
@@ -375,7 +477,7 @@ function serveFile(res: http.ServerResponse, file: string, status = 200): void {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (url.pathname === '/health') {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.writeHead(200, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
     res.end(`ok ${rooms.size} rooms`);
     return;
   }
@@ -407,11 +509,10 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
-
 const socketClients = new WeakMap<WebSocket, Client>();
 
 wss.on('connection', (ws) => {
-  const client: Client = { ws, id: '', room: null, slot: -1, lastSeen: Date.now() };
+  const client: Client = { ws, id: '', room: null, seat: -1, lastSeen: Date.now() };
   socketClients.set(ws, client);
   ws.on('message', (data) => {
     client.lastSeen = Date.now();

@@ -1,13 +1,21 @@
 # RECOIL
 
-A 2-player online arena duel. You can't walk: the only way to move is to shoot,
-and every shot kicks you backwards. Hits knock your opponent back harder the
-more damage they've taken. The ice keeps shrinking. Knock your rival off the
-edge to win the round. First to 5 wins the match.
+An online party brawler for 2 to 8 players. You can't walk: the only way to
+move is to shoot, and every shot kicks you backwards. Hits knock people back
+harder the more damage they've taken, and the ice keeps shrinking. The last
+player standing wins the round, and the first to 5 round wins takes the match.
 
-- TypeScript everywhere, Vite for the client, Node 20+ for the server
-- Canvas 2D only: every visual is drawn in code and every sound is synthesized
-  with WebAudio. There are no asset files.
+- **Quick play:** jump into a public room with anyone online. It starts by
+  itself 20 seconds after a second player arrives, and a Fall Guys-style
+  spinner picks a random map every round.
+- **Private games:** share a 4-letter code or a link. The host picks the map
+  from a carousel (or picks Random for the spinner) and starts the match.
+- **Rooms** hold up to 8 players plus spectators. You can warm up in the
+  lobby while you wait, and pick a name and colour.
+- **6 maps:** Frozen Pond, Donut, Pinball, The Box, Swiss Ice, and Pillars.
+- **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, and Heal.
+- Toon-shaded Canvas 2D visuals and WebAudio synthesized sound. There are no
+  asset files.
 - Server-authoritative 30 Hz simulation over WebSockets (`ws`). The same
   `shared/sim.ts` code is used by the server and client.
 
@@ -19,7 +27,8 @@ npm run dev
 ```
 
 Open http://localhost:5173 in two browser tabs. Click **Create game** in one tab,
-then paste the link (or type the 4-letter code) into the other.
+then paste the link (or type the 4-letter code) into the others. With 2 or more
+players in the room, the host can press **Start match**.
 
 To test on your phone, connect it to the same Wi-Fi and open the `Network:` URL
 that Vite prints, for example `http://192.168.1.20:5173`.
@@ -43,7 +52,8 @@ that Vite prints, for example `http://192.168.1.20:5173`.
 ## Project layout
 
 ```
-shared/   constants.ts (all tuning values), types.ts, sim.ts (the simulation), sim.test.ts
+shared/   constants.ts (all tuning values), maps.ts (map layouts), types.ts,
+          sim.ts (the simulation), sim.test.ts
 server/   index.ts: HTTP static server, rooms, 30 Hz fixed-step loop
 client/   main.ts (network, interpolation, prediction), render.ts, input.ts,
           audio.ts, ui.ts, net.ts, index.html

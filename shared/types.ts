@@ -1,11 +1,12 @@
 // Shared types: simulation state, events and the network protocol.
 
-export type PlayerIndex = 0 | 1;
+/** Seat number in a room, 0 .. MAX_PLAYERS - 1. */
+export type PlayerId = number;
 
-export type Phase = 'waiting' | 'countdown' | 'playing' | 'roundEnd' | 'matchEnd';
+export type Phase = 'lobby' | 'mapPick' | 'countdown' | 'playing' | 'roundEnd' | 'matchEnd';
 
-/** Who won a round: a player index, or -1 for a double KO. */
-export type RoundResult = PlayerIndex | -1;
+export type PowerupKind = 'rapid' | 'triple' | 'mega' | 'shield' | 'heal';
+export const POWERUP_KINDS: readonly PowerupKind[] = ['rapid', 'triple', 'mega', 'shield', 'heal'];
 
 export interface InputState {
   aimLeft: boolean;
@@ -14,6 +15,7 @@ export interface InputState {
 }
 
 export interface PlayerState {
+  id: PlayerId;
   x: number;
   y: number;
   vx: number;
@@ -30,11 +32,23 @@ export interface PlayerState {
   falling: boolean;
   /** Seconds since the player started falling. */
   fallTime: number;
+  /** False while spectating a round they joined in the middle of. */
+  inRound: boolean;
+  /** Spawn slot index for this round, so lobby respawns go back to the same place. */
+  spawnIndex: number;
+  /** Seconds of Rapid Fire left. */
+  rapid: number;
+  /** Seconds of Triple Shot left. */
+  triple: number;
+  /** Mega Shots left. */
+  mega: number;
+  /** Seconds of Shield left. */
+  shield: number;
 }
 
 export interface Bullet {
   id: number;
-  owner: PlayerIndex;
+  owner: PlayerId;
   x: number;
   y: number;
   vx: number;
@@ -45,14 +59,28 @@ export interface Bullet {
   age: number;
 }
 
+export interface Powerup {
+  id: number;
+  kind: PowerupKind;
+  x: number;
+  y: number;
+  age: number;
+}
+
 /** Things that happened during a tick, sent to clients for effects and sound. */
 export type GameEvent =
-  | { k: 'fire'; p: PlayerIndex; c: number; x: number; y: number; a: number }
-  | { k: 'hit'; p: PlayerIndex; x: number; y: number; a: number; f: number; d: number }
+  | { k: 'fire'; p: PlayerId; c: number; x: number; y: number; a: number }
+  | { k: 'hit'; p: PlayerId; x: number; y: number; a: number; f: number; d: number }
+  | { k: 'block'; p: PlayerId; x: number; y: number }
   | { k: 'cancel'; x: number; y: number; r: number }
-  | { k: 'bump'; x: number; y: number; a: number; f: number }
-  | { k: 'fall'; p: PlayerIndex; x: number; y: number }
-  | { k: 'ko'; w: RoundResult };
+  /** q is the other player, or -1 for a bumper. */
+  | { k: 'bump'; p: PlayerId; q: PlayerId; x: number; y: number; a: number; f: number }
+  | { k: 'fall'; p: PlayerId; x: number; y: number }
+  | { k: 'respawn'; p: PlayerId }
+  | { k: 'spawn'; u: PowerupKind; x: number; y: number }
+  | { k: 'pickup'; p: PlayerId; u: PowerupKind; x: number; y: number }
+  /** w is the round winner, or -1 if nobody survived. */
+  | { k: 'ko'; w: PlayerId };
 
 export interface GameState {
   tick: number;
@@ -62,26 +90,42 @@ export interface GameState {
   /** Seconds of active play this round (drives the arena shrink). */
   playTime: number;
   arenaRadius: number;
-  players: [PlayerState, PlayerState];
+  mapIndex: number;
+  /** Host's map pick: a map index, or -1 for a random map (with the spinner) each round. */
+  mapChoice: number;
+  players: PlayerState[];
   bullets: Bullet[];
-  nextBulletId: number;
-  scores: [number, number];
-  roundResult: RoundResult | null;
-  matchWinner: PlayerIndex | null;
+  powerups: Powerup[];
+  nextId: number;
+  /** Round wins, indexed by PlayerId. */
+  scores: number[];
+  /** Winner of the round just finished: a player, -1 for nobody, null during play. */
+  roundWinner: PlayerId | null;
+  matchWinner: PlayerId | null;
+  /** Seconds until the next power-up spawn. */
+  powerupTimer: number;
+  /** PRNG state, so the simulation stays deterministic. */
+  rng: number;
 }
 
 // ---------------------------------------------------------------------------
 // Network protocol
 // ---------------------------------------------------------------------------
 
-/** [x, y, aim, charge, damage, fallTime] where fallTime is -1 while standing. */
-export type PlayerSnap = [number, number, number, number, number, number];
+/** Power-up status bits in PlayerSnap. */
+export const FX_SHIELD = 1;
+export const FX_RAPID = 2;
+export const FX_TRIPLE = 4;
+export const FX_MEGA = 8;
+
+/** [id, x, y, aim, charge, damage, fallTime (-1 while standing), fx bits] */
+export type PlayerSnap = [number, number, number, number, number, number, number, number];
 
 /** [id, owner, x, y, radius] */
-export type BulletSnap = [number, PlayerIndex, number, number, number];
+export type BulletSnap = [number, number, number, number, number];
 
-/** 0 = slot empty, 1 = connected, 2 = disconnected (waiting for rejoin). */
-export type SlotStatus = 0 | 1 | 2;
+/** [id, kind index into POWERUP_KINDS, x, y, age] */
+export type PowerupSnap = [number, number, number, number, number];
 
 export interface Snapshot {
   t: 'snap';
@@ -92,35 +136,53 @@ export interface Snapshot {
   pt: number;
   /** Arena radius. */
   r: number;
-  s: [number, number];
-  p: [PlayerSnap, PlayerSnap];
+  /** Map index into MAPS. */
+  m: number;
+  p: PlayerSnap[];
   b: BulletSnap[];
+  u: PowerupSnap[];
   e: GameEvent[];
-  rr: RoundResult | null;
-  mw: PlayerIndex | null;
-  /** Slot status for each player. */
-  sl: [SlotStatus, SlotStatus];
-  /** Seconds until the room closes because a player left, or -1. */
-  cl: number;
-  /** Rematch votes. */
-  rm: [boolean, boolean];
-  /** Number of spectators. */
-  sp: number;
+  rw: PlayerId | null;
+  mw: PlayerId | null;
+}
+
+export interface RosterEntry {
+  id: PlayerId;
+  name: string;
+  /** Index into PLAYER_PALETTE. */
+  color: number;
+  score: number;
+  online: boolean;
+  host: boolean;
 }
 
 export type ClientMessage =
-  | { t: 'create'; id: string }
-  | { t: 'join'; code: string; id: string }
+  | { t: 'create'; id: string; name: string; color: number }
+  | { t: 'join'; code: string; id: string; name: string; color: number }
+  /** Quick play: join (or open) a public room. */
+  | { t: 'quick'; id: string; name: string; color: number }
+  /** Host of a private room picks the map (-1 = random). */
+  | { t: 'map'; choice: number }
+  | { t: 'profile'; name: string; color: number }
+  | { t: 'start' }
   | { t: 'input'; l: boolean; r: boolean; f: boolean }
   | { t: 'ping'; c: number }
-  | { t: 'rematch' }
   | { t: 'leave' };
 
 export type ServerMessage =
-  | { t: 'joined'; code: string; slot: PlayerIndex | -1 }
+  | { t: 'joined'; code: string; you: PlayerId | -1 }
+  | {
+      t: 'roster';
+      players: RosterEntry[];
+      spectators: number;
+      /** Public (quick play) room. */
+      pub: boolean;
+      mapChoice: number;
+      /** Public rooms: seconds until the match starts automatically, or -1. */
+      startsIn: number;
+    }
   | { t: 'error'; msg: string }
   | { t: 'pong'; c: number }
-  | { t: 'closed'; msg: string }
   | Snapshot;
 
 export const ROOM_CODE_PATTERN = /^[A-Z]{4}$/;

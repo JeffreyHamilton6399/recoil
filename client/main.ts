@@ -2,13 +2,14 @@
 // prediction, event playback (effects and sound) and the render loop.
 
 import * as C from '../shared/constants.js';
+import { MAPS } from '../shared/maps.js';
 import { angleDiff, clamp, lerp, wrapAngle } from '../shared/sim.js';
-import type { GameEvent, InputState, PlayerIndex, PlayerSnap, ServerMessage, Snapshot } from '../shared/types.js';
-import { ROOM_CODE_PATTERN } from '../shared/types.js';
+import { POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
+import type { GameEvent, InputState, PlayerId, PlayerSnap, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
 import { Sfx } from './audio.js';
 import { Input } from './input.js';
 import { Net } from './net.js';
-import { Renderer, type View, type ViewBullet, type ViewPlayer } from './render.js';
+import { Renderer, carouselPosition, type View, type ViewBullet, type ViewPlayer, type ViewPowerup } from './render.js';
 import { UI } from './ui.js';
 
 // ---------------------------------------------------------------------------
@@ -35,8 +36,14 @@ const CLIENT_ID = tabId();
 
 /** The room we're in, or trying to (re)join. */
 let roomCode: string | null = null;
-let wantCreate = false;
-let mySlot: PlayerIndex | -1 = -1;
+/** A room request to send once connected: open a private room, or quick play. */
+let wantRoom: 'create' | 'quick' | null = null;
+let roomPub = false;
+let mapChoice = -1;
+let startsIn = -1;
+let myId: PlayerId | -1 = -1;
+let roster: RosterEntry[] = [];
+let spectators = 0;
 let lostAt = 0; // when the connection dropped while in a room (ms), 0 if connected
 let connectedOnce = false; // false until the first successful connection
 
@@ -53,6 +60,8 @@ let fireHeldSince: number | null = null; // local charge prediction (seconds)
 let pingMs: number | null = null;
 let lastCountdown = -1;
 let lastShrinkSecond = -1;
+let lastCarouselCard = -1;
+let carouselLanded = false;
 let lastPhaseSeen: Snapshot['ph'] | null = null;
 
 const nowSec = (): number => performance.now() / 1000;
@@ -65,21 +74,28 @@ const canvas = document.getElementById('game') as HTMLCanvasElement;
 const renderer = new Renderer(canvas);
 const sfx = new Sfx();
 
+function requestRoom(kind: 'create' | 'quick'): void {
+  sfx.unlock();
+  ui.setMenuError('');
+  wantRoom = kind;
+  roomCode = null;
+  if (net.isOpen) sendHello();
+  else net.connect();
+}
+
 const ui = new UI({
-  onCreate: () => {
-    sfx.unlock();
-    ui.setMenuError('');
-    wantCreate = true;
-    roomCode = null;
-    if (net.isOpen) sendHello();
-    else net.connect();
-  },
+  onQuick: () => requestRoom('quick'),
+  onCreate: () => requestRoom('create'),
   onJoin: (code) => {
     sfx.unlock();
     joinRoom(code);
   },
   onLeave: () => leaveToMenu(''),
-  onRematch: () => net.send({ t: 'rematch' }),
+  onStart: () => net.send({ t: 'start' }),
+  onPickMap: (choice) => net.send({ t: 'map', choice }),
+  onProfile: () => {
+    if (roomCode && myId !== -1) net.send({ t: 'profile', name: ui.name, color: ui.color });
+  },
   onToggleMute: () => {
     sfx.unlock();
     ui.setMuted(sfx.toggleMute());
@@ -121,7 +137,7 @@ const net = new Net({
     ui.setPing(null);
     if (!connectedOnce) {
       // Never reached the server at all: say so instead of silently retrying.
-      if (roomCode || wantCreate) leaveToMenu("Can't reach the game server. Try again in a moment.");
+      if (roomCode || wantRoom) leaveToMenu("Can't reach the game server. Try again in a moment.");
       return;
     }
     if (!roomCode) return;
@@ -140,16 +156,16 @@ const net = new Net({
 });
 
 function sendHello(): void {
-  if (wantCreate) {
-    wantCreate = false;
-    net.send({ t: 'create', id: CLIENT_ID });
+  if (wantRoom) {
+    net.send({ t: wantRoom, id: CLIENT_ID, name: ui.name, color: ui.color });
+    wantRoom = null;
   } else if (roomCode) {
-    net.send({ t: 'join', code: roomCode, id: CLIENT_ID });
+    net.send({ t: 'join', code: roomCode, id: CLIENT_ID, name: ui.name, color: ui.color });
   }
 }
 
 function sendInput(): void {
-  if (mySlot === -1) return;
+  if (myId === -1) return;
   const s = input.state;
   net.send({ t: 'input', l: s.aimLeft, r: s.aimRight, f: s.firing });
 }
@@ -169,16 +185,20 @@ function resetRoomState(): void {
   lastLatestPhase = null;
   lastPhaseSeen = null;
   lastCountdown = -1;
-  mySlot = -1;
+  lastCarouselCard = -1;
+  myId = -1;
+  roster = [];
+  spectators = 0;
 }
 
 function leaveToMenu(error: string): void {
   if (roomCode) net.send({ t: 'leave' });
   roomCode = null;
-  wantCreate = false;
+  wantRoom = null;
   lostAt = 0;
   resetRoomState();
   history.replaceState(null, '', '/');
+  ui.setLobby(null);
   ui.showMenu(error);
   refreshLayout();
 }
@@ -192,16 +212,20 @@ function handleMessage(msg: ServerMessage): void {
     case 'joined':
       resetRoomState();
       roomCode = msg.code;
-      mySlot = msg.slot;
+      myId = msg.you;
       history.replaceState(null, '', `/?room=${msg.code}`);
       ui.setBanner(null);
       sendInput();
       break;
-    case 'error':
-      leaveToMenu(msg.msg);
+    case 'roster':
+      roster = msg.players;
+      spectators = msg.spectators;
+      roomPub = msg.pub;
+      mapChoice = msg.mapChoice;
+      startsIn = msg.startsIn;
+      refreshRoomUi();
       break;
-    case 'closed':
-      roomCode = null; // the server already dropped us from the room
+    case 'error':
       leaveToMenu(msg.msg);
       break;
     case 'pong': {
@@ -214,6 +238,15 @@ function handleMessage(msg: ServerMessage): void {
       onSnapshot(msg);
       break;
   }
+}
+
+function refreshRoomUi(): void {
+  if (!roomCode) return;
+  const latest = snaps[snaps.length - 1];
+  const phase = latest?.ph ?? 'lobby';
+  ui.showRoom(roomCode, myId !== -1);
+  ui.setLobby(phase === 'lobby' ? { code: roomCode, roster, spectators, myId, pub: roomPub, mapChoice, startsIn } : null);
+  refreshLayout();
 }
 
 function onSnapshot(s: Snapshot): void {
@@ -230,22 +263,13 @@ function onSnapshot(s: Snapshot): void {
     clockOffset = lerp(clockOffset, sample, 0.01);
   }
 
+  const prev = snaps[snaps.length - 1];
   snaps.push(s);
   if (snaps.length > 30) snaps.splice(0, snaps.length - 30);
   for (const ev of s.e) pendingEvents.push({ time: serverTime, ev });
 
-  // UI that follows the newest state, not the interpolated one.
-  if (s.ph === 'waiting' && mySlot !== -1) ui.showLobby(roomCode);
-  else ui.showGame(roomCode, mySlot !== -1);
-  refreshLayout();
-
-  const opp: PlayerIndex | -1 = mySlot === -1 ? -1 : mySlot === 0 ? 1 : 0;
-  if (lostAt === 0) {
-    if (s.cl >= 0 && opp !== -1 && s.sl[opp] === 2) ui.setBanner(`Opponent disconnected, waiting… ${s.cl}s`);
-    else if (s.cl >= 0) ui.setBanner(`A player disconnected, waiting… ${s.cl}s`);
-    else ui.setBanner(null);
-  }
-  ui.setMatchEnd(s.ph === 'matchEnd', mySlot !== -1, mySlot !== -1 && s.rm[mySlot], opp !== -1 && s.rm[opp]);
+  if (!prev || prev.ph !== s.ph) refreshRoomUi();
+  if (lostAt === 0) ui.setBanner(null);
 }
 
 // ---------------------------------------------------------------------------
@@ -253,19 +277,23 @@ function onSnapshot(s: Snapshot): void {
 // ---------------------------------------------------------------------------
 
 function toViewPlayer(p: PlayerSnap): ViewPlayer {
-  return { x: p[0], y: p[1], aim: p[2], charge: p[3], damage: p[4], fallTime: p[5] };
+  return { id: p[0], x: p[1], y: p[2], aim: p[3], charge: p[4], damage: p[5], fallTime: p[6], fx: p[7] };
 }
 
 function lerpPlayer(a: PlayerSnap, b: PlayerSnap, t: number): ViewPlayer {
-  // A player who just started falling has no fall time in `a`.
-  const fall = b[5] < 0 ? -1 : a[5] < 0 ? b[5] * t : lerp(a[5], b[5], t);
+  // A player who just started falling has no fall time in `a`; a respawn jumps.
+  const fall = b[6] < 0 ? -1 : a[6] < 0 ? b[6] * t : lerp(a[6], b[6], t);
+  const jumped = Math.hypot(b[1] - a[1], b[2] - a[2]) > 4;
+  const k = jumped ? 1 : t;
   return {
-    x: lerp(a[0], b[0], t),
-    y: lerp(a[1], b[1], t),
-    aim: a[2] + angleDiff(a[2], b[2]) * t,
-    charge: lerp(a[3], b[3], t),
-    damage: b[4],
+    id: b[0],
+    x: lerp(a[1], b[1], k),
+    y: lerp(a[2], b[2], k),
+    aim: a[3] + angleDiff(a[3], b[3]) * k,
+    charge: lerp(a[4], b[4], t),
+    damage: b[5],
     fallTime: fall,
+    fx: b[7],
   };
 }
 
@@ -289,8 +317,14 @@ function viewAt(time: number): View | null {
       }
     }
   }
-  // Don't slide players across the ice when a new round resets them.
-  if (a.ph !== b.ph && b.ph === 'countdown') a = b;
+  // Don't slide players across the ice when a new round or the lobby resets them.
+  if (a.ph !== b.ph && (b.ph === 'mapPick' || b.ph === 'lobby')) a = b;
+
+  const playersA = new Map(a.p.map((p) => [p[0], p]));
+  const players = b.p.map((pb) => {
+    const pa = playersA.get(pb[0]);
+    return pa ? lerpPlayer(pa, pb, t) : toViewPlayer(pb);
+  });
 
   const bulletsA = new Map(a.b.map((x) => [x[0], x]));
   const bullets: ViewBullet[] = [];
@@ -309,39 +343,63 @@ function viewAt(time: number): View | null {
     });
   }
 
+  const powerups: ViewPowerup[] = b.u.map((u) => ({ id: u[0], kind: POWERUP_KINDS[u[1]] ?? 'heal', x: u[2], y: u[3], age: u[4] }));
+
   const phaseTime = a === b ? a.pt : a.ph === b.ph ? lerp(a.pt, b.pt, t) : a.pt;
   return {
     phase: a.ph,
     phaseTime,
     arenaRadius: lerp(a.r, b.r, t),
+    mapIndex: a.m,
     shrinking: a.ph === 'playing' && a.r > C.ARENA_END_RADIUS + 1e-3,
-    players: [lerpPlayer(a.p[0], b.p[0], t), lerpPlayer(a.p[1], b.p[1], t)],
+    players,
     bullets,
-    scores: a.s,
-    roundResult: a.rr,
+    powerups,
+    roster,
+    roundWinner: a.rw,
     matchWinner: a.mw,
-    slots: b.sl,
-    mySlot,
+    myId,
     attract: false,
   };
 }
 
-/** The idle scene behind the menu. */
+/** The idle scene behind the main menu: four players wiggling on a random map. */
+const attractMap = Math.floor(Math.random() * MAPS.length);
+const attractRoster: RosterEntry[] = [0, 1, 2, 3].map((i) => ({
+  id: i,
+  name: '',
+  color: (i * 2 + 1) % C.PLAYER_PALETTE.length,
+  score: 0,
+  online: true,
+  host: false,
+}));
 function attractView(time: number): View {
-  const p0 = toViewPlayer([-C.SPAWN_DISTANCE, 0, Math.sin(time * 0.9) * 0.6, 0, 0, -1]);
-  const p1 = toViewPlayer([C.SPAWN_DISTANCE, 0, Math.PI + Math.sin(time * 0.7 + 1) * 0.6, 0, 0, -1]);
+  const players: ViewPlayer[] = attractRoster.map((r, i) => {
+    const a = Math.PI + (i / 4) * Math.PI * 2 + Math.PI / 4;
+    return {
+      id: r.id,
+      x: Math.cos(a) * C.SPAWN_DISTANCE,
+      y: Math.sin(a) * C.SPAWN_DISTANCE,
+      aim: a + Math.PI + Math.sin(time * (0.7 + i * 0.13) + i) * 0.7,
+      charge: 0,
+      damage: 0,
+      fallTime: -1,
+      fx: 0,
+    };
+  });
   return {
-    phase: 'waiting',
+    phase: 'lobby',
     phaseTime: 0,
     arenaRadius: C.ARENA_START_RADIUS,
+    mapIndex: attractMap,
     shrinking: false,
-    players: [p0, p1],
+    players,
     bullets: [],
-    scores: [0, 0],
-    roundResult: null,
+    powerups: [],
+    roster: attractRoster,
+    roundWinner: null,
     matchWinner: null,
-    slots: [1, 1],
-    mySlot: -1,
+    myId: -1,
     attract: true,
   };
 }
@@ -354,26 +412,38 @@ function localCharge(t: number): number {
   return fireHeldSince === null ? 0 : clamp((t - fireHeldSince) / C.CHARGE_TIME, 0, 1);
 }
 
-function canControl(latest: Snapshot | undefined): boolean {
-  if (!latest || mySlot === -1) return false;
-  return (latest.ph === 'countdown' || latest.ph === 'playing') && latest.p[mySlot][5] < 0;
+function mySnap(s: Snapshot | undefined): PlayerSnap | undefined {
+  return s?.p.find((p) => p[0] === myId);
+}
+
+function canAim(s: Snapshot | undefined): boolean {
+  if (!s || myId === -1) return false;
+  const me = mySnap(s);
+  return me !== undefined && me[6] < 0 && s.ph !== 'roundEnd' && s.ph !== 'matchEnd';
+}
+
+function canFire(s: Snapshot | undefined): boolean {
+  return canAim(s) && s !== undefined && (s.ph === 'playing' || s.ph === 'lobby');
 }
 
 function onLocalRelease(t: number): void {
   const latest = snaps[snaps.length - 1];
-  if (!canControl(latest) || latest.ph !== 'playing' || mySlot === -1) return;
+  if (!canFire(latest)) return;
   // Play the shot sound right away; the server's fire event adds the visuals.
-  sfx.fire(localCharge(t), panFor(latest.p[mySlot][0]));
+  const me = mySnap(latest);
+  sfx.fire(localCharge(t), panFor(me ? me[1] : 0));
 }
 
 function updatePrediction(dt: number, view: View): void {
   const latest = snaps[snaps.length - 1];
-  if (mySlot === -1 || !latest) {
+  const me = mySnap(latest);
+  if (!latest || !me) {
     predictedAim = null;
     return;
   }
-  const serverAim = latest.p[mySlot][2];
-  if (predictedAim === null || !canControl(latest) || (latest.ph !== lastLatestPhase && latest.ph === 'countdown')) {
+  const serverAim = me[3];
+  const phaseChanged = latest.ph !== lastLatestPhase && (latest.ph === 'mapPick' || latest.ph === 'lobby');
+  if (predictedAim === null || !canAim(latest) || phaseChanged) {
     predictedAim = serverAim;
   } else {
     const dir = (input.state.aimRight ? 1 : 0) - (input.state.aimLeft ? 1 : 0);
@@ -382,10 +452,10 @@ function updatePrediction(dt: number, view: View): void {
   }
   lastLatestPhase = latest.ph;
 
-  const me = view.players[mySlot];
-  if (canControl(latest)) {
-    me.aim = predictedAim;
-    if (latest.ph === 'playing') me.charge = localCharge(nowSec());
+  const vp = view.players.find((p) => p.id === myId);
+  if (vp && canAim(latest)) {
+    vp.aim = predictedAim;
+    if (canFire(latest)) vp.charge = localCharge(nowSec());
   }
 }
 
@@ -398,14 +468,17 @@ function panFor(x: number): number {
 }
 
 function playEvent(ev: GameEvent, view: View): void {
-  const heavy = renderer.onEvent(ev, view.players);
+  const heavy = renderer.onEvent(ev, view);
   if (heavy) hitStopUntil = nowSec() + C.HIT_STOP_TIME;
   switch (ev.k) {
     case 'fire':
-      if (ev.p !== mySlot) sfx.fire(ev.c, panFor(ev.x));
+      if (ev.p !== myId) sfx.fire(ev.c, panFor(ev.x));
       break;
     case 'hit':
       sfx.hit(ev.f, panFor(ev.x));
+      break;
+    case 'block':
+      sfx.block(panFor(ev.x));
       break;
     case 'cancel':
       sfx.cancel(panFor(ev.x));
@@ -416,13 +489,33 @@ function playEvent(ev: GameEvent, view: View): void {
     case 'fall':
       sfx.whoosh(panFor(ev.x));
       break;
+    case 'spawn':
+      sfx.powerupSpawn(panFor(ev.x));
+      break;
+    case 'pickup':
+      sfx.pickup(panFor(ev.x));
+      break;
     case 'ko':
-      sfx.ko(mySlot === -1 || ev.w === mySlot);
+      sfx.ko(myId === -1 || ev.w === myId);
+      break;
+    case 'respawn':
       break;
   }
 }
 
 function soundCues(view: View): void {
+  if (view.phase === 'mapPick') {
+    const { pos, done } = carouselPosition(view.phaseTime, view.mapIndex);
+    const card = Math.round(pos);
+    if (card !== lastCarouselCard && lastCarouselCard !== -1 && !done) sfx.carouselTick(false);
+    if (done && !carouselLanded) sfx.carouselTick(true);
+    lastCarouselCard = card;
+    carouselLanded = done;
+  } else {
+    lastCarouselCard = -1;
+    carouselLanded = false;
+  }
+
   if (view.phase === 'countdown') {
     const n = Math.max(1, Math.ceil(C.COUNTDOWN_TIME - view.phaseTime));
     if (n !== lastCountdown) sfx.countdown(n);
@@ -441,15 +534,18 @@ function soundCues(view: View): void {
   }
 
   if (view.phase === 'matchEnd' && lastPhaseSeen !== 'matchEnd' && lastPhaseSeen !== null) {
-    sfx.matchWin(mySlot === -1 || view.matchWinner === mySlot);
+    sfx.matchWin(myId === -1 || view.matchWinner === myId);
   }
   lastPhaseSeen = view.phase;
 
-  for (const i of [0, 1] as const) {
-    const p = view.players[i];
-    const mine = i === mySlot;
-    sfx.setCharge(i, view.phase === 'playing' && p.fallTime < 0 ? p.charge : 0, panFor(p.x), mine ? 1 : 0.45);
+  const charging = new Set<number>();
+  const firePhase = view.phase === 'playing' || view.phase === 'lobby';
+  for (const p of view.players) {
+    if (!firePhase || p.fallTime >= 0 || p.charge <= 0) continue;
+    charging.add(p.id);
+    sfx.setCharge(p.id, p.charge, panFor(p.x), p.id === myId ? 1 : 0.35);
   }
+  sfx.silenceChargesExcept(charging);
 }
 
 function refreshLayout(): void {
@@ -470,8 +566,7 @@ function frame(): void {
     if (Math.abs(target - renderTime) > 0.5) renderTime = target;
     else if (!frozen) renderTime += (target - renderTime) * Math.min(1, dt * 3);
 
-    const current = viewAt(renderTime);
-    view = current ?? attractView(now);
+    view = viewAt(renderTime) ?? attractView(now);
     // Fire effects and sounds when the interpolated time reaches them.
     while (pendingEvents.length > 0 && pendingEvents[0].time <= renderTime + 1e-6) {
       const item = pendingEvents.shift();
@@ -483,8 +578,7 @@ function frame(): void {
     while (snaps.length > 2 && snaps[1].k * C.TICK_DT < renderTime - 0.5) snaps.shift();
   } else {
     view = attractView(now);
-    sfx.setCharge(0, 0, 0, 0);
-    sfx.setCharge(1, 0, 0, 0);
+    sfx.silenceChargesExcept(new Set());
   }
 
   renderer.draw(view, frozen ? 0 : dt, dt);

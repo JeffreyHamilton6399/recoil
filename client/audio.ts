@@ -1,8 +1,6 @@
 // Every sound is synthesized with WebAudio: oscillators plus a generated
 // noise buffer. No audio files.
 
-import type { PlayerIndex } from '../shared/types.js';
-
 interface ChargeVoice {
   osc: OscillatorNode;
   osc2: OscillatorNode;
@@ -17,7 +15,7 @@ export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private noise: AudioBuffer | null = null;
-  private readonly voices: [ChargeVoice | null, ChargeVoice | null] = [null, null];
+  private readonly voices = new Map<number, ChargeVoice>();
   private muted = false;
 
   constructor() {
@@ -127,10 +125,10 @@ export class Sfx {
   // -------------------------------------------------------------------------
 
   /** Rising whine while charging. Call every frame; charge 0 silences it. */
-  setCharge(i: PlayerIndex, charge: number, pan: number, volume: number): void {
+  setCharge(id: number, charge: number, pan: number, volume: number): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    let v = this.voices[i];
+    let v = this.voices.get(id);
     if (!v) {
       const dest = this.master;
       if (!dest) return;
@@ -151,7 +149,7 @@ export class Sfx {
       osc.start();
       osc2.start();
       v = { osc, osc2, filter, gain, pan: p };
-      this.voices[i] = v;
+      this.voices.set(id, v);
     }
     const t = ctx.currentTime;
     const c = Math.max(0, Math.min(1, charge));
@@ -189,6 +187,11 @@ export class Sfx {
     this.noiseBurst('highpass', 4000, 2000, 0.8, 0.06, 0.2, pan);
   }
 
+  /** Silences every charge voice except the given ids. */
+  silenceChargesExcept(ids: ReadonlySet<number>): void {
+    for (const id of this.voices.keys()) if (!ids.has(id)) this.setCharge(id, 0, 0, 0);
+  }
+
   shrinkTick(): void {
     this.tone('square', 1500, 1400, 0.03, 0.05);
   }
@@ -207,6 +210,29 @@ export class Sfx {
   ko(good: boolean): void {
     const notes = good ? [523, 659, 784, 1047] : [440, 392, 330];
     notes.forEach((f, i) => this.tone('triangle', f, f, 0.16, 0.18, 0, 0.12 + i * 0.09));
+  }
+
+  /** Bright rising arpeggio when you grab a power-up. */
+  pickup(pan: number): void {
+    [660, 880, 1320].forEach((f, i) => this.tone('square', f, f * 1.02, 0.08, 0.1, pan, i * 0.05));
+  }
+
+  /** Little sparkle when a power-up appears. */
+  powerupSpawn(pan: number): void {
+    this.tone('sine', 1800, 2600, 0.12, 0.08, pan);
+    this.tone('sine', 2400, 3200, 0.1, 0.06, pan, 0.06);
+  }
+
+  /** Metallic clang when a shield blocks a shot. */
+  block(pan: number): void {
+    this.tone('triangle', 900, 880, 0.25, 0.25, pan);
+    this.tone('square', 1350, 1300, 0.15, 0.08, pan);
+    this.noiseBurst('highpass', 3000, 1500, 1, 0.08, 0.2, pan);
+  }
+
+  /** Click as each map card passes in the carousel. */
+  carouselTick(final: boolean): void {
+    this.tone('square', final ? 1100 : 700, final ? 1100 : 650, final ? 0.12 : 0.025, final ? 0.12 : 0.05);
   }
 
   matchWin(good: boolean): void {
