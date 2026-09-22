@@ -12,7 +12,7 @@ player standing wins the round, and the first to 5 round wins takes the match.
   from a carousel (or picks Random for the spinner) and starts the match.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
-- **12 floating rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
+- **12 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
   Vent Farm, Chimneys, Hex Plaza, Billboard, Sky Garden, Split Level, Parking
   Deck, and Solar Farm. Each has its own surface art and a building facade
   with lit windows. Arenas can be circles, squares, hexagons, or diamonds,
@@ -20,10 +20,13 @@ player standing wins the round, and the first to 5 round wins takes the match.
   cones.
 - **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, and Heal.
 - **Spider-Verse-style comic visuals, all drawn in code:**
-  - The rooftops float above a city at dusk. The streets are an irregular
-    tilted grid with a diagonal boulevard and a roundabout, traffic includes
-    sedans, taxis, trucks, and buses, and clouds drift below you. Each
-    platform casts its shadow onto the city.
+  - Every map is the roof of a tower in the middle of a city at dusk. The
+    tower casts a long shadow across the streets.
+  - The streets form a tilted, uneven grid with avenues, a canal with
+    bridges, and tunnels under the tower's plaza.
+  - Traffic obeys signals: sedans, taxis, trucks, and buses stop at red
+    lights, keep their distance, and never block an intersection, so they
+    never crash.
   - Off-register cyan and magenta printing and Ben-Day halftone dots.
   - Colored cel shadows and ink hatching.
   - Comic "POW!" words, manga speed lines, and a glitch on knockouts.

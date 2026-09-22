@@ -304,14 +304,15 @@ export const FONT = '"Arial Black", "Arial Rounded MT Bold", "Helvetica Neue", H
  * Paints a map in world units at the current transform: shadow, slab,
  * cel-shaded rooftop, facade, vents and bumpers. Shared by the game and the thumbnails.
  */
-/** The platform's shadow, cast onto the city far below it. */
+/**
+ * The tower's long shadow on the city below: the roof outline swept along
+ * the light direction, filled once so it's one flat, hard-edged shape.
+ */
 function paintMapShadow(ctx: CanvasRenderingContext2D, map: MapDef, R: number, dx: number, dy: number): void {
-  ctx.save();
-  ctx.translate(dx, dy);
-  ctx.fillStyle = 'rgba(12,2,30,0.62)';
-  arenaPath(ctx, map, R * 1.01, 0);
-  ctx.fill();
-  ctx.restore();
+  ctx.fillStyle = 'rgba(12,2,30,0.55)';
+  ctx.beginPath();
+  for (let k = 0; k <= 12; k++) addArenaPath(ctx, map, R * 1.01, (dx * k) / 12, (dy * k) / 12);
+  ctx.fill('nonzero');
 }
 
 function paintMap(
@@ -601,7 +602,6 @@ export class Renderer {
     this.canvas.height = Math.round(this.height * this.dpr);
     this.canvas.style.width = `${this.width}px`;
     this.canvas.style.height = `${this.height}px`;
-    this.city.build(this.width, this.height, this.dpr);
     this.layout();
   }
 
@@ -613,6 +613,8 @@ export class Renderer {
     this.scale = Math.min(w, h) / (2 * (C.ARENA_START_RADIUS + 1.2));
     this.cx = left + w / 2;
     this.cy = top + h / 2;
+    // The arena is the roof of a tower in the middle of the city, so the city is laid out around it.
+    this.city.ensure(this.width, this.height, this.dpr, { x: this.cx, y: this.cy, r: this.scale * C.ARENA_START_RADIUS * 1.05 });
   }
 
   private fxFor(id: PlayerId): PlayerFx {
@@ -806,7 +808,7 @@ export class Renderer {
     screen();
     this.city.draw(ctx, this.width, this.height, sx, sy);
     world();
-    paintMapShadow(ctx, map, view.arenaRadius, 2.2, 3.6);
+    paintMapShadow(ctx, map, C.ARENA_START_RADIUS, 3.2, 5);
     screen();
     this.city.drawClouds(ctx, this.width, this.height, sx, sy);
 
@@ -819,11 +821,10 @@ export class Renderer {
     const falling = view.players.filter((p) => p.fallTime >= 0);
     // Falling players drop "under" the ice, so draw them first.
     for (const p of falling) this.drawPlayer(view, p);
-    // Through a hole you see the city below (and anyone falling into it).
+    // Vents open into the tower's dark shaft (with anyone falling down it).
     const below = (): void => {
-      screen();
-      this.city.draw(ctx, this.width, this.height, sx, sy);
-      world();
+      ctx.fillStyle = '#0d0722';
+      ctx.fillRect(-C.ARENA_START_RADIUS * 2, -C.ARENA_START_RADIUS * 2, C.ARENA_START_RADIUS * 4, C.ARENA_START_RADIUS * 4);
       for (const p of falling) this.drawPlayer(view, p);
     };
     paintMap(ctx, map, view.arenaRadius, view.shrinking, this.time, k, below);
