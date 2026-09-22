@@ -38,6 +38,7 @@ let roomCode: string | null = null;
 let wantCreate = false;
 let mySlot: PlayerIndex | -1 = -1;
 let lostAt = 0; // when the connection dropped while in a room (ms), 0 if connected
+let connectedOnce = false; // false until the first successful connection
 
 const snaps: Snapshot[] = [];
 let clockOffset: number | null = null; // local seconds minus server seconds
@@ -111,12 +112,18 @@ for (const type of ['pointerdown', 'keydown', 'touchend'] as const) {
 
 const net = new Net({
   onOpen: () => {
+    connectedOnce = true;
     lostAt = 0;
     sendHello();
   },
   onClose: () => {
     pingMs = null;
     ui.setPing(null);
+    if (!connectedOnce) {
+      // Never reached the server at all: say so instead of silently retrying.
+      if (roomCode || wantCreate) leaveToMenu("Can't reach the game server. Try again in a moment.");
+      return;
+    }
     if (!roomCode) return;
     // Lost the connection mid-game: keep trying for the rejoin window.
     if (lostAt === 0) lostAt = performance.now();
