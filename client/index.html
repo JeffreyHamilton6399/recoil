@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#070b1a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="description" content="RECOIL: a two-player arena duel where the only way to move is to shoot." />
+    <title>RECOIL</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23bfe0f5'/%3E%3Crect x='16' y='13' width='13' height='6' rx='2' fill='%23222a44'/%3E%3Ccircle cx='14' cy='16' r='9' fill='%23ff4d5e'/%3E%3C/svg%3E"
+    />
+    <style>
+      :root {
+        --ink: #e9f3ff;
+        --muted: #8fa6c8;
+        --panel: rgba(10, 16, 40, 0.86);
+        --line: rgba(160, 200, 255, 0.18);
+        --red: #ff4d5e;
+        --blue: #3f7bff;
+        --accent: #7fd3ff;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #070b1a;
+        color: var(--ink);
+        touch-action: none;
+        overscroll-behavior: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      canvas {
+        position: fixed;
+        inset: 0;
+        display: block;
+      }
+      .hidden {
+        display: none !important;
+      }
+      button {
+        font: inherit;
+        color: inherit;
+      }
+
+      /* Menu ------------------------------------------------------------ */
+      .overlay {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+        background: radial-gradient(ellipse at center, rgba(4, 8, 24, 0.35), rgba(4, 8, 24, 0.75));
+        overflow-y: auto;
+      }
+      .panel {
+        width: min(420px, 100%);
+        padding: 28px 24px 22px;
+        border-radius: 22px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        text-align: center;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+      }
+      .logo {
+        margin: 0;
+        font-size: clamp(48px, 14vw, 72px);
+        font-weight: 900;
+        letter-spacing: 0.06em;
+        line-height: 1;
+        background: linear-gradient(180deg, #ffffff 0%, #bfe4ff 55%, #7fb6ea 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 4px 0 rgba(255, 77, 94, 0.55)) drop-shadow(0 -2px 0 rgba(63, 123, 255, 0.5));
+      }
+      .tag {
+        margin: 12px 0 22px;
+        color: var(--muted);
+        line-height: 1.45;
+        font-size: 15px;
+      }
+      .btn {
+        display: block;
+        width: 100%;
+        padding: 14px 18px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.06);
+        font-size: 17px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 0.08s ease, background 0.15s ease;
+      }
+      .btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+      }
+      .btn:active {
+        transform: scale(0.97);
+      }
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      .btn.primary {
+        border: none;
+        background: linear-gradient(180deg, #ff6676, #e23a4e);
+        box-shadow: 0 6px 0 #9c1f31, 0 10px 24px rgba(255, 77, 94, 0.35);
+        margin-bottom: 6px;
+      }
+      .btn.primary:active {
+        transform: translateY(3px);
+        box-shadow: 0 3px 0 #9c1f31;
+      }
+      .btn.ghost {
+        background: transparent;
+        color: var(--muted);
+        border-color: transparent;
+        margin-top: 8px;
+      }
+      .or {
+        margin: 22px 0 10px;
+        color: var(--muted);
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+      .join {
+        display: flex;
+        gap: 8px;
+      }
+      .join input {
+        flex: 1;
+        min-width: 0;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.3);
+        color: var(--ink);
+        font: inherit;
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: 0.3em;
+        text-align: center;
+        text-transform: uppercase;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .join input:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      .join .btn {
+        width: auto;
+        padding: 12px 20px;
+      }
+      .error {
+        min-height: 1.3em;
+        margin: 10px 0 0;
+        color: #ff8a96;
+        font-size: 14px;
+      }
+      .help {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      kbd {
+        display: inline-block;
+        min-width: 1.6em;
+        padding: 0 5px;
+        border-radius: 5px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--ink);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .label {
+        color: var(--muted);
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+      }
+      .code {
+        margin: 6px 0 4px;
+        font-size: 64px;
+        font-weight: 900;
+        letter-spacing: 0.22em;
+        padding-left: 0.22em;
+      }
+      .url {
+        margin-bottom: 16px;
+        color: var(--accent);
+        font-size: 13px;
+        word-break: break-all;
+        -webkit-user-select: all;
+        user-select: all;
+      }
+      .waiting {
+        margin: 18px 0 0;
+        color: var(--muted);
+      }
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.2;
+          transform: scale(0.6);
+        }
+      }
+
+      /* HUD ------------------------------------------------------------- */
+      #hud {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+      }
+      .hud-btn {
+        pointer-events: auto;
+        width: 38px;
+        height: 38px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(10, 16, 40, 0.6);
+        color: var(--muted);
+        font-size: 16px;
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+      }
+      #btn-leave {
+        position: absolute;
+        top: max(12px, env(safe-area-inset-top));
+        left: max(12px, env(safe-area-inset-left));
+      }
+      #hud-right {
+        position: absolute;
+        top: max(12px, env(safe-area-inset-top));
+        right: max(12px, env(safe-area-inset-right));
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #room-tag,
+      #ping {
+        padding: 4px 8px;
+        border-radius: 8px;
+        background: rgba(10, 16, 40, 0.6);
+        font-size: 12px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      #ping[data-q='good'] {
+        color: #6ee7a8;
+      }
+      #ping[data-q='ok'] {
+        color: #ffd166;
+      }
+      #ping[data-q='bad'] {
+        color: #ff8a96;
+      }
+      #btn-mute svg {
+        width: 18px;
+        height: 18px;
+      }
+      #btn-mute .x {
+        display: none;
+      }
+      #btn-mute.muted .x {
+        display: inline;
+      }
+      #btn-mute.muted .wave {
+        display: none;
+      }
+      #banner {
+        position: fixed;
+        left: 50%;
+        top: 38%;
+        transform: translate(-50%, -50%);
+        max-width: calc(100% - 32px);
+        padding: 14px 20px;
+        border-radius: 14px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        font-weight: 700;
+        text-align: center;
+        pointer-events: none;
+      }
+      #match-end {
+        position: fixed;
+        left: 50%;
+        top: 58%;
+        transform: translateX(-50%);
+        width: min(320px, calc(100% - 32px));
+      }
+
+      /* Touch controls -------------------------------------------------- */
+      #touch {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+      }
+      .tbtn {
+        position: absolute;
+        pointer-events: auto;
+        touch-action: none;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        border: 2px solid rgba(200, 230, 255, 0.35);
+        background: rgba(20, 32, 70, 0.55);
+        color: rgba(230, 243, 255, 0.9);
+        font-weight: 900;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      .tbtn.pressed {
+        background: rgba(127, 211, 255, 0.45);
+        border-color: rgba(255, 255, 255, 0.8);
+        transform: scale(0.94);
+      }
+      .aim {
+        width: 78px;
+        height: 78px;
+        font-size: 28px;
+        bottom: max(24px, env(safe-area-inset-bottom));
+      }
+      #t-left {
+        left: max(16px, env(safe-area-inset-left));
+      }
+      #t-right {
+        left: calc(max(16px, env(safe-area-inset-left)) + 88px);
+      }
+      .fire {
+        width: 132px;
+        height: 132px;
+        right: max(18px, env(safe-area-inset-right));
+        bottom: max(20px, env(safe-area-inset-bottom));
+        font-size: 20px;
+        letter-spacing: 0.08em;
+        background: radial-gradient(circle at 40% 35%, rgba(255, 110, 125, 0.75), rgba(200, 40, 60, 0.6));
+        border-color: rgba(255, 200, 210, 0.6);
+      }
+      .fire.pressed {
+        background: radial-gradient(circle at 40% 35%, rgba(255, 255, 255, 0.9), rgba(255, 90, 110, 0.8));
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" aria-label="RECOIL arena"></canvas>
+
+    <div id="hud" class="hidden">
+      <button id="btn-leave" class="hud-btn" aria-label="Leave game" title="Leave">✕</button>
+      <div id="hud-right">
+        <span id="room-tag"></span>
+        <span id="ping" data-q="bad">– ms</span>
+        <button id="btn-mute" class="hud-btn" aria-label="Mute" title="Mute (M)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor" />
+            <path class="wave" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+            <path class="x" d="m16 9 6 6m0-6-6 6" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="banner" class="hidden"></div>
+
+    <section id="menu" class="overlay">
+      <div class="panel">
+        <h1 class="logo">RECOIL</h1>
+        <p class="tag">You can't walk. Every shot kicks you backwards.<br />Knock your rival off the shrinking ice.</p>
+
+        <div id="menu-home">
+          <button id="btn-create" class="btn primary">Create game</button>
+          <div class="or">or join with a code</div>
+          <form id="join-form" class="join">
+            <input id="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" aria-label="Room code" />
+            <button class="btn" type="submit">Join</button>
+          </form>
+          <p id="menu-error" class="error" role="alert"></p>
+          <div class="help">
+            Aim <kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd><br />
+            Hold <kbd>Space</kbd>, <kbd>W</kbd> or <kbd>↑</kbd> to charge, release to fire<br />
+            First to 5 knockouts wins
+          </div>
+        </div>
+
+        <div id="menu-lobby" class="hidden">
+          <div class="label">Room code</div>
+          <div id="lobby-code" class="code">----</div>
+          <div id="lobby-url" class="url"></div>
+          <button id="btn-copy" class="btn primary">Copy link</button>
+          <p class="waiting"><span class="dot"></span>Waiting for an opponent…</p>
+          <button id="btn-lobby-leave" class="btn ghost">Leave</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="match-end" class="hidden">
+      <button id="btn-rematch" class="btn primary">Rematch</button>
+      <button id="btn-menu" class="btn ghost">Back to menu</button>
+    </section>
+
+    <div id="touch" class="hidden">
+      <div id="t-left" class="tbtn aim" role="button" aria-label="Aim left">◀</div>
+      <div id="t-right" class="tbtn aim" role="button" aria-label="Aim right">▶</div>
+      <div id="t-fire" class="tbtn fire" role="button" aria-label="Hold to charge, release to fire">FIRE</div>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
