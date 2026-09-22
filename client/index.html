@@ -24,6 +24,8 @@
         --sky: #7fd8ff;
         --yellow: #ffd93d;
         --muted: #6b5f86;
+        --cyan: #00e1ff;
+        --magenta: #ff2e88;
         --font: 'Arial Black', 'Arial Rounded MT Bold', 'Helvetica Neue', Helvetica, system-ui, sans-serif;
         --body: 'Trebuchet MS', 'Helvetica Neue', Helvetica, system-ui, sans-serif;
         font-family: var(--body);
@@ -79,8 +81,11 @@
         padding: 22px 22px 18px;
         border: 4px solid var(--ink);
         border-radius: 20px;
-        background: var(--paper);
-        box-shadow: 9px 9px 0 var(--ink);
+        /* Ben-Day dots printed on the paper. */
+        background:
+          radial-gradient(circle, rgba(255, 46, 136, 0.1) 1.3px, transparent 1.5px) 0 0 / 8px 8px,
+          var(--paper);
+        box-shadow: -4px -3px 0 var(--cyan), 9px 9px 0 var(--magenta), 13px 13px 0 var(--ink);
         text-align: center;
       }
       .logo {
@@ -93,7 +98,8 @@
         color: var(--yellow);
         -webkit-text-stroke: 4px var(--ink);
         paint-order: stroke fill;
-        text-shadow: 6px 6px 0 var(--ink);
+        /* Off-register print: cyan and magenta ghosts behind the ink shadow. */
+        text-shadow: -4px -2px 0 var(--cyan), 4px 3px 0 var(--magenta), 7px 7px 0 var(--ink);
         transform: rotate(-4deg);
       }
       .tag {
@@ -132,6 +138,7 @@
         box-shadow: 0 2px 0 var(--ink);
       }
       .btn.primary {
+        text-shadow: -1.5px 0 var(--cyan), 1.5px 1px var(--magenta);
         background: var(--red);
         color: #fff;
         -webkit-text-stroke: 1.5px var(--ink);

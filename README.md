@@ -16,8 +16,13 @@ player standing wins the round, and the first to 5 round wins takes the match.
   Hex Rink, Diamond, Moat, Canyon, Bumper Alley, and Hive. Arenas can be
   circles, squares, hexagons, or diamonds, with holes and pinball bumpers.
 - **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, and Heal.
-- **Toon-shaded Canvas 2D visuals:** cel shading, halftone shadows, ink
-  outlines, and manga speed lines on big hits.
+- **Spider-Verse-style comic visuals, all drawn in code:**
+  - The ice floats above a city at dusk, with rooftops, moving cars, and
+    clouds below it, and the ice casts its shadow onto the streets.
+  - Off-register cyan and magenta printing and Ben-Day halftone dots.
+  - Colored cel shadows and ink hatching.
+  - Comic "POW!" words, manga speed lines, and a glitch on knockouts.
+  - Effects animate at 12 fps, "on twos", like hand-drawn animation.
 - **Crisp WebAudio sound, all synthesized:** UI clicks, shots, hits, bumper
   boings, and a jingle for each power-up. There are no asset files.
 - Server-authoritative 30 Hz simulation over WebSockets (`ws`). The same
@@ -59,8 +64,8 @@ that Vite prints, for example `http://192.168.1.20:5173`.
 shared/   constants.ts (all tuning values), maps.ts (map layouts), types.ts,
           sim.ts (the simulation), sim.test.ts
 server/   index.ts: HTTP static server, rooms, 30 Hz fixed-step loop
-client/   main.ts (network, interpolation, prediction), render.ts, input.ts,
-          audio.ts, ui.ts, net.ts, index.html
+client/   main.ts (network, interpolation, prediction), render.ts, city.ts,
+          input.ts, audio.ts, ui.ts, net.ts, index.html
 ```
 
 To change how the game feels, edit `shared/constants.ts`. Every value there

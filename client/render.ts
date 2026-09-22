@@ -17,9 +17,13 @@ import {
   type PowerupKind,
   type RosterEntry,
 } from '../shared/types.js';
+import { City } from './city.js';
 
 /** Outline colour used for everything. */
 export const INK = '#1b1030';
+/** Misprinted-ink ghosts, like an off-register comic print (Spider-Verse style). */
+const CYAN = '#00e1ff';
+const MAGENTA = '#ff2e88';
 const YELLOW = '#ffd93d';
 const BUMPER_TOP = '#ff3d8b';
 const BUMPER_SHADE = '#b81f5e';
@@ -147,12 +151,15 @@ interface PlayerFx {
   dmgPop: number;
 }
 
-interface Star {
+/** A comic sound-effect word like "POW!" (world position). */
+interface Word {
   x: number;
   y: number;
-  size: number;
-  phase: number;
-  depth: number;
+  text: string;
+  color: string;
+  rot: number;
+  life: number;
+  maxLife: number;
 }
 
 export interface PlayerLook {
@@ -190,7 +197,8 @@ function rgba(hex: string, a: number): string {
 /** Base, shadow and highlight tones for a palette colour. */
 export function paletteLook(color: number, name: string): PlayerLook {
   const base = C.PLAYER_PALETTE[color] ?? C.PLAYER_PALETTE[0];
-  return { base, shade: mix(base, INK, 0.32), light: mix(base, '#ffffff', 0.6), name };
+  // Spider-Verse style: shadows lean cool purple, highlights lean warm yellow.
+  return { base, shade: mix(mix(base, '#3a1a8a', 0.42), INK, 0.12), light: mix(base, '#fff2a6', 0.55), name };
 }
 
 /** Spiky star outline, used for impact bursts and sparkles. */
@@ -251,6 +259,35 @@ function halftone(ctx: CanvasRenderingContext2D, pxPerUnit: number): CanvasPatte
   return pat;
 }
 
+/** Diagonal ink hatching for the deepest shadows. */
+const hatches = new WeakMap<CanvasRenderingContext2D, CanvasPattern>();
+function hatch(ctx: CanvasRenderingContext2D, pxPerUnit: number): CanvasPattern | null {
+  let pat = hatches.get(ctx);
+  if (!pat) {
+    const tile = document.createElement('canvas');
+    tile.width = 8;
+    tile.height = 8;
+    const t = tile.getContext('2d');
+    if (!t) return null;
+    t.strokeStyle = 'rgba(27,16,48,0.45)';
+    t.lineWidth = 1.2;
+    t.beginPath();
+    t.moveTo(-2, 10);
+    t.lineTo(10, -2);
+    t.moveTo(-2, 2);
+    t.lineTo(2, -2);
+    t.moveTo(6, 10);
+    t.lineTo(10, 6);
+    t.stroke();
+    const p = ctx.createPattern(tile, 'repeat');
+    if (!p) return null;
+    pat = p;
+    hatches.set(ctx, pat);
+  }
+  pat.setTransform(new DOMMatrix([1 / pxPerUnit, 0, 0, 1 / pxPerUnit, 0, 0]));
+  return pat;
+}
+
 /** Sparkle spots on the ice (fraction of radius, angle in degrees). */
 const GLINTS: readonly [number, number][] = [
   [0.52, 205],
@@ -267,19 +304,30 @@ export const FONT = '"Arial Black", "Arial Rounded MT Bold", "Helvetica Neue", H
  * Paints a map in world units at the current transform: shadow, slab,
  * cel-shaded ice, holes and bumpers. Shared by the game and the thumbnails.
  */
-function paintMap(ctx: CanvasRenderingContext2D, map: MapDef, R: number, rimFlash: boolean, time: number, pxPerUnit: number): void {
+/** The ice's shadow, cast onto whatever is far below it. */
+function paintMapShadow(ctx: CanvasRenderingContext2D, map: MapDef, R: number, dx: number, dy: number): void {
+  ctx.save();
+  ctx.translate(dx, dy);
+  ctx.fillStyle = 'rgba(12,2,30,0.62)';
+  arenaPath(ctx, map, R * 1.01, 0);
+  ctx.fill();
+  ctx.restore();
+}
+
+function paintMap(
+  ctx: CanvasRenderingContext2D,
+  map: MapDef,
+  R: number,
+  rimFlash: boolean,
+  time: number,
+  pxPerUnit: number,
+  /** Paints what you see through the holes (the city far below). */
+  below?: () => void,
+): void {
   const t = map.theme;
   const slab = 0.45;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-
-  // Hard-edged drop shadow far below: the ice floats.
-  ctx.save();
-  ctx.translate(0.45, 1.5);
-  ctx.fillStyle = 'rgba(8,4,24,0.45)';
-  arenaPath(ctx, map, R * 1.01, 0);
-  ctx.fill();
-  ctx.restore();
 
   // Slab side: two flat tones and an ink outline.
   ctx.fillStyle = t.side;
@@ -289,6 +337,11 @@ function paintMap(ctx: CanvasRenderingContext2D, map: MapDef, R: number, rimFlas
   ctx.clip();
   ctx.fillStyle = t.sideShade;
   ctx.fillRect(R * 0.35, -R * 2, R * 2, R * 4);
+  const lines = hatch(ctx, pxPerUnit);
+  if (lines) {
+    ctx.fillStyle = lines;
+    ctx.fillRect(R * 0.35, -R * 2, R * 2, R * 4);
+  }
   ctx.restore();
   ctx.strokeStyle = INK;
   ctx.lineWidth = LINE_THICK;
@@ -341,28 +394,43 @@ function paintMap(ctx: CanvasRenderingContext2D, map: MapDef, R: number, rimFlas
     ctx.fill();
   });
 
-  // Holes: you can see the far wall of the slab inside each one.
+  // Holes: look through them to the city below, with the slab's far wall along the top edge.
   const s = mapScale(R);
-  for (const hole of map.holes) {
-    const hx = hole.x * s;
-    const hy = hole.y * s;
-    const hr = hole.r * s;
+  const holes = map.holes.map((h) => ({ x: h.x * s, y: h.y * s, r: h.r * s }));
+  if (holes.length > 0) {
     ctx.save();
     ctx.beginPath();
-    ctx.arc(hx, hy, hr, 0, Math.PI * 2);
+    for (const h of holes) {
+      ctx.moveTo(h.x + h.r, h.y);
+      ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+    }
     ctx.clip();
+    if (below) {
+      // One clip for every hole, so the city is drawn once however many holes there are.
+      ctx.save();
+      below();
+      ctx.restore();
+    } else {
+      ctx.fillStyle = VOID;
+      ctx.fillRect(-R * 1.5, -R * 1.5, R * 3, R * 3);
+    }
     ctx.fillStyle = t.sideShade;
-    ctx.fillRect(hx - hr, hy - hr, hr * 2, hr * 2);
-    ctx.fillStyle = VOID;
-    ctx.beginPath();
-    ctx.arc(hx, hy + slab * s + 0.1, hr, 0, Math.PI * 2);
-    ctx.fill();
+    for (const h of holes) {
+      ctx.beginPath();
+      ctx.moveTo(h.x + h.r, h.y);
+      ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+      ctx.moveTo(h.x + h.r, h.y + slab * s + 0.1);
+      ctx.arc(h.x, h.y + slab * s + 0.1, h.r, 0, Math.PI * 2);
+      ctx.fill('evenodd');
+    }
     ctx.restore();
     ctx.strokeStyle = INK;
     ctx.lineWidth = LINE;
-    ctx.beginPath();
-    ctx.arc(hx, hy, hr, 0, Math.PI * 2);
-    ctx.stroke();
+    for (const h of holes) {
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
   ctx.restore();
 
@@ -372,12 +440,24 @@ function paintMap(ctx: CanvasRenderingContext2D, map: MapDef, R: number, rimFlas
   ctx.lineWidth = on ? 0.2 : 0.12;
   arenaPath(ctx, map, R - LINE_THICK / 2 - (on ? 0.1 : 0.06), 0);
   ctx.stroke();
+  // Off-register cyan and magenta ghosts of the outline, then the ink.
+  ctx.lineWidth = LINE * 0.9;
+  ctx.save();
+  ctx.translate(-0.09, -0.05);
+  ctx.strokeStyle = CYAN;
+  arenaPath(ctx, map, R, 0);
+  ctx.stroke();
+  ctx.translate(0.18, 0.1);
+  ctx.strokeStyle = MAGENTA;
+  arenaPath(ctx, map, R, 0);
+  ctx.stroke();
+  ctx.restore();
   ctx.strokeStyle = INK;
   ctx.lineWidth = LINE_THICK;
   arenaPath(ctx, map, R, 0);
   ctx.stroke();
 
-  // Bumpers: chunky yellow posts.
+  // Bumpers: chunky posts.
   for (const b of scaledBumpers(map, R)) {
     const post = 0.3 * s + 0.08;
     ctx.fillStyle = rgba(INK, 0.25);
@@ -424,6 +504,7 @@ export function makeMapThumb(index: number, px: number): HTMLCanvasElement {
   ctx.fillRect(0, 0, px, px);
   const k = px / (2 * (C.ARENA_START_RADIUS + 1.4));
   ctx.setTransform(k, 0, 0, k, px / 2 - 0.2 * k, px / 2 - 0.5 * k);
+  paintMapShadow(ctx, map, C.ARENA_START_RADIUS, 0.45, 1.5);
   paintMap(ctx, map, C.ARENA_START_RADIUS, false, 1.3, k);
   return cv;
 }
@@ -451,7 +532,13 @@ export class Renderer {
   private cy = 0;
   private insets: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
 
-  private readonly stars: Star[] = [];
+  private readonly city = new City();
+  private words: Word[] = [];
+  /** Effects advance in 12 fps steps ("on twos"), like hand-drawn animation. */
+  private fxAcc = 0;
+  /** Seconds of screen-tear glitch left (after a knockout). */
+  private glitch = 0;
+  private glitchBuffer: HTMLCanvasElement | null = null;
   private particles: Particle[] = [];
   private rings: Ring[] = [];
   private pows: Pow[] = [];
@@ -470,14 +557,6 @@ export class Renderer {
     if (!ctx) throw new Error('Canvas 2D is not supported');
     this.ctx = ctx;
 
-    let seed = 7;
-    const rand = (): number => {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed / 4294967296;
-    };
-    for (let i = 0; i < 120; i++) {
-      this.stars.push({ x: rand(), y: rand(), size: 1 + rand() * 2.2, phase: rand() * Math.PI * 2, depth: 0.2 + rand() * 0.8 });
-    }
     this.resize();
   }
 
@@ -494,6 +573,7 @@ export class Renderer {
     this.canvas.height = Math.round(this.height * this.dpr);
     this.canvas.style.width = `${this.width}px`;
     this.canvas.style.height = `${this.height}px`;
+    this.city.build(this.width, this.height, this.dpr);
     this.layout();
   }
 
@@ -567,6 +647,10 @@ export class Renderer {
         });
         this.rings.push({ x: ev.x, y: ev.y, r0: 0.2, r1: 0.8 + ev.f * 0.08, life: 0.28, maxLife: 0.28, color: '#ffffff' });
         this.addTrauma(Math.min(0.9, 0.12 + ev.f * 0.04));
+        if (ev.f >= 6) {
+          const pool = heavy ? ['POW!', 'WHAM!', 'BAM!', 'THWACK!', 'KAPOW!'] : ['BOP!', 'WHAP!', 'THWP!'];
+          this.word(ev.x, ev.y - 0.6, pool[Math.floor(Math.random() * pool.length)], heavy ? YELLOW : '#ffffff');
+        }
         if (heavy) {
           const [sx, sy] = this.toScreen(ev.x, ev.y);
           this.action = { x: sx, y: sy, life: 0.22, seed: Math.random() * 1000 };
@@ -591,7 +675,10 @@ export class Renderer {
           f.squashAngle = ev.a;
           f.squashVel -= 3 + ev.f * 0.8;
         }
-        if (ev.q < 0) this.rings.push({ x: ev.x, y: ev.y, r0: 0.3, r1: 1.2, life: 0.25, maxLife: 0.25, color: YELLOW });
+        if (ev.q < 0) {
+          this.rings.push({ x: ev.x, y: ev.y, r0: 0.3, r1: 1.2, life: 0.25, maxLife: 0.25, color: BUMPER_TOP });
+          if (ev.f > 3) this.word(ev.x, ev.y - 0.5, 'BOING!', BUMPER_TOP);
+        }
         this.burst(ev.x, ev.y, 7, '#ffffff', 2 + ev.f * 0.3, ev.a + Math.PI / 2, Math.PI * 2, 0.07, 0.3);
         this.addTrauma(Math.min(0.5, 0.05 + ev.f * 0.03));
         return false;
@@ -601,6 +688,7 @@ export class Renderer {
         const x = p?.x ?? ev.x;
         const y = p?.y ?? ev.y;
         this.burst(x, y, 16, '#dff6ff', 3, Math.atan2(y, x), 1.4, 0.09, 0.55);
+        if (view.phase !== 'lobby') this.word(x, y - 0.8, 'WHOOSH!', CYAN);
         this.addTrauma(view.phase === 'lobby' ? 0.15 : 0.35);
         return false;
       }
@@ -624,9 +712,15 @@ export class Renderer {
         if (view.phase !== 'lobby') {
           this.flash = 0.5;
           this.addTrauma(0.6);
+          this.glitch = 0.45;
         }
         return false;
     }
+  }
+
+  private word(x: number, y: number, text: string, color: string): void {
+    this.words.push({ x, y, text, color, rot: (Math.random() - 0.5) * 0.5, life: 0.7, maxLife: 0.7 });
+    if (this.words.length > 6) this.words.shift();
   }
 
   private popupAt(id: PlayerId, view: View, text: string, color: string): void {
@@ -676,19 +770,35 @@ export class Renderer {
     const sx = shake * Math.sin(this.time * 71.3) * Math.cos(this.time * 13.1);
     const sy = shake * Math.cos(this.time * 63.7) * Math.sin(this.time * 17.9);
 
-    this.drawBackground(sx * 0.3, sy * 0.3);
+    // The city far below, the ice's shadow on it, then clouds in between.
+    const screen = (): void => ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    const k = this.scale * this.dpr;
+    const world = (): void => ctx.setTransform(k, 0, 0, k, (this.cx + sx) * this.dpr, (this.cy + sy) * this.dpr);
+    const map = MAPS[view.mapIndex] ?? MAPS[0];
+    screen();
+    this.city.draw(ctx, this.width, this.height, sx, sy);
+    world();
+    paintMapShadow(ctx, map, view.arenaRadius, 2.2, 3.6);
+    screen();
+    this.city.drawClouds(ctx, this.width, this.height, sx, sy);
 
     // World space: 1 unit = this.scale CSS pixels.
-    const k = this.scale * this.dpr;
-    ctx.setTransform(k, 0, 0, k, (this.cx + sx) * this.dpr, (this.cy + sy) * this.dpr);
+    world();
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    const map = MAPS[view.mapIndex] ?? MAPS[0];
     const standing = view.players.filter((p) => p.fallTime < 0);
+    const falling = view.players.filter((p) => p.fallTime >= 0);
     // Falling players drop "under" the ice, so draw them first.
-    for (const p of view.players) if (p.fallTime >= 0) this.drawPlayer(view, p);
-    paintMap(ctx, map, view.arenaRadius, view.shrinking, this.time, this.scale * this.dpr);
+    for (const p of falling) this.drawPlayer(view, p);
+    // Through a hole you see the city below (and anyone falling into it).
+    const below = (): void => {
+      screen();
+      this.city.draw(ctx, this.width, this.height, sx, sy);
+      world();
+      for (const p of falling) this.drawPlayer(view, p);
+    };
+    paintMap(ctx, map, view.arenaRadius, view.shrinking, this.time, k, below);
     if (!view.attract && view.arenaRadius > C.ARENA_END_RADIUS + 0.05 && view.phase !== 'lobby') {
       // Where the arena will end up.
       ctx.setLineDash([0.2, 0.25]);
@@ -709,6 +819,7 @@ export class Renderer {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, sx * this.dpr, sy * this.dpr);
     if (!view.attract) {
       for (const p of standing) this.drawLabels(view, p);
+      this.drawWords();
       this.drawPopups();
     }
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -720,25 +831,95 @@ export class Renderer {
       ctx.fillStyle = `rgba(255,250,230,${this.flash})`;
       ctx.fillRect(0, 0, this.width, this.height);
     }
+    if (this.glitch > 0) this.drawGlitch();
+  }
+
+  /** Comic sound-effect words in jagged bursts, jittering on twos. */
+  private drawWords(): void {
+    const ctx = this.ctx;
+    const jitter = Math.floor(this.time * 12) % 2 === 0 ? 1 : -1;
+    for (const w of this.words) {
+      const [x, y] = this.toScreen(w.x, w.y);
+      const age = 1 - w.life / w.maxLife;
+      const pop = age < 0.15 ? 0.5 + (age / 0.15) * 0.7 : age > 0.8 ? 1.2 - (age - 0.8) * 4 : 1.2;
+      const size = Math.max(14, this.scale * 0.55) * pop;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(w.rot + jitter * 0.03);
+      ctx.font = `900 ${size}px ${FONT}`;
+      const tw = ctx.measureText(w.text).width;
+      ctx.save();
+      ctx.scale(1, 0.6);
+      spikyPath(ctx, 0, 0, tw * 0.62 + size * 0.45, tw * 0.5 + size * 0.2, 11, w.rot * 3);
+      ctx.fillStyle = w.color === '#ffffff' ? '#ff2e88' : '#ffffff';
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 3;
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      this.toonText(w.text, 0, 0, size, w.color);
+      ctx.restore();
+    }
+  }
+
+  /** Screen-tear glitch: displaced slices with cyan/magenta bands. */
+  private drawGlitch(): void {
+    const ctx = this.ctx;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    if (!this.glitchBuffer || this.glitchBuffer.width !== W || this.glitchBuffer.height !== H) {
+      this.glitchBuffer = document.createElement('canvas');
+      this.glitchBuffer.width = W;
+      this.glitchBuffer.height = H;
+    }
+    const b = this.glitchBuffer.getContext('2d');
+    if (!b) return;
+    b.drawImage(this.canvas, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // New slices 12 times a second, so it stutters like a bad signal.
+    let seed = Math.floor(this.time * 12) * 7919;
+    const rnd = (): number => {
+      seed = (seed * 16807) % 2147483647;
+      return (seed % 10000) / 10000;
+    };
+    const k = this.glitch / 0.45;
+    for (let i = 0; i < 7; i++) {
+      const y = rnd() * H;
+      const h = (0.01 + rnd() * 0.06) * H;
+      const dx = (rnd() - 0.5) * 0.08 * W * k;
+      ctx.drawImage(this.glitchBuffer, 0, y, W, h, dx, y, W, h);
+      ctx.fillStyle = rnd() < 0.5 ? `rgba(0,225,255,${0.18 * k})` : `rgba(255,46,136,${0.18 * k})`;
+      ctx.fillRect(0, y, W, h);
+    }
   }
 
   private update(view: View, dt: number, realDt: number): void {
     this.trauma = Math.max(0, this.trauma - C.SHAKE_DECAY * realDt);
     this.flash = Math.max(0, this.flash - 2.5 * realDt);
+    this.glitch = Math.max(0, this.glitch - realDt);
+    this.city.update(realDt);
 
-    for (const p of this.particles) {
-      const d = Math.exp(-p.drag * dt);
-      p.vx *= d;
-      p.vy *= d;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.life -= dt;
+    // Sparks, rings and bursts move on twos (12 fps) for a hand-animated look.
+    this.fxAcc += dt;
+    const step = 1 / 12;
+    while (this.fxAcc >= step) {
+      this.fxAcc -= step;
+      for (const p of this.particles) {
+        const d = Math.exp(-p.drag * step);
+        p.vx *= d;
+        p.vy *= d;
+        p.x += p.vx * step;
+        p.y += p.vy * step;
+        p.life -= step;
+      }
+      for (const r of this.rings) r.life -= step;
+      for (const p of this.pows) p.life -= step;
+      for (const w of this.words) w.life -= step;
     }
     this.particles = this.particles.filter((p) => p.life > 0);
-    for (const r of this.rings) r.life -= dt;
     this.rings = this.rings.filter((r) => r.life > 0);
-    for (const p of this.pows) p.life -= dt;
     this.pows = this.pows.filter((p) => p.life > 0);
+    this.words = this.words.filter((w) => w.life > 0);
     for (const p of this.popups) {
       p.life -= realDt;
       p.y -= realDt * 0.8;
@@ -776,39 +957,6 @@ export class Renderer {
   // Scenery
   // -------------------------------------------------------------------------
 
-  private drawBackground(ox: number, oy: number): void {
-    const ctx = this.ctx;
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = VOID;
-    ctx.fillRect(0, 0, this.width, this.height);
-
-    // Flat, hard-edged bands of colour instead of a smooth gradient.
-    const m = Math.max(this.width, this.height);
-    ['#1a1348', '#201757', '#261c66'].forEach((color, n) => {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(this.width / 2, this.height * 0.5, m * (0.85 - n * 0.2), 0, Math.PI * 2);
-      ctx.fill();
-    });
-
-    for (const s of this.stars) {
-      const tw = 0.5 + 0.5 * Math.sin(this.time * (0.8 + s.depth) + s.phase);
-      const x = s.x * this.width + ox * s.depth;
-      const y = s.y * this.height + oy * s.depth;
-      if (s.size > 2.6) {
-        const r = s.size * (1.2 + 0.8 * tw);
-        ctx.fillStyle = '#fff3b0';
-        spikyPath(ctx, x, y, r, r * 0.3, 4, 0);
-        ctx.fill();
-      } else {
-        ctx.fillStyle = `rgba(220,215,255,${0.3 + 0.5 * tw * s.depth})`;
-        ctx.beginPath();
-        ctx.arc(x, y, s.size * 0.6, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }
-
   /** Radial ink wedges from the screen edge toward a heavy hit, like a manga impact panel. */
   private drawActionLines(): void {
     const a = this.action;
@@ -840,8 +988,8 @@ export class Renderer {
     const ctx = this.ctx;
     const r = Math.hypot(this.width, this.height) / 2;
     const g = ctx.createRadialGradient(this.width / 2, this.height / 2, r * 0.6, this.width / 2, this.height / 2, r);
-    g.addColorStop(0, 'rgba(10,6,30,0)');
-    g.addColorStop(1, 'rgba(10,6,30,0.45)');
+    g.addColorStop(0, 'rgba(40,6,70,0)');
+    g.addColorStop(1, 'rgba(40,6,70,0.5)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, this.width, this.height);
   }
@@ -1079,7 +1227,16 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(0, 0, R - 0.07, 0.05 * Math.PI, 0.5 * Math.PI);
     ctx.stroke();
-    // Ink outline, heavier on the shadow side like a brush stroke.
+    // Off-register print ghosts, then the ink outline, heavier on the shadow side like a brush stroke.
+    ctx.lineWidth = LINE * 0.8;
+    ctx.strokeStyle = CYAN;
+    ctx.beginPath();
+    ctx.arc(-0.06, -0.03, R, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = MAGENTA;
+    ctx.beginPath();
+    ctx.arc(0.06, 0.04, R, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.strokeStyle = INK;
     ctx.lineWidth = LINE;
     ctx.beginPath();
@@ -1246,6 +1403,12 @@ export class Renderer {
     const stroke = Math.max(3, size * 0.16);
     const off = Math.max(2, size * 0.07);
     ctx.lineWidth = stroke;
+    // Off-register cyan and magenta copies peeking out behind the ink.
+    const mis = Math.max(1.5, size * 0.05);
+    ctx.fillStyle = CYAN;
+    ctx.fillText(text, x - mis * 1.4, y - mis * 0.4);
+    ctx.fillStyle = MAGENTA;
+    ctx.fillText(text, x + off + mis, y + off + mis * 0.6);
     ctx.strokeStyle = INK;
     ctx.fillStyle = INK;
     ctx.strokeText(text, x + off, y + off);
