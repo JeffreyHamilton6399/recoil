@@ -4,7 +4,7 @@
 // always visible, whatever the screen shape.
 
 import * as C from '../shared/constants.js';
-import { MAPS, mapScale, scaledBumpers, type MapDef } from '../shared/maps.js';
+import { MAPS, isOffMap, mapScale, polygonPoints, scaledBumpers, type MapDef } from '../shared/maps.js';
 import { clamp, lerp } from '../shared/sim.js';
 import {
   FX_MEGA,
@@ -210,13 +210,56 @@ function spikyPath(ctx: CanvasRenderingContext2D, x: number, y: number, outer: n
 /** Arena outline path (circle or rounded square) at a given radius and vertical offset. */
 function arenaPath(ctx: CanvasRenderingContext2D, map: MapDef, R: number, dy: number): void {
   ctx.beginPath();
+  addArenaPath(ctx, map, R, 0, dy);
+}
+
+/** Adds the arena outline as a subpath (no beginPath), so shapes can be combined. */
+function addArenaPath(ctx: CanvasRenderingContext2D, map: MapDef, R: number, dx: number, dy: number): void {
   if (map.shape === 'circle') {
-    ctx.arc(0, dy, R, 0, Math.PI * 2);
-  } else {
+    ctx.moveTo(dx + R, dy);
+    ctx.arc(dx, dy, R, 0, Math.PI * 2);
+  } else if (map.shape === 'square') {
     const h = R * C.SQUARE_HALF_SCALE;
-    ctx.roundRect(-h, -h + dy, h * 2, h * 2, h * 0.14);
+    ctx.roundRect(dx - h, dy - h, h * 2, h * 2, h * 0.14);
+  } else {
+    polygonPoints(map.shape, R).forEach(([x, y], k) => (k === 0 ? ctx.moveTo(dx + x, dy + y) : ctx.lineTo(dx + x, dy + y)));
+    ctx.closePath();
   }
 }
+
+/** Comic halftone dots, sized in device pixels whatever the world scale. */
+const halftones = new WeakMap<CanvasRenderingContext2D, CanvasPattern>();
+function halftone(ctx: CanvasRenderingContext2D, pxPerUnit: number): CanvasPattern | null {
+  let pat = halftones.get(ctx);
+  if (!pat) {
+    const tile = document.createElement('canvas');
+    tile.width = 8;
+    tile.height = 8;
+    const t = tile.getContext('2d');
+    if (!t) return null;
+    t.fillStyle = 'rgba(27,16,48,0.2)';
+    t.beginPath();
+    t.arc(2, 2, 1.5, 0, Math.PI * 2);
+    t.arc(6, 6, 1.5, 0, Math.PI * 2);
+    t.fill();
+    const p = ctx.createPattern(tile, 'repeat');
+    if (!p) return null;
+    pat = p;
+    halftones.set(ctx, pat);
+  }
+  pat.setTransform(new DOMMatrix([1 / pxPerUnit, 0, 0, 1 / pxPerUnit, 0, 0]));
+  return pat;
+}
+
+/** Sparkle spots on the ice (fraction of radius, angle in degrees). */
+const GLINTS: readonly [number, number][] = [
+  [0.52, 205],
+  [0.34, 248],
+  [0.66, 292],
+  [0.22, 160],
+  [0.74, 128],
+  [0.45, 20],
+];
 
 export const FONT = '"Arial Black", "Arial Rounded MT Bold", "Helvetica Neue", Helvetica, system-ui, sans-serif';
 
@@ -224,7 +267,7 @@ export const FONT = '"Arial Black", "Arial Rounded MT Bold", "Helvetica Neue", H
  * Paints a map in world units at the current transform: shadow, slab,
  * cel-shaded ice, holes and bumpers. Shared by the game and the thumbnails.
  */
-function paintMap(ctx: CanvasRenderingContext2D, map: MapDef, R: number, rimFlash: boolean, time: number): void {
+function paintMap(ctx: CanvasRenderingContext2D, map: MapDef, R: number, rimFlash: boolean, time: number, pxPerUnit: number): void {
   const t = map.theme;
   const slab = 0.45;
   ctx.lineJoin = 'round';
@@ -259,11 +302,18 @@ function paintMap(ctx: CanvasRenderingContext2D, map: MapDef, R: number, rimFlas
   ctx.fillStyle = t.shade;
   ctx.fillRect(-R * 1.5, -R * 1.5, R * 3, R * 3);
   ctx.fillStyle = t.top;
-  ctx.save();
-  ctx.translate(-R * 0.07, -R * 0.09);
-  arenaPath(ctx, map, R * 0.97, 0);
+  ctx.beginPath();
+  addArenaPath(ctx, map, R * 0.97, -R * 0.07, -R * 0.09);
   ctx.fill();
-  ctx.restore();
+  // Halftone dots over the shadow band only (arena minus the lit face).
+  const dots = halftone(ctx, pxPerUnit);
+  if (dots) {
+    ctx.fillStyle = dots;
+    ctx.beginPath();
+    addArenaPath(ctx, map, R * 1.05, 0, 0);
+    addArenaPath(ctx, map, R * 0.97, -R * 0.07, -R * 0.09);
+    ctx.fill('evenodd');
+  }
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = 0.32;
   ctx.beginPath();
@@ -277,6 +327,19 @@ function paintMap(ctx: CanvasRenderingContext2D, map: MapDef, R: number, rimFlas
   ctx.beginPath();
   ctx.arc(0, 0, R * 0.66, Math.PI * 1.12, Math.PI * 1.24);
   ctx.stroke();
+
+  // Twinkling glints on the ice.
+  GLINTS.forEach(([f, deg], i) => {
+    const a = (deg * Math.PI) / 180;
+    const gx = Math.cos(a) * R * f;
+    const gy = Math.sin(a) * R * f;
+    if (isOffMap(map, R, gx, gy)) return;
+    const tw = Math.pow(0.5 + 0.5 * Math.sin(time * 2.2 + i * 1.9), 3);
+    const size = 0.1 + 0.28 * tw;
+    ctx.fillStyle = '#ffffff';
+    spikyPath(ctx, gx, gy, size, size * 0.28, 4, 0);
+    ctx.fill();
+  });
 
   // Holes: you can see the far wall of the slab inside each one.
   const s = mapScale(R);
@@ -361,7 +424,7 @@ export function makeMapThumb(index: number, px: number): HTMLCanvasElement {
   ctx.fillRect(0, 0, px, px);
   const k = px / (2 * (C.ARENA_START_RADIUS + 1.4));
   ctx.setTransform(k, 0, 0, k, px / 2 - 0.2 * k, px / 2 - 0.5 * k);
-  paintMap(ctx, map, C.ARENA_START_RADIUS, false, 0);
+  paintMap(ctx, map, C.ARENA_START_RADIUS, false, 1.3, k);
   return cv;
 }
 
@@ -370,7 +433,8 @@ export function carouselPosition(phaseTime: number, target: number): { pos: numb
   const n = MAPS.length;
   const u = clamp(phaseTime / (C.MAP_PICK_TIME * 0.72), 0, 1);
   const e = 1 - Math.pow(1 - u, 3);
-  return { pos: e * (3 * n + target), done: u >= 1 };
+  const loops = Math.max(1, Math.round(24 / n));
+  return { pos: e * (loops * n + target), done: u >= 1 };
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +461,8 @@ export class Renderer {
   private looks = new Map<PlayerId, PlayerLook>();
   private trauma = 0;
   private flash = 0;
+  /** Manga speed lines after a heavy hit (screen-space focus point). */
+  private action: { x: number; y: number; life: number; seed: number } | null = null;
   private time = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -501,6 +567,10 @@ export class Renderer {
         });
         this.rings.push({ x: ev.x, y: ev.y, r0: 0.2, r1: 0.8 + ev.f * 0.08, life: 0.28, maxLife: 0.28, color: '#ffffff' });
         this.addTrauma(Math.min(0.9, 0.12 + ev.f * 0.04));
+        if (heavy) {
+          const [sx, sy] = this.toScreen(ev.x, ev.y);
+          this.action = { x: sx, y: sy, life: 0.22, seed: Math.random() * 1000 };
+        }
         return heavy;
       }
       case 'block':
@@ -618,7 +688,7 @@ export class Renderer {
     const standing = view.players.filter((p) => p.fallTime < 0);
     // Falling players drop "under" the ice, so draw them first.
     for (const p of view.players) if (p.fallTime >= 0) this.drawPlayer(view, p);
-    paintMap(ctx, map, view.arenaRadius, view.shrinking, this.time);
+    paintMap(ctx, map, view.arenaRadius, view.shrinking, this.time, this.scale * this.dpr);
     if (!view.attract && view.arenaRadius > C.ARENA_END_RADIUS + 0.05 && view.phase !== 'lobby') {
       // Where the arena will end up.
       ctx.setLineDash([0.2, 0.25]);
@@ -642,6 +712,7 @@ export class Renderer {
       this.drawPopups();
     }
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.drawActionLines();
     this.drawVignette();
     if (!view.attract) this.drawHud(view);
     if (view.phase === 'mapPick') this.drawCarousel(view);
@@ -673,6 +744,10 @@ export class Renderer {
       p.y -= realDt * 0.8;
     }
     this.popups = this.popups.filter((p) => p.life > 0);
+    if (this.action) {
+      this.action.life -= realDt;
+      if (this.action.life <= 0) this.action = null;
+    }
 
     for (const p of view.players) {
       const f = this.fxFor(p.id);
@@ -734,6 +809,33 @@ export class Renderer {
     }
   }
 
+  /** Radial ink wedges from the screen edge toward a heavy hit, like a manga impact panel. */
+  private drawActionLines(): void {
+    const a = this.action;
+    if (!a) return;
+    const ctx = this.ctx;
+    const k = a.life / 0.22;
+    const far = Math.hypot(this.width, this.height);
+    const near = Math.min(this.width, this.height) * 0.3;
+    let seed = a.seed;
+    const rnd = (): number => {
+      seed = (seed * 9301 + 49297) % 233280;
+      return seed / 233280;
+    };
+    ctx.fillStyle = `rgba(27,16,48,${0.55 * k})`;
+    for (let i = 0; i < 36; i++) {
+      const ang = (i / 36) * Math.PI * 2 + rnd() * 0.15;
+      const width = 0.012 + rnd() * 0.025;
+      const inner = near * (0.8 + rnd() * 0.7);
+      ctx.beginPath();
+      ctx.moveTo(a.x + Math.cos(ang) * inner, a.y + Math.sin(ang) * inner);
+      ctx.lineTo(a.x + Math.cos(ang - width) * far, a.y + Math.sin(ang - width) * far);
+      ctx.lineTo(a.x + Math.cos(ang + width) * far, a.y + Math.sin(ang + width) * far);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
   private drawVignette(): void {
     const ctx = this.ctx;
     const r = Math.hypot(this.width, this.height) / 2;
@@ -764,12 +866,21 @@ export class Renderer {
       ctx.beginPath();
       ctx.ellipse(u.x + 0.08, u.y + 0.22, r * 0.9, r * 0.6, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = mix(style.color, INK, 0.3);
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
       ctx.fillStyle = style.color;
+      ctx.beginPath();
+      ctx.arc(x - r * 0.12, y - r * 0.15, r * 0.92, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
       ctx.strokeStyle = INK;
       ctx.lineWidth = LINE;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
       ctx.stroke();
       ctx.fillStyle = 'rgba(255,255,255,0.7)';
       ctx.beginPath();
@@ -942,15 +1053,41 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(-R * 0.16, -R * 0.2, R * 0.93, 0, Math.PI * 2);
     ctx.fill();
+    // Halftone in the shadow crescent.
+    const dots = halftone(ctx, this.scale * this.dpr);
+    if (dots) {
+      ctx.fillStyle = dots;
+      ctx.beginPath();
+      ctx.arc(0, 0, R * 1.1, 0, Math.PI * 2);
+      ctx.moveTo(-R * 0.16 + R * 0.93, -R * 0.2);
+      ctx.arc(-R * 0.16, -R * 0.2, R * 0.93, 0, Math.PI * 2);
+      ctx.fill('evenodd');
+    }
+    // Hard highlight: a lozenge and a dot.
     ctx.fillStyle = look.light;
     ctx.beginPath();
-    ctx.ellipse(-R * 0.42, -R * 0.46, R * 0.2, R * 0.12, -0.7, 0, Math.PI * 2);
+    ctx.ellipse(-R * 0.42, -R * 0.46, R * 0.22, R * 0.12, -0.7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(-R * 0.62, -R * 0.2, R * 0.06, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
+    // Rim light bounced off the ice, on the shadow side.
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 0.05;
+    ctx.beginPath();
+    ctx.arc(0, 0, R - 0.07, 0.05 * Math.PI, 0.5 * Math.PI);
+    ctx.stroke();
+    // Ink outline, heavier on the shadow side like a brush stroke.
     ctx.strokeStyle = INK;
     ctx.lineWidth = LINE;
     ctx.beginPath();
     ctx.arc(0, 0, R, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = LINE * 1.9;
+    ctx.beginPath();
+    ctx.arc(0, 0, R + LINE * 0.4, -0.15 * Math.PI, 0.75 * Math.PI);
     ctx.stroke();
     ctx.restore();
 
@@ -1030,27 +1167,29 @@ export class Renderer {
     for (const b of view.bullets) {
       const look = this.look(b.owner);
       const sp = Math.hypot(b.vx, b.vy);
-      if (sp > 0.1) {
-        const nx = b.vx / sp;
-        const ny = b.vy / sp;
-        const len = Math.min(1.3, sp * 0.06);
-        ctx.strokeStyle = rgba(look.light, 0.8);
-        ctx.lineWidth = b.r * 0.9;
-        ctx.beginPath();
-        ctx.moveTo(b.x - nx * (b.r + len), b.y - ny * (b.r + len));
-        ctx.lineTo(b.x - nx * b.r * 0.5, b.y - ny * b.r * 0.5);
-        ctx.stroke();
+      ctx.beginPath();
+      if (sp > 0.5) {
+        // Teardrop smear: round nose, pointed tail stretching with speed.
+        const dir = Math.atan2(b.vy, b.vx);
+        const tail = b.r + Math.min(1.2, sp * 0.055);
+        ctx.arc(b.x, b.y, b.r, dir - Math.PI / 2, dir + Math.PI / 2);
+        ctx.lineTo(b.x - Math.cos(dir) * tail, b.y - Math.sin(dir) * tail);
+        ctx.closePath();
+      } else {
+        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
       }
       ctx.fillStyle = look.base;
       ctx.strokeStyle = INK;
       ctx.lineWidth = LINE_THIN + b.r * 0.12;
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+      ctx.fillStyle = look.light;
+      ctx.beginPath();
+      ctx.arc(b.x - b.vx * 0.004, b.y - b.vy * 0.004, b.r * 0.55, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.3, b.r * 0.3, 0, Math.PI * 2);
+      ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.3, b.r * 0.28, 0, Math.PI * 2);
       ctx.fill();
     }
   }

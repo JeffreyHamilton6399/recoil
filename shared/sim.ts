@@ -108,8 +108,8 @@ function createPlayer(id: PlayerId): PlayerState {
   };
 }
 
-function resetAtSpawn(p: PlayerState, index: number, count: number): void {
-  const sp = spawnPoint(index, count);
+function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number): void {
+  const sp = spawnPoint(currentMap(s), index, count);
   p.x = sp.x;
   p.y = sp.y;
   p.aim = wrapAngle(sp.aim);
@@ -133,7 +133,7 @@ function placeAll(s: GameState): void {
   const n = s.players.length;
   s.players.forEach((p, i) => {
     p.inRound = true;
-    resetAtSpawn(p, i, n);
+    resetAtSpawn(s, p, i, n);
   });
 }
 
@@ -583,7 +583,7 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
     if (p.falling) {
       p.fallTime += dt;
       if (lobby && p.fallTime > C.FALL_DURATION + C.LOBBY_RESPAWN_DELAY) {
-        resetAtSpawn(p, p.spawnIndex, inRound.length);
+        resetAtSpawn(s, p, p.spawnIndex, inRound.length);
         events.push({ k: 'respawn', p: p.id });
       }
     } else if (isOffMap(map, s.arenaRadius, p.x, p.y)) {

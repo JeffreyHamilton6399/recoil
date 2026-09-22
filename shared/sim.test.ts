@@ -2,10 +2,11 @@
 // 1. 1000 ticks of lobby warm-up with 4 random players.
 // 2. A scripted 2-player duel until someone wins a round.
 // 3. Full 6-player matches with random inputs, back to the lobby, on every map.
+// 4. Spawn points are safe on every map for every player count.
 
 import assert from 'node:assert/strict';
 import * as C from './constants.js';
-import { MAPS } from './maps.js';
+import { MAPS, isOffMap, scaledBumpers, spawnPoint } from './maps.js';
 import { addPlayer, angleDiff, createGame, enterLobby, removePlayer, startMatch, step } from './sim.js';
 import type { GameState, InputState, PlayerId } from './types.js';
 
@@ -97,7 +98,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   const mapsSeen = new Set<number>();
   let matches = 0;
   let pickups = 0;
-  for (let i = 0; i < 400000 && matches < 2; i++) {
+  for (let i = 0; i < 2000000 && (matches < 2 || mapsSeen.size < MAPS.length); i++) {
     inputs = randomInputs(rand, s, inputs);
     const ev = step(s, inputs);
     pickups += ev.filter((e) => e.k === 'pickup').length;
@@ -114,11 +115,27 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
       startMatch(s);
     }
   }
-  assert.equal(matches, 2, 'expected two full matches to complete');
+  assert.ok(matches >= 2, 'expected two full matches to complete');
   assert.equal(mapsSeen.size, MAPS.length, 'every map should come up');
   enterLobby(s);
   assert.equal(s.phase, 'lobby');
-  console.log(`ok 3 - two 6-player matches by tick ${s.tick}, ${pickups} power-ups collected, all ${MAPS.length} maps played`);
+  console.log(`ok 3 - ${matches} 6-player matches by tick ${s.tick}, ${pickups} power-ups collected, all ${MAPS.length} maps played`);
+}
+
+// 4. Every map has safe spawn points for 1 to 8 players.
+{
+  for (const map of MAPS) {
+    for (let n = 1; n <= C.MAX_PLAYERS; n++) {
+      for (let i = 0; i < n; i++) {
+        const sp = spawnPoint(map, i, n);
+        assert.ok(!isOffMap(map, C.ARENA_START_RADIUS, sp.x, sp.y), `${map.name}: spawn ${i}/${n} is off the ice`);
+        for (const b of scaledBumpers(map, C.ARENA_START_RADIUS)) {
+          assert.ok(Math.hypot(sp.x - b.x, sp.y - b.y) >= b.r + C.PLAYER_RADIUS, `${map.name}: spawn ${i}/${n} is inside a bumper`);
+        }
+      }
+    }
+  }
+  console.log(`ok 4 - safe spawns on all ${MAPS.length} maps for 1-${C.MAX_PLAYERS} players`);
 }
 
 console.log('all simulation tests passed');

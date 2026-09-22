@@ -1,6 +1,8 @@
 // Every sound is synthesized with WebAudio: oscillators plus a generated
 // noise buffer. No audio files.
 
+import type { PowerupKind } from '../shared/types.js';
+
 interface ChargeVoice {
   osc: OscillatorNode;
   osc2: OscillatorNode;
@@ -120,9 +122,114 @@ export class Sfx {
     src.stop(t0 + attack + dur + 0.05);
   }
 
+  /** A few milliseconds of bright noise: the "tick" that makes a sound feel crisp. */
+  private click(freq: number, vol: number, pan = 0, dur = 0.012, delay = 0): void {
+    const ctx = this.ctx;
+    const dest = this.out(pan);
+    if (!ctx || !dest || !this.noise) return;
+    const t0 = ctx.currentTime + delay;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = 'highpass';
+    f.frequency.value = freq;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f).connect(g).connect(dest);
+    src.start(t0, Math.random() * 0.5);
+    src.stop(t0 + dur + 0.02);
+  }
+
+  /** Pitch that wobbles like a spring, for bumpers. */
+  private boing(f0: number, dur: number, vol: number, pan: number): void {
+    const ctx = this.ctx;
+    const dest = this.out(pan);
+    if (!ctx || !dest) return;
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const lfo = ctx.createOscillator();
+    const depth = ctx.createGain();
+    const g = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(f0, t0);
+    osc.frequency.exponentialRampToValueAtTime(f0 * 1.8, t0 + dur * 0.25);
+    osc.frequency.exponentialRampToValueAtTime(f0 * 0.9, t0 + dur);
+    lfo.frequency.setValueAtTime(28, t0);
+    lfo.frequency.linearRampToValueAtTime(12, t0 + dur);
+    depth.gain.setValueAtTime(f0 * 0.25, t0);
+    depth.gain.exponentialRampToValueAtTime(1, t0 + dur);
+    lfo.connect(depth).connect(osc.frequency);
+    this.env(g, t0, 0.004, vol, dur);
+    osc.connect(g).connect(dest);
+    osc.start(t0);
+    lfo.start(t0);
+    osc.stop(t0 + dur + 0.05);
+    lfo.stop(t0 + dur + 0.05);
+  }
+
+  // -------------------------------------------------------------------------
+  // UI sounds
+  // -------------------------------------------------------------------------
+
+  /** Short crisp tick for buttons. */
+  uiClick(): void {
+    this.tone('square', 1900, 1300, 0.025, 0.06);
+    this.click(5000, 0.12, 0, 0.008);
+  }
+
+  /** Bubbly pop for picking a colour or a map card. */
+  uiPop(): void {
+    this.tone('sine', 520, 980, 0.07, 0.22);
+    this.click(4000, 0.08, 0, 0.006);
+  }
+
+  /** Two-note chime for confirming (create, join, start, copy link). */
+  uiConfirm(): void {
+    this.tone('triangle', 880, 880, 0.09, 0.16);
+    this.tone('triangle', 1320, 1320, 0.14, 0.16, 0, 0.07);
+    this.click(6000, 0.06, 0, 0.006, 0.07);
+  }
+
+  playerJoined(): void {
+    this.tone('square', 660, 660, 0.06, 0.06);
+    this.tone('square', 990, 990, 0.09, 0.06, 0, 0.07);
+  }
+
+  playerLeft(): void {
+    this.tone('square', 660, 660, 0.06, 0.05);
+    this.tone('square', 440, 440, 0.1, 0.05, 0, 0.07);
+  }
+
   // -------------------------------------------------------------------------
   // Game sounds
   // -------------------------------------------------------------------------
+
+  /** Bright ding the moment your shot is fully charged. */
+  chargeFull(): void {
+    this.tone('triangle', 1760, 1760, 0.12, 0.14);
+    this.tone('sine', 2640, 2640, 0.18, 0.08, 0, 0.02);
+    this.click(7000, 0.06, 0, 0.006);
+  }
+
+  bumper(force: number, pan: number): void {
+    const k = Math.min(1, force / 12);
+    this.boing(260 + 120 * k, 0.32, 0.22 + 0.2 * k, pan);
+    this.click(3500, 0.18, pan, 0.01);
+  }
+
+  respawn(pan: number): void {
+    this.tone('square', 300, 1200, 0.14, 0.06, pan);
+    this.tone('sine', 600, 1800, 0.16, 0.08, pan, 0.03);
+  }
+
+  /** Stinger on "FIGHT!": a crash and a bright chord. */
+  fight(): void {
+    this.noiseBurst('highpass', 6000, 3000, 0.7, 0.35, 0.28, 0, 0.002);
+    for (const f of [523, 659, 784, 1047]) this.tone('square', f, f, 0.32, 0.05);
+    this.tone('sine', 110, 55, 0.3, 0.45);
+    this.click(4000, 0.2, 0, 0.012);
+  }
 
   /** Rising whine while charging. Call every frame; charge 0 silences it. */
   setCharge(id: number, charge: number, pan: number, volume: number): void {
@@ -164,16 +271,21 @@ export class Sfx {
 
   fire(charge: number, pan: number): void {
     const c = Math.max(0, Math.min(1, charge));
+    this.click(4500, 0.35 + 0.2 * c, pan, 0.01);
     this.tone('sine', 160 + 60 * c, 40, 0.14 + 0.1 * c, 0.5 + 0.4 * c, pan);
     this.tone('square', 420 + 300 * c, 90, 0.07 + 0.05 * c, 0.12, pan);
     this.noiseBurst('lowpass', 5000, 400, 0.7, 0.08 + 0.12 * c, 0.25 + 0.35 * c, pan);
+    if (c > 0.9) this.tone('sawtooth', 1200, 300, 0.12, 0.06, pan); // full-power zing
   }
 
   hit(force: number, pan: number): void {
     const k = Math.min(1, force / 20);
+    this.click(3000, 0.5, pan, 0.014);
+    this.tone('square', 900, 220, 0.04, 0.12, pan); // snap
     this.tone('sine', 120, 32, 0.22 + 0.2 * k, 0.6 + 0.4 * k, pan);
     this.tone('triangle', 260, 70, 0.1, 0.25, pan);
     this.noiseBurst('lowpass', 1400, 200, 1, 0.12 + 0.1 * k, 0.35 + 0.3 * k, pan);
+    if (k > 0.5) this.noiseBurst('bandpass', 2500, 800, 1.5, 0.18, 0.25 * k, pan); // crunch
   }
 
   bump(force: number, pan: number): void {
@@ -183,6 +295,7 @@ export class Sfx {
   }
 
   cancel(pan: number): void {
+    this.click(6000, 0.25, pan, 0.008);
     this.tone('triangle', 1600, 700, 0.09, 0.22, pan);
     this.noiseBurst('highpass', 4000, 2000, 0.8, 0.06, 0.2, pan);
   }
@@ -202,8 +315,13 @@ export class Sfx {
   }
 
   countdown(n: number): void {
-    this.tone('sine', n > 0 ? 520 : 1040, n > 0 ? 520 : 1040, n > 0 ? 0.13 : 0.35, 0.3);
-    if (n === 0) this.tone('square', 780, 780, 0.3, 0.08);
+    if (n === 0) {
+      this.fight();
+      return;
+    }
+    this.click(5000, 0.12, 0, 0.008);
+    this.tone('sine', 520, 520, 0.13, 0.3);
+    this.tone('square', 1040, 1040, 0.05, 0.04);
   }
 
   /** Short jingle after a knockout. Happier when you won the round. */
@@ -212,9 +330,28 @@ export class Sfx {
     notes.forEach((f, i) => this.tone('triangle', f, f, 0.16, 0.18, 0, 0.12 + i * 0.09));
   }
 
-  /** Bright rising arpeggio when you grab a power-up. */
-  pickup(pan: number): void {
-    [660, 880, 1320].forEach((f, i) => this.tone('square', f, f * 1.02, 0.08, 0.1, pan, i * 0.05));
+  /** Each power-up has its own little jingle. */
+  pickup(kind: PowerupKind, pan: number): void {
+    this.click(6000, 0.1, pan, 0.006);
+    switch (kind) {
+      case 'rapid':
+        [880, 1100, 1320, 1760, 2200].forEach((f, i) => this.tone('square', f, f, 0.04, 0.07, pan, i * 0.03));
+        break;
+      case 'triple':
+        [990, 990, 1320].forEach((f, i) => this.tone('square', f, f, 0.05, 0.09, pan, i * 0.07));
+        break;
+      case 'mega':
+        this.tone('sawtooth', 110, 220, 0.35, 0.12, pan);
+        [330, 440, 660].forEach((f, i) => this.tone('square', f, f, 0.2, 0.06, pan, 0.05 + i * 0.06));
+        break;
+      case 'shield':
+        this.tone('sine', 700, 1400, 0.3, 0.15, pan);
+        this.tone('triangle', 1050, 2100, 0.3, 0.08, pan, 0.04);
+        break;
+      case 'heal':
+        [1047, 1319, 1568, 2093].forEach((f, i) => this.tone('sine', f, f, 0.12, 0.12, pan, i * 0.05));
+        break;
+    }
   }
 
   /** Little sparkle when a power-up appears. */
@@ -230,9 +367,15 @@ export class Sfx {
     this.noiseBurst('highpass', 3000, 1500, 1, 0.08, 0.2, pan);
   }
 
-  /** Click as each map card passes in the carousel. */
+  /** Click as each map card passes the spinner's pointer; a ding when it lands. */
   carouselTick(final: boolean): void {
-    this.tone('square', final ? 1100 : 700, final ? 1100 : 650, final ? 0.12 : 0.025, final ? 0.12 : 0.05);
+    if (final) {
+      this.click(6000, 0.15, 0, 0.01);
+      [784, 1047, 1319].forEach((f, i) => this.tone('triangle', f, f, 0.18, 0.14, 0, i * 0.06));
+      return;
+    }
+    this.click(3500, 0.12, 0, 0.006);
+    this.tone('square', 700, 650, 0.02, 0.04);
   }
 
   matchWin(good: boolean): void {

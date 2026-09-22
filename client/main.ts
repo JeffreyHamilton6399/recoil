@@ -63,6 +63,7 @@ let lastShrinkSecond = -1;
 let lastCarouselCard = -1;
 let carouselLanded = false;
 let lastPhaseSeen: Snapshot['ph'] | null = null;
+let chargeDinged = false;
 
 const nowSec = (): number => performance.now() / 1000;
 
@@ -121,6 +122,16 @@ input.onChange = (s: InputState) => {
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM' && !(e.target instanceof HTMLInputElement)) ui.setMuted(sfx.toggleMute());
+});
+// Crisp UI sounds for every button in the menus and lobby.
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  const b = t instanceof Element ? t.closest('button') : null;
+  if (!b || b.disabled) return;
+  sfx.unlock();
+  if (b.classList.contains('swatch') || b.classList.contains('cdot') || b.classList.contains('carousel-arrow')) sfx.uiPop();
+  else if (['btn-quick', 'btn-create', 'btn-start', 'btn-copy', 'btn-pick-map'].includes(b.id) || b.type === 'submit') sfx.uiConfirm();
+  else sfx.uiClick();
 });
 for (const type of ['pointerdown', 'keydown', 'touchend'] as const) {
   window.addEventListener(type, () => sfx.unlock(), { passive: true });
@@ -218,6 +229,9 @@ function handleMessage(msg: ServerMessage): void {
       sendInput();
       break;
     case 'roster':
+      // Blip when someone arrives or leaves (not for our own first roster).
+      if (roster.length > 0 && msg.players.length > roster.length) sfx.playerJoined();
+      if (roster.length > 0 && msg.players.length < roster.length) sfx.playerLeft();
       roster = msg.players;
       spectators = msg.spectators;
       roomPub = msg.pub;
@@ -457,6 +471,10 @@ function updatePrediction(dt: number, view: View): void {
     vp.aim = predictedAim;
     if (canFire(latest)) vp.charge = localCharge(nowSec());
   }
+  // Ding once when your charge tops out.
+  const full = vp !== undefined && canFire(latest) && localCharge(nowSec()) >= 1;
+  if (full && !chargeDinged) sfx.chargeFull();
+  chargeDinged = full;
 }
 
 // ---------------------------------------------------------------------------
@@ -484,7 +502,8 @@ function playEvent(ev: GameEvent, view: View): void {
       sfx.cancel(panFor(ev.x));
       break;
     case 'bump':
-      sfx.bump(ev.f, panFor(ev.x));
+      if (ev.q < 0) sfx.bumper(ev.f, panFor(ev.x));
+      else sfx.bump(ev.f, panFor(ev.x));
       break;
     case 'fall':
       sfx.whoosh(panFor(ev.x));
@@ -493,13 +512,16 @@ function playEvent(ev: GameEvent, view: View): void {
       sfx.powerupSpawn(panFor(ev.x));
       break;
     case 'pickup':
-      sfx.pickup(panFor(ev.x));
+      sfx.pickup(ev.u, panFor(ev.x));
       break;
     case 'ko':
       sfx.ko(myId === -1 || ev.w === myId);
       break;
-    case 'respawn':
+    case 'respawn': {
+      const p = view.players.find((q) => q.id === ev.p);
+      sfx.respawn(panFor(p?.x ?? 0));
       break;
+    }
   }
 }
 

@@ -12,10 +12,14 @@ player standing wins the round, and the first to 5 round wins takes the match.
   from a carousel (or picks Random for the spinner) and starts the match.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
-- **6 maps:** Frozen Pond, Donut, Pinball, The Box, Swiss Ice, and Pillars.
+- **12 maps:** Frozen Pond, Donut, Pinball, The Box, Swiss Ice, Pillars,
+  Hex Rink, Diamond, Moat, Canyon, Bumper Alley, and Hive. Arenas can be
+  circles, squares, hexagons, or diamonds, with holes and pinball bumpers.
 - **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, and Heal.
-- Toon-shaded Canvas 2D visuals and WebAudio synthesized sound. There are no
-  asset files.
+- **Toon-shaded Canvas 2D visuals:** cel shading, halftone shadows, ink
+  outlines, and manga speed lines on big hits.
+- **Crisp WebAudio sound, all synthesized:** UI clicks, shots, hits, bumper
+  boings, and a jingle for each power-up. There are no asset files.
 - Server-authoritative 30 Hz simulation over WebSockets (`ws`). The same
   `shared/sim.ts` code is used by the server and client.
 
