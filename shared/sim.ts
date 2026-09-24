@@ -12,7 +12,7 @@ import { MAPS, floorAt, inBlock, isOffMap, scaledBlocks, scaledBumpers, scaledPa
 import {
   FX_AIM,
   FX_CHARGING,
-  FX_CROUCH,
+  FX_SLIDE_LOCK,
   FX_GROUNDED,
   FX_MEGA,
   FX_RAPID,
@@ -146,7 +146,7 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
     nextWeapon: weapon,
     slide: 0,
     slideCd: 0,
-    crouchHeld: false,
+    slideLock: false,
     aiming: false,
     wallTop: -1,
     wallNx: 0,
@@ -370,22 +370,26 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
     if (p.vz > 0) p.grounded = false;
   }
 
-  // A tap of crouch while moving on the ground slides; it runs its course unless you leave the ground.
+  // Crouch while moving on the ground slides: tap it, or hold it through a
+  // landing. One slide per hold; letting go (or jumping) re-arms it, so you
+  // can hold crouch and slide-hop. A slide runs its course unless you leave the ground.
   p.slideCd = Math.max(0, p.slideCd - dt);
   if (p.slide > 0) {
     p.slide = Math.max(0, p.slide - dt);
     if (!p.grounded || !canMove) p.slide = 0;
     if (p.slide === 0) p.slideCd = C.SLIDE_COOLDOWN;
   }
+  if (!input.crouch || !p.grounded) p.slideLock = false;
   const flat = Math.hypot(p.vx, p.vy);
-  if (canMove && input.crouch && !p.crouchHeld && p.grounded && p.slide <= 0 && p.slideCd <= 0 && flat > C.SLIDE_MIN_SPEED) {
-    const k = Math.max(flat, C.SLIDE_SPEED) / flat;
+  if (canMove && input.crouch && !p.slideLock && p.grounded && p.slide <= 0 && p.slideCd <= 0 && flat > C.SLIDE_MIN_SPEED) {
+    // Always a clear kick over your current speed, up to a cap.
+    const k = Math.max(flat, Math.min(Math.max(flat + C.SLIDE_BOOST, C.SLIDE_SPEED), C.SLIDE_MAX)) / flat;
     p.vx *= k;
     p.vy *= k;
     p.slide = C.SLIDE_TIME;
+    p.slideLock = true;
     events?.push({ k: 'slide', p: p.id });
   }
-  p.crouchHeld = input.crouch;
 
   if (!canMove) {
     if (p.grounded) {
@@ -466,6 +470,7 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
       // Jumping out of a slide keeps its speed: slide-hop.
       p.vz = C.JUMP_SPEED;
       p.grounded = false;
+      if (p.slide > 0) p.slideCd = C.SLIDE_COOLDOWN;
       p.slide = 0;
       events?.push({ k: 'jump', p: p.id });
     }
@@ -1057,7 +1062,7 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     (p.mega > 0 ? FX_MEGA : 0) |
     (p.grounded ? FX_GROUNDED : 0) |
     (p.charging ? FX_CHARGING : 0) |
-    (p.crouchHeld ? FX_CROUCH : 0) |
+    (p.slideLock ? FX_SLIDE_LOCK : 0) |
     (p.aiming ? FX_AIM : 0);
   return [
     p.id,
@@ -1103,7 +1108,7 @@ export function playerFromSnap(s: PlayerSnap): PlayerState {
   p.mega = fx & FX_MEGA ? 1 : 0;
   p.grounded = (fx & FX_GROUNDED) !== 0;
   p.charging = (fx & FX_CHARGING) !== 0;
-  p.crouchHeld = (fx & FX_CROUCH) !== 0;
+  p.slideLock = (fx & FX_SLIDE_LOCK) !== 0;
   p.aiming = (fx & FX_AIM) !== 0;
   p.cooldown = s[13];
   p.ack = s[14];

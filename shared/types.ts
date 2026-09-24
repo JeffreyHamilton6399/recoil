@@ -47,8 +47,8 @@ export interface PlayerState {
   /** Seconds of slide left (0 = not sliding). */
   slide: number;
   slideCd: number;
-  /** Crouch was held last tick (a slide needs a fresh press). */
-  crouchHeld: boolean;
+  /** This crouch hold already started a slide (release, or leave the ground, to slide again). */
+  slideLock: boolean;
   /** Aiming down sights. */
   aiming: boolean;
   /** Top of the block you're pressing against (-1 if none), and its outward normal. Set by movePlayer. */
@@ -167,7 +167,7 @@ export const FX_TRIPLE = 4;
 export const FX_MEGA = 8;
 export const FX_GROUNDED = 16;
 export const FX_CHARGING = 32;
-export const FX_CROUCH = 64;
+export const FX_SLIDE_LOCK = 64;
 export const FX_AIM = 128;
 
 /**

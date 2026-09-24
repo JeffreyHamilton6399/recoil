@@ -100,20 +100,26 @@ export class Input {
       if (this.keys.delete(e.code)) this.fireChanged();
     });
 
+    // On a Mac, Ctrl+click is a right-click, so shooting while sliding (Ctrl)
+    // would aim instead. Treat Ctrl+click as a normal shot there.
+    const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+    const button = (e: MouseEvent): number => (mac && e.ctrlKey && e.button === 2 ? 0 : e.button);
     canvas.addEventListener('mousedown', (e) => {
       if (!this.locked) return;
-      if (e.button === 2) {
+      if (button(e) === 2) {
         this.mouseAim = true;
         return;
       }
-      if (e.button !== 0) return;
+      if (button(e) !== 0) return;
       this.mouseFire = true;
       this.fireLatch = true;
       this.fireChanged();
     });
     window.addEventListener('mouseup', (e) => {
-      if (e.button === 2) this.mouseAim = false;
-      if (e.button !== 0 || !this.mouseFire) return;
+      if (button(e) === 2) this.mouseAim = false;
+      // Release fire even if Ctrl was let go first (the Mac then reports the right button).
+      const fireUp = e.button === 0 || (mac && e.button === 2);
+      if (!fireUp || !this.mouseFire) return;
       this.mouseFire = false;
       this.fireChanged();
     });

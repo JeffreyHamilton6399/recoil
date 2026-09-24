@@ -113,10 +113,14 @@ export const LOBBY_RESPAWN_DELAY = 0.4;
 export const SPRINT_MULT = 1.45;
 /** Running speed multiplier while charging a shot. */
 export const CHARGE_MOVE_MULT = 0.8;
-/** A slide starts at least this fast... */
-export const SLIDE_SPEED = 13.5;
+/** A slide kicks you this much faster than you were going... */
+export const SLIDE_BOOST = 4.5;
+/** ...and at least this fast, but a slide never pushes you past SLIDE_MAX
+ * (so chaining slide-hops can't build speed forever; knockback still can)... */
+export const SLIDE_SPEED = 15;
+export const SLIDE_MAX = 16.5;
 /** ...lasts this long... */
-export const SLIDE_TIME = 0.85;
+export const SLIDE_TIME = 0.9;
 /** ...slows like velocity *= exp(-SLIDE_DECAY * dt)... */
 export const SLIDE_DECAY = 0.9;
 /** ...and needs you to be moving at least this fast to start. */
