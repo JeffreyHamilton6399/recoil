@@ -515,6 +515,11 @@ export class Scene3D {
   private bob = 0;
   private fov = C.FOV;
   private roll = 0;
+  /** Render resolution multiplier (0.5-1), lowered automatically on slower PCs. */
+  private quality = 1;
+  private slowFor = 0;
+  private fastFor = 0;
+  private dprQuery: MediaQueryList | null = null;
 
   private trauma = 0;
   private time = 0;
@@ -524,7 +529,6 @@ export class Scene3D {
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
@@ -608,13 +612,59 @@ export class Scene3D {
     return this.fov / C.FOV;
   }
 
+  /**
+   * Fits the canvas to the window. The render resolution follows the
+   * screen's pixel density (display scaling, Retina, browser zoom), capped so
+   * huge 4K screens don't overload the GPU, and scaled by the auto quality.
+   */
   resize(): void {
     const w = Math.max(1, window.innerWidth);
     const h = Math.max(1, window.innerHeight);
-    this.renderer.setSize(w, h, false);
-    this.inker.setSize(w, h, this.renderer.getPixelRatio());
+    const dpr = window.devicePixelRatio || 1;
+    // At most about 3.7 million pixels (2560x1440) at full quality.
+    const cap = Math.sqrt(3_700_000 / (w * h));
+    const ratio = Math.max(0.5, Math.min(dpr, 2, cap) * this.quality);
+    this.renderer.setPixelRatio(ratio);
+    this.renderer.setSize(w, h, true);
+    this.inker.setSize(w, h, ratio);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.watchPixelRatio(dpr);
+  }
+
+  /** Re-fit when the window moves to a screen with a different pixel density. */
+  private watchPixelRatio(dpr: number): void {
+    const query = `(resolution: ${dpr}dppx)`;
+    if (this.dprQuery?.media === query) return;
+    this.dprQuery?.removeEventListener('change', this.onDprChange);
+    this.dprQuery = window.matchMedia(query);
+    this.dprQuery.addEventListener('change', this.onDprChange);
+  }
+
+  private readonly onDprChange = (): void => this.resize();
+
+  /**
+   * Automatic quality: if frames stay slow (under ~40 fps) the render
+   * resolution steps down; with plenty of headroom it steps back up.
+   */
+  private adaptQuality(dt: number): void {
+    if (dt <= 0 || dt > 0.25) return; // ignore tab switches and hitches
+    if (dt > 1 / 40) {
+      this.slowFor += dt;
+      this.fastFor = 0;
+    } else {
+      this.slowFor = Math.max(0, this.slowFor - dt * 0.5);
+      this.fastFor = dt < 1 / 55 ? this.fastFor + dt : 0;
+    }
+    if (this.slowFor > 1.5 && this.quality > 0.5) {
+      this.quality = Math.max(0.5, this.quality - 0.15);
+      this.slowFor = 0;
+      this.resize();
+    } else if (this.fastFor > 8 && this.quality < 1) {
+      this.quality = Math.min(1, this.quality + 0.1);
+      this.fastFor = 0;
+      this.resize();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1136,6 +1186,7 @@ export class Scene3D {
 
   render(view: View, cam: CameraView, dt: number, myColor: string): void {
     this.time += dt;
+    this.adaptQuality(dt);
     if (view.mapIndex !== this.mapIndex) {
       this.mapIndex = view.mapIndex;
       this.buildArena(MAPS[view.mapIndex] ?? MAPS[0]);
