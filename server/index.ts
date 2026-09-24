@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
-import { NO_INPUT, addPlayer, createGame, enterLobby, playerSnap, removePlayer, setMapChoice, startMatch, step } from '../shared/sim.js';
+import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, startMatch, step } from '../shared/sim.js';
 import {
   POWERUP_KINDS,
   ROOM_CODE_PATTERN,
@@ -47,9 +47,11 @@ interface Seat {
   client: Client | null;
   name: string;
   color: number;
-  input: InputState;
-  /** Set when fire is pressed, so a tap shorter than one tick still registers. */
-  fireLatch: boolean;
+  /** Inputs received but not yet simulated, one per tick, oldest first. */
+  inputs: { seq: number; input: InputState }[];
+  /** The last input simulated, repeated when the queue runs dry. */
+  lastInput: InputState;
+  lastSeq: number;
   disconnectedAt: number;
   /** Join order; the earliest connected player is the host. */
   joinedAt: number;
@@ -176,8 +178,9 @@ function joinRoom(client: Client, room: Room, name: string, color: number): void
       client,
       name: cleanName(name, seat),
       color: freeColor(room, color, seat),
-      input: { ...NO_INPUT },
-      fireLatch: false,
+      inputs: [],
+      lastInput: { ...NO_INPUT },
+      lastSeq: 0,
       disconnectedAt: 0,
       joinedAt: prev?.joinedAt ?? joinCounter++,
     };
@@ -207,8 +210,8 @@ function leaveRoom(client: Client): void {
       } else {
         // Keep the seat (and score) for a while so they can rejoin.
         seat.client = null;
-        seat.input = { ...NO_INPUT };
-        seat.fireLatch = false;
+        seat.inputs = [];
+        seat.lastInput = { ...NO_INPUT, yaw: seat.lastInput.yaw, pitch: seat.lastInput.pitch };
         seat.disconnectedAt = Date.now();
       }
     }
@@ -257,8 +260,12 @@ function handleMessage(client: Client, msg: ClientMessage): void {
     case 'input': {
       const seat = client.room && client.seat !== -1 ? client.room.seats[client.seat] : null;
       if (!seat || seat.client !== client) break;
-      if (msg.f && !seat.input.firing) seat.fireLatch = true;
-      seat.input = { aimLeft: msg.l, aimRight: msg.r, firing: msg.f };
+      // A reconnecting tab starts counting again from 1.
+      if (msg.s <= seat.lastSeq && seat.lastSeq - msg.s > 1000) seat.lastSeq = 0;
+      if (msg.s <= seat.lastSeq || seat.inputs.some((q) => q.seq >= msg.s)) break;
+      seat.inputs.push({ seq: msg.s, input: { forward: msg.f, strafe: msg.r, jump: msg.j, firing: msg.x, yaw: msg.a, pitch: msg.b } });
+      // A client far ahead (a burst after a stall): drop the oldest to keep latency down.
+      if (seat.inputs.length > C.INPUT_BUFFER_MAX) seat.inputs.splice(0, seat.inputs.length - 2);
       break;
     }
     case 'ping':
@@ -318,10 +325,19 @@ function parseMessage(data: RawData): ClientMessage | null {
       return { t: 'profile', name: asName(m.name), color: asColor(m.color) };
     case 'start':
       return { t: 'start' };
-    case 'input':
-      return typeof m.l === 'boolean' && typeof m.r === 'boolean' && typeof m.f === 'boolean'
-        ? { t: 'input', l: m.l, r: m.r, f: m.f }
-        : null;
+    case 'input': {
+      // Keys send -1, 0 or 1; the touch stick sends anything in between.
+      const axis = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1 ? v : null);
+      const angle = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) < 10 ? v : null);
+      const f = axis(m.f);
+      const r = axis(m.r);
+      const a = angle(m.a);
+      const b = angle(m.b);
+      const seq = typeof m.s === 'number' && Number.isInteger(m.s) && m.s > 0 ? m.s : null;
+      if (f === null || r === null || a === null || b === null || seq === null) return null;
+      if (typeof m.j !== 'boolean' || typeof m.x !== 'boolean') return null;
+      return { t: 'input', s: seq, f, r, j: m.j, x: m.x, a, b };
+    }
     case 'ping':
       return typeof m.c === 'number' && Number.isFinite(m.c) ? { t: 'ping', c: m.c } : null;
     case 'leave':
@@ -376,12 +392,21 @@ function tickRoom(room: Room, now: number): void {
     }
   }
 
+  // One queued input per player per tick. If a player's queue is empty,
+  // their last input is repeated (without acknowledging a new one).
   const inputs = new Map<PlayerId, InputState>();
   seats.forEach((s, id) => {
-    if (s?.client) inputs.set(id, { ...s.input, firing: s.input.firing || s.fireLatch });
+    if (!s) return;
+    const next = s.client ? s.inputs.shift() : undefined;
+    if (next) {
+      s.lastInput = next.input;
+      s.lastSeq = next.seq;
+    }
+    inputs.set(id, s.lastInput);
+    const p = getPlayer(state, id);
+    if (p) p.ack = s.lastSeq;
   });
   const events = step(state, inputs);
-  for (const s of seats) if (s) s.fireLatch = false;
 
   const clients = roomClients(room);
   if (clients.length === 0) {
@@ -422,7 +447,7 @@ function tickRoom(room: Room, now: number): void {
     r: state.arenaRadius,
     m: state.mapIndex,
     p: state.players.filter((p) => p.inRound).map(playerSnap),
-    b: state.bullets.map((b): BulletSnap => [b.id, b.owner, b.x, b.y, b.radius]),
+    b: state.bullets.map((b): BulletSnap => [b.id, b.owner, b.x, b.y, b.z, b.radius]),
     u: state.powerups.map((u): PowerupSnap => [u.id, POWERUP_KINDS.indexOf(u.kind), u.x, u.y, u.age]),
     e: events,
     rw: state.roundWinner,

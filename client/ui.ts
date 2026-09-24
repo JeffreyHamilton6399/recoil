@@ -1,11 +1,12 @@
 // DOM overlays: main menu (name + colour), lobby panel (players, colours,
-// map carousel, start), banners, HUD and touch controls. The game itself is
-// drawn on the canvas by render.ts.
+// map carousel, start), banners, the room HUD and touch controls. The game
+// itself is drawn on the canvas by scene.ts; the in-game HUD is hud.ts.
 
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import type { PlayerId, RosterEntry } from '../shared/types.js';
-import { FONT, INK, makeMapThumb, type Insets } from './render.js';
+import { FONT, INK, makeMapThumb } from './art.js';
+import type { TouchElements } from './input.js';
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -43,7 +44,13 @@ type LobbyMode = 'public' | 'host' | 'guest';
 const PROFILE_KEY = 'recoil-profile';
 
 export class UI {
-  readonly touchButtons = { left: el('t-left'), right: el('t-right'), fire: el('t-fire') };
+  readonly touchElements: TouchElements = {
+    stick: el('t-stick'),
+    knob: el('t-knob'),
+    look: el('t-look'),
+    fire: el('t-fire'),
+    jump: el('t-jump'),
+  };
 
   private readonly menu = el('menu');
   private readonly menuError = el('menu-error');
@@ -114,7 +121,6 @@ export class UI {
     el('btn-leave').addEventListener('click', () => handlers.onLeave());
     el('btn-lobby-toggle').addEventListener('click', () => {
       this.lobby.classList.toggle('collapsed');
-      window.dispatchEvent(new Event('resize'));
     });
     this.muteBtn.addEventListener('click', () => handlers.onToggleMute());
 
@@ -142,6 +148,15 @@ export class UI {
 
   enableTouch(): void {
     this.touchEnabled = true;
+  }
+
+  get isTouch(): boolean {
+    return this.touchEnabled;
+  }
+
+  /** While the mouse is captured for play, the lobby panel gets out of the way. */
+  setLocked(locked: boolean): void {
+    this.lobby.classList.toggle('locked', locked);
   }
 
   // -------------------------------------------------------------------------
@@ -400,11 +415,11 @@ export class UI {
     this.startBtn.disabled = !enough;
     this.startBtn.textContent = enough ? `Start match (${online} players)` : 'Start match';
     if (info.myId === -1) this.lobbyStatus.textContent = 'The room is full, so you are watching.';
-    else if (info.pub && info.startsIn >= 0) this.lobbyStatus.textContent = `Match starts in ${info.startsIn}s. Warm up!`;
+    else if (info.pub && info.startsIn >= 0) this.lobbyStatus.textContent = `Match starts in ${info.startsIn}s. Click the city to warm up!`;
     else if (info.pub) this.lobbyStatus.textContent = 'Public game. Waiting for another player to join…';
     else if (!enough) this.lobbyStatus.textContent = 'Waiting for more players… share the link!';
-    else if (isHost) this.lobbyStatus.textContent = 'Everyone in? Hit start. Warm up in the meantime!';
-    else this.lobbyStatus.textContent = 'Waiting for the host to start. Warm up in the meantime!';
+    else if (isHost) this.lobbyStatus.textContent = 'Everyone in? Hit start. Click the city to warm up in the meantime!';
+    else this.lobbyStatus.textContent = 'Waiting for the host to start. Click the city to warm up!';
   }
 
   setBanner(text: string | null): void {
@@ -425,29 +440,6 @@ export class UI {
   setMuted(muted: boolean): void {
     this.muteBtn.classList.toggle('muted', muted);
     this.muteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
-  }
-
-  /** Screen areas covered by UI, so the renderer can keep the arena clear of them. */
-  insets(): Insets {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    const inLobby = !this.lobby.classList.contains('hidden');
-    // The lobby HUD is just a small label; in a match the scoreboard needs room.
-    const out: Insets = { top: inLobby ? 56 : 96, right: 12, bottom: 12, left: 12 };
-    if (!this.touch.classList.contains('hidden')) {
-      if (h >= w) out.bottom = 170;
-      else {
-        out.left = 170;
-        out.right = 170;
-        out.top = 70;
-      }
-    }
-    if (inLobby) {
-      const r = this.lobby.getBoundingClientRect();
-      if (w > h && w >= 520) out.left = Math.max(out.left, r.right + 8);
-      else out.top = Math.max(out.top, r.bottom + 8);
-    }
-    return out;
   }
 
   private async copyLink(): Promise<void> {

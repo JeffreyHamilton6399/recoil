@@ -1,5 +1,6 @@
-// All tuning constants for RECOIL live here. Units are "world units" (the
-// arena starts 9 units in radius) and seconds, unless noted otherwise.
+// All tuning constants for RECOIL live here. The world is 3D: x and y are
+// horizontal, z is up, and the roof is at z = 0. One unit is about a metre,
+// and times are in seconds, unless noted otherwise.
 // Both the server and the client import this file, so changing a value
 // changes the game everywhere.
 
@@ -7,7 +8,7 @@
 // Simulation timing
 // ---------------------------------------------------------------------------
 
-/** Server simulation rate in ticks per second. */
+/** Server simulation rate in ticks per second. Clients send one input per tick too. */
 export const TICK_RATE = 30;
 /** Seconds per simulation tick. */
 export const TICK_DT = 1 / TICK_RATE;
@@ -46,38 +47,63 @@ export const PLAYER_COLOR_NAMES: readonly string[] = ['Red', 'Blue', 'Green', 'Y
 // ---------------------------------------------------------------------------
 
 /** Arena radius at the start of every round. */
-export const ARENA_START_RADIUS = 9;
+export const ARENA_START_RADIUS = 20;
 /** Smallest the arena ever gets. */
-export const ARENA_END_RADIUS = 2.5;
+export const ARENA_END_RADIUS = 6;
 /** Seconds of active play it takes to shrink from start to end radius. */
-export const ARENA_SHRINK_TIME = 45;
+export const ARENA_SHRINK_TIME = 60;
 /** Square maps have a half-width of radius * this. */
 export const SQUARE_HALF_SCALE = 0.9;
 /** Bumpers bounce players away with this restitution (>1 adds energy, like pinball). */
 export const BUMPER_RESTITUTION = 1.25;
 /** Minimum speed a bumper sends you away at. */
-export const BUMPER_MIN_BOUNCE = 5;
+export const BUMPER_MIN_BOUNCE = 8;
+/** Bumpers are pillars this tall. Players and bullets above them pass over. */
+export const BUMPER_HEIGHT = 5;
 
 // ---------------------------------------------------------------------------
 // Players
 // ---------------------------------------------------------------------------
 
-/** Player body radius. */
-export const PLAYER_RADIUS = 0.5;
+/** Player body radius (players are upright capsules). */
+export const PLAYER_RADIUS = 0.45;
+/** Player height, feet to top of head. */
+export const PLAYER_HEIGHT = 1.8;
+/** Camera and gun height above the feet. */
+export const EYE_HEIGHT = 1.55;
 /** Players spawn evenly spaced on a ring of this radius. */
-export const SPAWN_DISTANCE = 4.5;
-/** Aim rotation speed in radians per second (220 deg/s). */
-export const AIM_SPEED = (220 * Math.PI) / 180;
-/** Ice friction: velocity *= exp(-FRICTION * dt). Lower means slipperier. */
-export const FRICTION = 1.6;
+export const SPAWN_DISTANCE = 10;
+/** Running speed on the roof. */
+export const MOVE_SPEED = 7.5;
+/** How fast you reach running speed (units per second squared). */
+export const GROUND_ACCEL = 70;
+/**
+ * Above running speed (after a knockback or a recoil boost) you slide, and
+ * the extra speed decays like velocity *= exp(-SLIDE_FRICTION * dt).
+ */
+export const SLIDE_FRICTION = 2.2;
+/** Steering while sliding. */
+export const SLIDE_ACCEL = 14;
+/** Steering in the air (Quake-style: only up to running speed along the wish direction). */
+export const AIR_ACCEL = 18;
+/** Air drag: velocity *= exp(-AIR_DRAG * dt). */
+export const AIR_DRAG = 0.25;
+/** Downward acceleration. */
+export const GRAVITY = 22;
+/** Upward speed of a jump. */
+export const JUMP_SPEED = 8;
+/** Below this height you can no longer get back up: you have fallen. */
+export const FALL_Z = -2.5;
+/** Pitch limit in radians (just short of straight up or down). */
+export const PITCH_LIMIT = 1.5;
 /** Bounciness of player-vs-player collisions (1 = perfectly elastic). */
 export const PLAYER_RESTITUTION = 0.9;
 /** Hard speed cap so players can't tunnel through things. */
 export const MAX_PLAYER_SPEED = 45;
-/** Seconds the fall animation lasts (shrink, spin, fade). */
-export const FALL_DURATION = 1.1;
-/** In the lobby warm-up, seconds after the fall animation before you respawn. */
-export const LOBBY_RESPAWN_DELAY = 0.5;
+/** Seconds the fall is shown before you count as out. */
+export const FALL_DURATION = 1.6;
+/** In the lobby warm-up, seconds after the fall before you respawn. */
+export const LOBBY_RESPAWN_DELAY = 0.4;
 
 // ---------------------------------------------------------------------------
 // Shooting. Each pair is [min charge, full charge] and is linearly
@@ -89,23 +115,25 @@ export const CHARGE_TIME = 0.8;
 /** Seconds after a shot before you can start charging again. */
 export const FIRE_COOLDOWN = 0.15;
 /** Bullet radius. */
-export const BULLET_RADIUS: readonly [number, number] = [0.15, 0.35];
+export const BULLET_RADIUS: readonly [number, number] = [0.2, 0.45];
 /** Bullet speed in units per second. */
-export const BULLET_SPEED: readonly [number, number] = [9, 16];
+export const BULLET_SPEED: readonly [number, number] = [30, 48];
 /** Base knockback applied to the player who gets hit. */
-export const BULLET_KNOCKBACK: readonly [number, number] = [4, 11];
+export const BULLET_KNOCKBACK: readonly [number, number] = [4.5, 11];
+/** Knockback also lifts you off your feet by this fraction of its strength. */
+export const KNOCKBACK_LIFT = 0.4;
 /** Damage percentage added to the player who gets hit. */
 export const BULLET_DAMAGE: readonly [number, number] = [6, 22];
-/** Velocity kick applied to the shooter, opposite the aim direction. */
-export const SHOT_RECOIL: readonly [number, number] = [3.5, 10];
+/** Velocity kick applied to the shooter, opposite the aim direction. Shoot down to rocket-jump. */
+export const SHOT_RECOIL: readonly [number, number] = [4, 13];
 /** Knockback is multiplied by (1 + damage / DAMAGE_SCALE). */
 export const DAMAGE_SCALE = 100;
 /** Gap between the player's edge and a freshly spawned bullet. */
 export const MUZZLE_GAP = 0.05;
 /** Bullets expire after this many seconds. */
-export const BULLET_LIFETIME = 2.5;
+export const BULLET_LIFETIME = 2;
 /** Bullets are removed once this far outside the current arena edge. */
-export const BULLET_CULL_MARGIN = 8;
+export const BULLET_CULL_MARGIN = 40;
 
 // ---------------------------------------------------------------------------
 // Power-ups
@@ -115,10 +143,12 @@ export const BULLET_CULL_MARGIN = 8;
 export const POWERUP_FIRST_DELAY = 5;
 /** Random gap between power-up spawns, [min, max] seconds. */
 export const POWERUP_INTERVAL: readonly [number, number] = [5, 9];
-/** Most power-ups on the ice at once. */
+/** Most power-ups on the roof at once. */
 export const POWERUP_MAX = 3;
 /** Pickup radius. */
-export const POWERUP_RADIUS = 0.42;
+export const POWERUP_RADIUS = 0.6;
+/** Power-ups float this high above the roof. */
+export const POWERUP_HEIGHT = 1;
 /** Uncollected power-ups vanish after this many seconds. */
 export const POWERUP_LIFETIME = 12;
 /** Rapid Fire: duration, cooldown between shots, and charge speed multiplier. */
@@ -127,7 +157,7 @@ export const RAPID_COOLDOWN = 0.05;
 export const RAPID_CHARGE_MULT = 2;
 /** Triple Shot: duration and the angle between the three bullets (radians). */
 export const TRIPLE_TIME = 7;
-export const TRIPLE_SPREAD = 0.22;
+export const TRIPLE_SPREAD = 0.12;
 /** Mega Shot: number of boosted shots and how much they are boosted. */
 export const MEGA_SHOTS = 3;
 export const MEGA_KNOCKBACK_MULT = 1.6;
@@ -140,7 +170,7 @@ export const SHIELD_TIME = 8;
 // Round and match flow
 // ---------------------------------------------------------------------------
 
-/** Seconds the map carousel spins before each round. */
+/** Seconds the map spinner runs before each round. */
 export const MAP_PICK_TIME = 2.6;
 /** Seconds of 3-2-1 countdown before each round. */
 export const COUNTDOWN_TIME = 3;
@@ -165,22 +195,26 @@ export const REJOIN_WINDOW = 60;
 export const PING_INTERVAL_MS = 1000;
 /** Server drops sockets that have been silent this long (milliseconds). */
 export const CLIENT_TIMEOUT_MS = 15000;
-/** Client renders this many seconds behind the newest snapshot. */
+/** Client renders other players this many seconds behind the newest snapshot. */
 export const INTERP_DELAY = 0.1;
+/** Inputs the server buffers per player before it drops the oldest. */
+export const INPUT_BUFFER_MAX = 6;
 
 // ---------------------------------------------------------------------------
 // Client feel ("juice"). Purely visual, never affects the simulation.
 // ---------------------------------------------------------------------------
 
-/** Seconds of freeze on heavy hits. */
-export const HIT_STOP_TIME = 0.06;
-/** Knockback impulse above which a hit counts as heavy (triggers hit-stop). */
-export const HEAVY_HIT_IMPULSE = 9;
-/** Max screen shake offset in CSS pixels at full trauma. */
-export const SHAKE_MAX_PX = 18;
-/** How fast screen shake trauma decays per second. */
-export const SHAKE_DECAY = 2.2;
-/** Player speed above which a motion trail is drawn. */
-export const TRAIL_MIN_SPEED = 4;
-/** How fast the aim prediction eases back to the server value (per second). */
-export const AIM_CORRECTION_RATE = 10;
+/** Knockback impulse above which a hit counts as heavy (bigger shake and a comic word). */
+export const HEAVY_HIT_IMPULSE = 12;
+/** Max camera shake in radians at full trauma. */
+export const SHAKE_MAX_ANGLE = 0.035;
+/** How fast camera shake trauma decays per second. */
+export const SHAKE_DECAY = 2.4;
+/** How fast a prediction correction is smoothed away (per second). */
+export const CORRECTION_RATE = 12;
+/** Corrections bigger than this snap instead of smoothing. */
+export const CORRECTION_SNAP = 3;
+/** Mouse look sensitivity in radians per pixel. */
+export const MOUSE_SENSITIVITY = 0.0022;
+/** Camera field of view in degrees (vertical). */
+export const FOV = 80;

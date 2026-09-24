@@ -1,4 +1,5 @@
 // Shared types: simulation state, events and the network protocol.
+// Coordinates: x and y are horizontal, z is up, and the roof is at z = 0.
 
 /** Seat number in a room, 0 .. MAX_PLAYERS - 1. */
 export type PlayerId = number;
@@ -8,20 +9,32 @@ export type Phase = 'lobby' | 'mapPick' | 'countdown' | 'playing' | 'roundEnd' |
 export type PowerupKind = 'rapid' | 'triple' | 'mega' | 'shield' | 'heal';
 export const POWERUP_KINDS: readonly PowerupKind[] = ['rapid', 'triple', 'mega', 'shield', 'heal'];
 
+/** One tick of a player's controls. */
 export interface InputState {
-  aimLeft: boolean;
-  aimRight: boolean;
+  /** Forward (+1) or back (-1). */
+  forward: number;
+  /** Right (+1) or left (-1). */
+  strafe: number;
+  jump: boolean;
   firing: boolean;
+  /** Look direction in radians. Yaw 0 faces +x, and yaw grows counter-clockwise seen from above. */
+  yaw: number;
+  /** Radians above the horizon (negative looks down). */
+  pitch: number;
 }
 
 export interface PlayerState {
   id: PlayerId;
   x: number;
   y: number;
+  z: number;
   vx: number;
   vy: number;
-  /** Aim angle in radians. Screen space, so +y is down and +angle is clockwise. */
-  aim: number;
+  vz: number;
+  yaw: number;
+  pitch: number;
+  /** Standing on the roof. */
+  grounded: boolean;
   /** Charge amount, 0..1. */
   charge: number;
   charging: boolean;
@@ -44,6 +57,8 @@ export interface PlayerState {
   mega: number;
   /** Seconds of Shield left. */
   shield: number;
+  /** Sequence number of the last input the server applied (for client prediction). */
+  ack: number;
 }
 
 export interface Bullet {
@@ -51,8 +66,10 @@ export interface Bullet {
   owner: PlayerId;
   x: number;
   y: number;
+  z: number;
   vx: number;
   vy: number;
+  vz: number;
   radius: number;
   knockback: number;
   damage: number;
@@ -69,14 +86,18 @@ export interface Powerup {
 
 /** Things that happened during a tick, sent to clients for effects and sound. */
 export type GameEvent =
-  | { k: 'fire'; p: PlayerId; c: number; x: number; y: number; a: number }
-  | { k: 'hit'; p: PlayerId; x: number; y: number; a: number; f: number; d: number }
-  | { k: 'block'; p: PlayerId; x: number; y: number }
-  | { k: 'cancel'; x: number; y: number; r: number }
+  /** a is yaw, b is pitch, c is charge. */
+  | { k: 'fire'; p: PlayerId; c: number; x: number; y: number; z: number; a: number; b: number }
+  /** f is the knockback strength, d the damage added. */
+  | { k: 'hit'; p: PlayerId; o: PlayerId; x: number; y: number; z: number; f: number; d: number }
+  | { k: 'block'; p: PlayerId; x: number; y: number; z: number }
+  /** Two bullets cancelling out, or a bullet hitting the roof. */
+  | { k: 'cancel'; x: number; y: number; z: number; r: number }
   /** q is the other player, or -1 for a bumper. */
-  | { k: 'bump'; p: PlayerId; q: PlayerId; x: number; y: number; a: number; f: number }
+  | { k: 'bump'; p: PlayerId; q: PlayerId; x: number; y: number; z: number; f: number }
   | { k: 'fall'; p: PlayerId; x: number; y: number }
   | { k: 'respawn'; p: PlayerId }
+  | { k: 'jump'; p: PlayerId }
   | { k: 'spawn'; u: PowerupKind; x: number; y: number }
   | { k: 'pickup'; p: PlayerId; u: PowerupKind; x: number; y: number }
   /** w is the round winner, or -1 if nobody survived. */
@@ -112,17 +133,25 @@ export interface GameState {
 // Network protocol
 // ---------------------------------------------------------------------------
 
-/** Power-up status bits in PlayerSnap. */
+/** Status bits in PlayerSnap. */
 export const FX_SHIELD = 1;
 export const FX_RAPID = 2;
 export const FX_TRIPLE = 4;
 export const FX_MEGA = 8;
+export const FX_GROUNDED = 16;
+export const FX_CHARGING = 32;
 
-/** [id, x, y, aim, charge, damage, fallTime (-1 while standing), fx bits] */
-export type PlayerSnap = [number, number, number, number, number, number, number, number];
+/**
+ * [id, x, y, z, vx, vy, vz, yaw, pitch, charge, damage,
+ *  fallTime (-1 while standing), fx bits, cooldown, input ack]
+ */
+export type PlayerSnap = [
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number,
+];
 
-/** [id, owner, x, y, radius] */
-export type BulletSnap = [number, number, number, number, number];
+/** [id, owner, x, y, z, radius] */
+export type BulletSnap = [number, number, number, number, number, number];
 
 /** [id, kind index into POWERUP_KINDS, x, y, age] */
 export type PowerupSnap = [number, number, number, number, number];
@@ -165,7 +194,8 @@ export type ClientMessage =
   | { t: 'map'; choice: number }
   | { t: 'profile'; name: string; color: number }
   | { t: 'start' }
-  | { t: 'input'; l: boolean; r: boolean; f: boolean }
+  /** One tick of input: sequence number, forward, strafe, jump, fire, yaw, pitch. */
+  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; a: number; b: number }
   | { t: 'ping'; c: number }
   | { t: 'leave' };
 

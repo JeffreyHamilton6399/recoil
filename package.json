@@ -2,7 +2,7 @@
   "name": "recoil",
   "version": "1.0.0",
   "private": true,
-  "description": "RECOIL: a 2-player online arena duel where the only way to move is to shoot.",
+  "description": "RECOIL: a first-person online rooftop brawler for up to 8 players, where every shot kicks you backwards.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -15,10 +15,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json"
   },
   "dependencies": {
+    "three": "^0.170.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/three": "^0.170.0",
     "@types/ws": "^8.5.12",
     "concurrently": "^9.0.0",
     "tsx": "^4.19.0",

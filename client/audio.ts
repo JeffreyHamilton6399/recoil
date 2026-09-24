@@ -218,6 +218,19 @@ export class Sfx {
     this.click(3500, 0.18, pan, 0.01);
   }
 
+  /** Springy hop. */
+  jump(pan: number, volume = 1): void {
+    this.tone('triangle', 240, 520, 0.09, 0.09 * volume, pan);
+    this.noiseBurst('bandpass', 900, 2400, 1.2, 0.08, 0.05 * volume, pan);
+  }
+
+  /** Soft thump when you land. */
+  land(force: number): void {
+    const k = Math.min(1, force / 20);
+    this.tone('sine', 140, 60, 0.1, 0.1 + 0.2 * k);
+    this.noiseBurst('lowpass', 900, 200, 0.7, 0.08, 0.05 + 0.1 * k);
+  }
+
   respawn(pan: number): void {
     this.tone('square', 300, 1200, 0.14, 0.06, pan);
     this.tone('sine', 600, 1800, 0.16, 0.08, pan, 0.03);

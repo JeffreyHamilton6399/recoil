@@ -1,7 +1,11 @@
-// Map definitions. Positions and sizes are for the full-size arena
-// (radius ARENA_START_RADIUS) and scale down with it as it shrinks.
+// Map definitions. Positions and sizes are in "design units", for an arena
+// of radius MAP_DESIGN_RADIUS. They are scaled up to the real arena size
+// (ARENA_START_RADIUS) and shrink with it.
 
 import * as C from './constants.js';
+
+/** Arena radius the map layouts (and the client's surface art) are drawn for. */
+export const MAP_DESIGN_RADIUS = 9;
 
 export interface Circle {
   x: number;
@@ -181,12 +185,12 @@ export function polygonPoints(shape: 'hex' | 'diamond', arenaRadius: number): [n
   return pts;
 }
 
-/** How much the map features are scaled at a given arena radius. */
+/** How much the map features are scaled (from design units) at a given arena radius. */
 export function mapScale(arenaRadius: number): number {
-  return arenaRadius / C.ARENA_START_RADIUS;
+  return arenaRadius / MAP_DESIGN_RADIUS;
 }
 
-/** True if a point is off the ice: past the edge or over a hole. */
+/** True if a point is off the roof: past the edge or over a hole. */
 export function isOffMap(map: MapDef, arenaRadius: number, x: number, y: number): boolean {
   if (map.shape === 'circle') {
     if (Math.hypot(x, y) > arenaRadius) return true;
@@ -215,36 +219,36 @@ export function scaledBumpers(map: MapDef, arenaRadius: number): Circle[] {
   return map.bumpers.map((b) => ({ x: b.x * s, y: b.y * s, r: b.r * s }));
 }
 
-/** True if a player can stand here safely: on the ice, clear of hole edges and bumpers. */
+/** True if a player can stand here safely: on the roof, clear of hole edges and bumpers. */
 function spawnIsSafe(map: MapDef, arenaRadius: number, x: number, y: number): boolean {
-  const m = C.PLAYER_RADIUS + 0.3;
+  const m = C.PLAYER_RADIUS + 0.8;
   for (let k = 0; k < 8; k++) {
     const a = (k * Math.PI) / 4;
     if (isOffMap(map, arenaRadius, x + Math.cos(a) * m, y + Math.sin(a) * m)) return false;
   }
   if (isOffMap(map, arenaRadius, x, y)) return false;
-  return !scaledBumpers(map, arenaRadius).some((b) => Math.hypot(x - b.x, y - b.y) < b.r + C.PLAYER_RADIUS + 0.3);
+  return !scaledBumpers(map, arenaRadius).some((b) => Math.hypot(x - b.x, y - b.y) < b.r + C.PLAYER_RADIUS + 0.8);
 }
 
 /**
- * Evenly spaced spawn point `index` of `count`, facing the centre. If the
- * ideal spot is over a hole or a bumper, it slides along the ring to the
+ * Evenly spaced spawn point `index` of `count`, facing the centre (yaw). If
+ * the ideal spot is over a hole or a bumper, it slides along the ring to the
  * nearest safe spot.
  */
-export function spawnPoint(map: MapDef, index: number, count: number): { x: number; y: number; aim: number } {
+export function spawnPoint(map: MapDef, index: number, count: number): { x: number; y: number; yaw: number } {
   const n = Math.max(1, count);
   const base = Math.PI + (index / n) * Math.PI * 2;
   const R = C.ARENA_START_RADIUS;
-  for (const dr of [0, -1, 1, -2, 1.8, -3]) {
+  for (const dr of [0, -2, 2, -4, 4, -6]) {
     for (const da of [0, 0.12, -0.12, 0.25, -0.25, 0.4, -0.4]) {
       const a = base + da;
       const r = C.SPAWN_DISTANCE + dr;
       const x = Math.cos(a) * r;
       const y = Math.sin(a) * r;
-      if (spawnIsSafe(map, R, x, y)) return { x, y, aim: Math.atan2(-y, -x) };
+      if (spawnIsSafe(map, R, x, y)) return { x, y, yaw: Math.atan2(-y, -x) };
     }
   }
   const x = Math.cos(base) * C.SPAWN_DISTANCE;
   const y = Math.sin(base) * C.SPAWN_DISTANCE;
-  return { x, y, aim: base + Math.PI };
+  return { x, y, yaw: base + Math.PI };
 }

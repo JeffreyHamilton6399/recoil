@@ -1,15 +1,19 @@
-// RECOIL client entry point: connection, snapshot interpolation, own-aim
-// prediction, event playback (effects and sound) and the render loop.
+// RECOIL client entry point: connection, a fixed-rate input loop with
+// client-side prediction of your own player (replayed on top of every server
+// snapshot), interpolation of everyone else, event playback (effects, sound,
+// HUD) and the render loop.
 
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
-import { angleDiff, clamp, lerp, wrapAngle } from '../shared/sim.js';
+import { angleDiff, clamp, controlPlayer, lerp, movePlayer, phaseRules, playerFromSnap } from '../shared/sim.js';
 import { POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
-import type { GameEvent, InputState, PlayerId, PlayerSnap, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
+import type { GameEvent, InputState, PlayerId, PlayerSnap, PlayerState, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
+import { carouselPosition } from './art.js';
 import { Sfx } from './audio.js';
+import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { Net } from './net.js';
-import { Renderer, carouselPosition, type View, type ViewBullet, type ViewPlayer, type ViewPowerup } from './render.js';
+import { Scene3D, type CameraView, type View, type ViewBullet, type ViewPlayer, type ViewPowerup } from './scene.js';
 import { UI } from './ui.js';
 
 // ---------------------------------------------------------------------------
@@ -50,12 +54,25 @@ let connectedOnce = false; // false until the first successful connection
 const snaps: Snapshot[] = [];
 let clockOffset: number | null = null; // local seconds minus server seconds
 let renderTime = 0; // server time we are currently drawing (seconds)
-let hitStopUntil = 0;
 const pendingEvents: { time: number; ev: GameEvent }[] = [];
 
-let predictedAim: number | null = null;
-let lastLatestPhase: Snapshot['ph'] | null = null;
-let fireHeldSince: number | null = null; // local charge prediction (seconds)
+// Prediction of your own player.
+interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+let seq = 0;
+let history: { seq: number; input: InputState }[] = [];
+let pred: PlayerState | null = null;
+let predPrev: Vec3 = { x: 0, y: 0, z: 0 };
+let correction: Vec3 = { x: 0, y: 0, z: 0 };
+let tickAcc = 0;
+let lookReset = true; // face where the server puts you on the next snapshot
+let chargeDinged = false;
+
+// Feed: who last hit whom, to credit knock-offs.
+const lastHitBy = new Map<PlayerId, { by: PlayerId; time: number }>();
 
 let pingMs: number | null = null;
 let lastCountdown = -1;
@@ -63,7 +80,6 @@ let lastShrinkSecond = -1;
 let lastCarouselCard = -1;
 let carouselLanded = false;
 let lastPhaseSeen: Snapshot['ph'] | null = null;
-let chargeDinged = false;
 
 const nowSec = (): number => performance.now() / 1000;
 
@@ -72,8 +88,9 @@ const nowSec = (): number => performance.now() / 1000;
 // ---------------------------------------------------------------------------
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
-const renderer = new Renderer(canvas);
+const scene = new Scene3D(canvas);
 const sfx = new Sfx();
+const hud = new Hud();
 
 function requestRoom(kind: 'create' | 'quick'): void {
   sfx.unlock();
@@ -104,21 +121,18 @@ const ui = new UI({
 });
 ui.setMuted(sfx.isMuted);
 
-const input = new Input(ui.touchButtons);
+const input = new Input(canvas, ui.touchElements);
 input.onTouchDetected = () => {
   ui.enableTouch();
-  refreshLayout();
+  refreshRoomUi();
 };
-input.onChange = (s: InputState) => {
+input.onLockChange = (locked) => ui.setLocked(locked);
+
+// Click the city to play (mouse players).
+canvas.addEventListener('click', () => {
   sfx.unlock();
-  const t = nowSec();
-  if (s.firing && fireHeldSince === null) fireHeldSince = t;
-  if (!s.firing && fireHeldSince !== null) {
-    onLocalRelease(t);
-    fireHeldSince = null;
-  }
-  sendInput();
-};
+  if (roomCode && myId !== -1 && !ui.isTouch) input.requestLock();
+});
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM' && !(e.target instanceof HTMLInputElement)) ui.setMuted(sfx.toggleMute());
@@ -175,12 +189,6 @@ function sendHello(): void {
   }
 }
 
-function sendInput(): void {
-  if (myId === -1) return;
-  const s = input.state;
-  net.send({ t: 'input', l: s.aimLeft, r: s.aimRight, f: s.firing });
-}
-
 function joinRoom(code: string): void {
   roomCode = code;
   ui.setMenuError('');
@@ -192,14 +200,18 @@ function resetRoomState(): void {
   snaps.length = 0;
   pendingEvents.length = 0;
   clockOffset = null;
-  predictedAim = null;
-  lastLatestPhase = null;
   lastPhaseSeen = null;
   lastCountdown = -1;
   lastCarouselCard = -1;
   myId = -1;
   roster = [];
   spectators = 0;
+  seq = 0;
+  history = [];
+  pred = null;
+  correction = { x: 0, y: 0, z: 0 };
+  lookReset = true;
+  lastHitBy.clear();
 }
 
 function leaveToMenu(error: string): void {
@@ -208,10 +220,11 @@ function leaveToMenu(error: string): void {
   wantRoom = null;
   lostAt = 0;
   resetRoomState();
-  history.replaceState(null, '', '/');
+  input.exitLock();
+  window.history.replaceState(null, '', '/');
   ui.setLobby(null);
   ui.showMenu(error);
-  refreshLayout();
+  hud.setVisible(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -224,9 +237,9 @@ function handleMessage(msg: ServerMessage): void {
       resetRoomState();
       roomCode = msg.code;
       myId = msg.you;
-      history.replaceState(null, '', `/?room=${msg.code}`);
+      window.history.replaceState(null, '', `/?room=${msg.code}`);
       ui.setBanner(null);
-      sendInput();
+      refreshRoomUi();
       break;
     case 'roster':
       // Blip when someone arrives or leaves (not for our own first roster).
@@ -259,8 +272,8 @@ function refreshRoomUi(): void {
   const latest = snaps[snaps.length - 1];
   const phase = latest?.ph ?? 'lobby';
   ui.showRoom(roomCode, myId !== -1);
+  hud.setVisible(true);
   ui.setLobby(phase === 'lobby' ? { code: roomCode, roster, spectators, myId, pub: roomPub, mapChoice, startsIn } : null);
-  refreshLayout();
 }
 
 function onSnapshot(s: Snapshot): void {
@@ -282,8 +295,102 @@ function onSnapshot(s: Snapshot): void {
   if (snaps.length > 30) snaps.splice(0, snaps.length - 30);
   for (const ev of s.e) pendingEvents.push({ time: serverTime, ev });
 
+  // The server moved everyone to their spawn: face where it says.
+  const resetPhase = prev && prev.ph !== s.ph && (s.ph === 'mapPick' || s.ph === 'lobby' || (s.ph === 'countdown' && prev.ph !== 'mapPick'));
+  if (resetPhase || s.e.some((e) => e.k === 'respawn' && e.p === myId)) lookReset = true;
+
+  reconcile(s);
+
   if (!prev || prev.ph !== s.ph) refreshRoomUi();
   if (lostAt === 0) ui.setBanner(null);
+}
+
+// ---------------------------------------------------------------------------
+// Prediction
+// ---------------------------------------------------------------------------
+
+/** Runs one tick of your own movement, exactly as the server will. */
+function advance(p: PlayerState, inp: InputState, snap: Snapshot): number {
+  const rules = phaseRules(snap.ph);
+  const fired = controlPlayer(p, inp, C.TICK_DT, rules.canMove, rules.canFire);
+  const map = MAPS[snap.m] ?? MAPS[0];
+  const h = C.TICK_DT / C.PHYSICS_SUBSTEPS;
+  for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) movePlayer(p, h, map, snap.r);
+  return fired;
+}
+
+/** Starts from the server's version of you and replays the inputs it hasn't seen yet. */
+function reconcile(s: Snapshot): void {
+  const ms = s.p.find((p) => p[0] === myId);
+  if (!ms) {
+    pred = null;
+    return;
+  }
+  const server = playerFromSnap(ms);
+  if (lookReset) {
+    input.setLook(server.yaw, 0);
+    lookReset = false;
+    // Inputs already sent still carry the old look; don't replay them.
+    history = [];
+    pred = server;
+    predPrev = { x: server.x, y: server.y, z: server.z };
+    correction = { x: 0, y: 0, z: 0 };
+    return;
+  }
+  history = history.filter((h) => h.seq > server.ack);
+  for (const h of history) advance(server, h.input, s);
+  if (pred) {
+    const dx = pred.x - server.x;
+    const dy = pred.y - server.y;
+    const dz = pred.z - server.z;
+    if (Math.hypot(dx, dy, dz) > C.CORRECTION_SNAP) {
+      correction = { x: 0, y: 0, z: 0 };
+      predPrev = { x: server.x, y: server.y, z: server.z };
+    } else {
+      // Keep the camera where it was and ease the difference away.
+      correction = { x: correction.x + dx, y: correction.y + dy, z: correction.z + dz };
+      predPrev = { x: predPrev.x - dx, y: predPrev.y - dy, z: predPrev.z - dz };
+    }
+  } else {
+    predPrev = { x: server.x, y: server.y, z: server.z };
+  }
+  // The local charge is the one you feel; keep it unless the server reset it.
+  pred = server;
+}
+
+/** One fixed-rate input tick: sample, send, predict. */
+function clientTick(): void {
+  const latest = snaps[snaps.length - 1];
+  if (!roomCode || myId === -1 || !net.isOpen || !latest) return;
+  const inp = input.sample();
+  // Without the mouse captured, don't charge or fire by accident.
+  if (!input.locked && !ui.isTouch) inp.firing = false;
+  seq++;
+  net.send({ t: 'input', s: seq, f: inp.forward, r: inp.strafe, j: inp.jump, x: inp.firing, a: inp.yaw, b: inp.pitch });
+  history.push({ seq, input: inp });
+  if (history.length > 90) history.shift();
+  if (!pred) return;
+
+  predPrev = { x: pred.x, y: pred.y, z: pred.z };
+  const wasGrounded = pred.grounded;
+  const vzBefore = pred.vz;
+  const fired = advance(pred, inp, latest);
+  if (fired >= 0) {
+    sfx.fire(fired, 0);
+    scene.localFire(fired, myColor());
+  }
+  if (wasGrounded && !pred.grounded && inp.jump && fired < 0) sfx.jump(0);
+  if (!wasGrounded && pred.grounded) sfx.land(-vzBefore);
+
+  // Ding once when your charge tops out.
+  const full = pred.charging && pred.charge >= 1;
+  if (full && !chargeDinged) sfx.chargeFull();
+  chargeDinged = full;
+}
+
+function myColor(): string {
+  const r = roster.find((q) => q.id === myId);
+  return C.PLAYER_PALETTE[r?.color ?? 0] ?? C.PLAYER_PALETTE[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -291,23 +398,25 @@ function onSnapshot(s: Snapshot): void {
 // ---------------------------------------------------------------------------
 
 function toViewPlayer(p: PlayerSnap): ViewPlayer {
-  return { id: p[0], x: p[1], y: p[2], aim: p[3], charge: p[4], damage: p[5], fallTime: p[6], fx: p[7] };
+  return { id: p[0], x: p[1], y: p[2], z: p[3], yaw: p[7], pitch: p[8], charge: p[9], damage: p[10], fallTime: p[11], fx: p[12] };
 }
 
 function lerpPlayer(a: PlayerSnap, b: PlayerSnap, t: number): ViewPlayer {
   // A player who just started falling has no fall time in `a`; a respawn jumps.
-  const fall = b[6] < 0 ? -1 : a[6] < 0 ? b[6] * t : lerp(a[6], b[6], t);
-  const jumped = Math.hypot(b[1] - a[1], b[2] - a[2]) > 4;
+  const fall = b[11] < 0 ? -1 : a[11] < 0 ? b[11] * t : lerp(a[11], b[11], t);
+  const jumped = Math.hypot(b[1] - a[1], b[2] - a[2], b[3] - a[3]) > 6;
   const k = jumped ? 1 : t;
   return {
     id: b[0],
     x: lerp(a[1], b[1], k),
     y: lerp(a[2], b[2], k),
-    aim: a[3] + angleDiff(a[3], b[3]) * k,
-    charge: lerp(a[4], b[4], t),
-    damage: b[5],
+    z: lerp(a[3], b[3], k),
+    yaw: a[7] + angleDiff(a[7], b[7]) * k,
+    pitch: lerp(a[8], b[8], k),
+    charge: lerp(a[9], b[9], t),
+    damage: b[10],
     fallTime: fall,
-    fx: b[7],
+    fx: b[12],
   };
 }
 
@@ -331,7 +440,7 @@ function viewAt(time: number): View | null {
       }
     }
   }
-  // Don't slide players across the ice when a new round or the lobby resets them.
+  // Don't slide players across the roof when a new round or the lobby resets them.
   if (a.ph !== b.ph && (b.ph === 'mapPick' || b.ph === 'lobby')) a = b;
 
   const playersA = new Map(a.p.map((p) => [p[0], p]));
@@ -344,6 +453,7 @@ function viewAt(time: number): View | null {
   const bullets: ViewBullet[] = [];
   const span = Math.max(C.TICK_DT, (b.k - a.k) * C.TICK_DT);
   for (const bb of b.b) {
+    if (bb[1] === myId) continue; // your own shots are drawn ahead, below
     const ba = bulletsA.get(bb[0]);
     if (!ba) continue; // spawns between snapshots appear on the next one
     bullets.push({
@@ -351,11 +461,14 @@ function viewAt(time: number): View | null {
       owner: bb[1],
       x: lerp(ba[2], bb[2], t),
       y: lerp(ba[3], bb[3], t),
-      r: bb[4],
+      z: lerp(ba[4], bb[4], t),
+      r: bb[5],
       vx: (bb[2] - ba[2]) / span,
       vy: (bb[3] - ba[3]) / span,
+      vz: (bb[4] - ba[4]) / span,
     });
   }
+  bullets.push(...ownBullets());
 
   const powerups: ViewPowerup[] = b.u.map((u) => ({ id: u[0], kind: POWERUP_KINDS[u[1]] ?? 'heal', x: u[2], y: u[3], age: u[4] }));
 
@@ -370,18 +483,39 @@ function viewAt(time: number): View | null {
     bullets,
     powerups,
     roster,
-    roundWinner: a.rw,
-    matchWinner: a.mw,
     myId,
-    attract: false,
   };
 }
 
-/** The idle scene behind the main menu: four players wiggling on a random map. */
+/**
+ * Your own bullets, pushed forward to "now" from the newest snapshot, so
+ * they leave your gun without the interpolation delay everyone else has.
+ */
+function ownBullets(): ViewBullet[] {
+  const n = snaps.length;
+  if (n < 2 || clockOffset === null || myId === -1) return [];
+  const last = snaps[n - 1];
+  const prev = new Map(snaps[n - 2].b.map((x) => [x[0], x]));
+  const dt = Math.max(C.TICK_DT, (last.k - snaps[n - 2].k) * C.TICK_DT);
+  const ahead = clamp(nowSec() - clockOffset - last.k * C.TICK_DT + (pingMs ?? 60) / 2000, 0, 0.3);
+  const out: ViewBullet[] = [];
+  for (const b of last.b) {
+    if (b[1] !== myId) continue;
+    const p = prev.get(b[0]);
+    if (!p) continue;
+    const vx = (b[2] - p[2]) / dt;
+    const vy = (b[3] - p[3]) / dt;
+    const vz = (b[4] - p[4]) / dt;
+    out.push({ id: b[0], owner: b[1], x: b[2] + vx * ahead, y: b[3] + vy * ahead, z: b[4] + vz * ahead, r: b[5], vx, vy, vz });
+  }
+  return out;
+}
+
+/** The idle scene behind the main menu: four players on a random map. */
 const attractMap = Math.floor(Math.random() * MAPS.length);
 const attractRoster: RosterEntry[] = [0, 1, 2, 3].map((i) => ({
   id: i,
-  name: '',
+  name: ['Zip', 'Boom', 'Kick', 'Pow'][i],
   color: (i * 2 + 1) % C.PLAYER_PALETTE.length,
   score: 0,
   online: true,
@@ -389,14 +523,17 @@ const attractRoster: RosterEntry[] = [0, 1, 2, 3].map((i) => ({
 }));
 function attractView(time: number): View {
   const players: ViewPlayer[] = attractRoster.map((r, i) => {
-    const a = Math.PI + (i / 4) * Math.PI * 2 + Math.PI / 4;
+    const a = Math.PI + (i / 4) * Math.PI * 2 + Math.PI / 4 + time * 0.05;
+    const hop = Math.max(0, Math.sin(time * 2.2 + i * 1.7)) * 1.2;
     return {
       id: r.id,
       x: Math.cos(a) * C.SPAWN_DISTANCE,
       y: Math.sin(a) * C.SPAWN_DISTANCE,
-      aim: a + Math.PI + Math.sin(time * (0.7 + i * 0.13) + i) * 0.7,
+      z: hop,
+      yaw: a + Math.PI + Math.sin(time * (0.7 + i * 0.13) + i) * 0.7,
+      pitch: Math.sin(time * 0.9 + i) * 0.3,
       charge: 0,
-      damage: 0,
+      damage: (i * 37) % 120,
       fallTime: -1,
       fx: 0,
     };
@@ -411,115 +548,75 @@ function attractView(time: number): View {
     bullets: [],
     powerups: [],
     roster: attractRoster,
-    roundWinner: null,
-    matchWinner: null,
     myId: -1,
-    attract: true,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Local prediction: own aim (and charge, for instant visual/audio feedback)
-// ---------------------------------------------------------------------------
-
-function localCharge(t: number): number {
-  return fireHeldSince === null ? 0 : clamp((t - fireHeldSince) / C.CHARGE_TIME, 0, 1);
-}
-
-function mySnap(s: Snapshot | undefined): PlayerSnap | undefined {
-  return s?.p.find((p) => p[0] === myId);
-}
-
-function canAim(s: Snapshot | undefined): boolean {
-  if (!s || myId === -1) return false;
-  const me = mySnap(s);
-  return me !== undefined && me[6] < 0 && s.ph !== 'roundEnd' && s.ph !== 'matchEnd';
-}
-
-function canFire(s: Snapshot | undefined): boolean {
-  return canAim(s) && s !== undefined && (s.ph === 'playing' || s.ph === 'lobby');
-}
-
-function onLocalRelease(t: number): void {
-  const latest = snaps[snaps.length - 1];
-  if (!canFire(latest)) return;
-  // Play the shot sound right away; the server's fire event adds the visuals.
-  const me = mySnap(latest);
-  sfx.fire(localCharge(t), panFor(me ? me[1] : 0));
-}
-
-function updatePrediction(dt: number, view: View): void {
-  const latest = snaps[snaps.length - 1];
-  const me = mySnap(latest);
-  if (!latest || !me) {
-    predictedAim = null;
-    return;
-  }
-  const serverAim = me[3];
-  const phaseChanged = latest.ph !== lastLatestPhase && (latest.ph === 'mapPick' || latest.ph === 'lobby');
-  if (predictedAim === null || !canAim(latest) || phaseChanged) {
-    predictedAim = serverAim;
-  } else {
-    const dir = (input.state.aimRight ? 1 : 0) - (input.state.aimLeft ? 1 : 0);
-    if (dir !== 0) predictedAim = wrapAngle(predictedAim + dir * C.AIM_SPEED * dt);
-    else predictedAim = wrapAngle(predictedAim + angleDiff(predictedAim, serverAim) * Math.min(1, dt * C.AIM_CORRECTION_RATE));
-  }
-  lastLatestPhase = latest.ph;
-
-  const vp = view.players.find((p) => p.id === myId);
-  if (vp && canAim(latest)) {
-    vp.aim = predictedAim;
-    if (canFire(latest)) vp.charge = localCharge(nowSec());
-  }
-  // Ding once when your charge tops out.
-  const full = vp !== undefined && canFire(latest) && localCharge(nowSec()) >= 1;
-  if (full && !chargeDinged) sfx.chargeFull();
-  chargeDinged = full;
 }
 
 // ---------------------------------------------------------------------------
 // Events, sound cues and the frame loop
 // ---------------------------------------------------------------------------
 
-function panFor(x: number): number {
-  return clamp(x / C.ARENA_START_RADIUS, -1, 1) * 0.7;
+function colorOf(id: PlayerId): string {
+  const r = roster.find((q) => q.id === id);
+  return C.PLAYER_PALETTE[r?.color ?? id] ?? C.PLAYER_PALETTE[0];
+}
+function nameOf(id: PlayerId): string {
+  return roster.find((q) => q.id === id)?.name ?? `Player ${id + 1}`;
 }
 
-function playEvent(ev: GameEvent, view: View): void {
-  const heavy = renderer.onEvent(ev, view);
-  if (heavy) hitStopUntil = nowSec() + C.HIT_STOP_TIME;
+function playEvent(ev: GameEvent, view: View, time: number): void {
+  const heavy = scene.onEvent(ev, view);
   switch (ev.k) {
     case 'fire':
-      if (ev.p !== myId) sfx.fire(ev.c, panFor(ev.x));
+      if (ev.p !== myId) sfx.fire(ev.c, scene.panFor(ev.x, ev.y, ev.z));
       break;
     case 'hit':
-      sfx.hit(ev.f, panFor(ev.x));
+      sfx.hit(ev.f, scene.panFor(ev.x, ev.y, ev.z));
+      lastHitBy.set(ev.p, { by: ev.o, time });
+      if (ev.o === myId) hud.hitMarker();
+      if (ev.p === myId) hud.hurt(ev.f);
+      if (heavy && ev.o === myId) scene.addTrauma(0.1);
       break;
     case 'block':
-      sfx.block(panFor(ev.x));
+      sfx.block(scene.panFor(ev.x, ev.y, ev.z));
+      if (ev.p !== myId) hud.hitMarker();
       break;
     case 'cancel':
-      sfx.cancel(panFor(ev.x));
+      sfx.cancel(scene.panFor(ev.x, ev.y, ev.z));
       break;
     case 'bump':
-      if (ev.q < 0) sfx.bumper(ev.f, panFor(ev.x));
-      else sfx.bump(ev.f, panFor(ev.x));
+      if (ev.q < 0) sfx.bumper(ev.f, scene.panFor(ev.x, ev.y, ev.z));
+      else sfx.bump(ev.f, scene.panFor(ev.x, ev.y, ev.z));
       break;
-    case 'fall':
-      sfx.whoosh(panFor(ev.x));
+    case 'fall': {
+      sfx.whoosh(scene.panFor(ev.x, ev.y, 0));
+      const last = lastHitBy.get(ev.p);
+      if (last && time - last.time < 5 && last.by !== ev.p) {
+        hud.addFeed([[nameOf(last.by), colorOf(last.by)], ' knocked ', [nameOf(ev.p), colorOf(ev.p)], ' off']);
+      } else {
+        hud.addFeed([[nameOf(ev.p), colorOf(ev.p)], ' fell off']);
+      }
+      lastHitBy.delete(ev.p);
+      break;
+    }
+    case 'jump':
+      if (ev.p !== myId) {
+        const p = view.players.find((q) => q.id === ev.p);
+        if (p) sfx.jump(scene.panFor(p.x, p.y, p.z), 0.5);
+      }
       break;
     case 'spawn':
-      sfx.powerupSpawn(panFor(ev.x));
+      sfx.powerupSpawn(scene.panFor(ev.x, ev.y, C.POWERUP_HEIGHT));
       break;
     case 'pickup':
-      sfx.pickup(ev.u, panFor(ev.x));
+      sfx.pickup(ev.u, scene.panFor(ev.x, ev.y, C.POWERUP_HEIGHT));
       break;
     case 'ko':
       sfx.ko(myId === -1 || ev.w === myId);
       break;
     case 'respawn': {
       const p = view.players.find((q) => q.id === ev.p);
-      sfx.respawn(panFor(p?.x ?? 0));
+      sfx.respawn(p ? scene.panFor(p.x, p.y, p.z) : 0);
       break;
     }
   }
@@ -549,14 +646,14 @@ function soundCues(view: View): void {
 
   if (view.shrinking) {
     const sec = Math.floor(view.phaseTime);
-    if (sec !== lastShrinkSecond && sec > 0) sfx.shrinkTick();
+    if (sec !== lastShrinkSecond && sec > 0 && sec % 2 === 0) sfx.shrinkTick();
     lastShrinkSecond = sec;
   } else {
     lastShrinkSecond = -1;
   }
 
   if (view.phase === 'matchEnd' && lastPhaseSeen !== 'matchEnd' && lastPhaseSeen !== null) {
-    sfx.matchWin(myId === -1 || view.matchWinner === myId);
+    sfx.matchWin(myId === -1 || snaps[snaps.length - 1]?.mw === myId);
   }
   lastPhaseSeen = view.phase;
 
@@ -565,13 +662,9 @@ function soundCues(view: View): void {
   for (const p of view.players) {
     if (!firePhase || p.fallTime >= 0 || p.charge <= 0) continue;
     charging.add(p.id);
-    sfx.setCharge(p.id, p.charge, panFor(p.x), p.id === myId ? 1 : 0.35);
+    sfx.setCharge(p.id, p.charge, p.id === myId ? 0 : scene.panFor(p.x, p.y, p.z), p.id === myId ? 1 : 0.35);
   }
   sfx.silenceChargesExcept(charging);
-}
-
-function refreshLayout(): void {
-  renderer.setInsets(ui.insets());
 }
 
 let lastFrame = nowSec();
@@ -579,31 +672,88 @@ function frame(): void {
   const now = nowSec();
   const dt = Math.min(0.1, now - lastFrame);
   lastFrame = now;
-  const frozen = now < hitStopUntil;
 
   let view: View;
+  let cam: CameraView = { kind: 'orbit' };
+  let me: ViewPlayer | undefined;
+  let roundWinner: PlayerId | null = null;
+  let matchWinner: PlayerId | null = null;
+
   if (roomCode && clockOffset !== null && snaps.length > 0) {
+    // Fixed-rate input ticks; several per frame if the tab fell behind.
+    tickAcc = Math.min(tickAcc + dt, C.TICK_DT * 5);
+    while (tickAcc >= C.TICK_DT) {
+      tickAcc -= C.TICK_DT;
+      clientTick();
+    }
+
     const target = now - clockOffset - C.INTERP_DELAY;
-    if (!frozen) renderTime += dt;
+    renderTime += dt;
     if (Math.abs(target - renderTime) > 0.5) renderTime = target;
-    else if (!frozen) renderTime += (target - renderTime) * Math.min(1, dt * 3);
+    else renderTime += (target - renderTime) * Math.min(1, dt * 3);
 
     view = viewAt(renderTime) ?? attractView(now);
+    const latest = snaps[snaps.length - 1];
+    roundWinner = latest.rw;
+    matchWinner = latest.mw;
     // Fire effects and sounds when the interpolated time reaches them.
     while (pendingEvents.length > 0 && pendingEvents[0].time <= renderTime + 1e-6) {
       const item = pendingEvents.shift();
-      if (item && renderTime - item.time < 1) playEvent(item.ev, view);
+      if (item && renderTime - item.time < 1) playEvent(item.ev, view, item.time);
     }
-    updatePrediction(dt, view);
+
+    // Your own player comes from the prediction, not the (older) snapshots.
+    if (pred && myId !== -1) {
+      const decay = Math.exp(-C.CORRECTION_RATE * dt);
+      correction = { x: correction.x * decay, y: correction.y * decay, z: correction.z * decay };
+      const a = clamp(tickAcc / C.TICK_DT, 0, 1);
+      const x = lerp(predPrev.x, pred.x, a) + correction.x;
+      const y = lerp(predPrev.y, pred.y, a) + correction.y;
+      const z = lerp(predPrev.z, pred.z, a) + correction.z;
+      const serverMe = view.players.find((p) => p.id === myId);
+      me = {
+        id: myId,
+        x,
+        y,
+        z,
+        yaw: input.yaw,
+        pitch: input.pitch,
+        charge: pred.charging ? pred.charge : 0,
+        damage: serverMe?.damage ?? pred.damage,
+        fallTime: pred.falling ? pred.fallTime : -1,
+        fx: serverMe?.fx ?? 0,
+      };
+      view.players = view.players.map((p) => (p.id === myId && me ? me : p));
+      const out = pred.falling && pred.fallTime > C.FALL_DURATION * 0.7;
+      if (!out) {
+        cam = {
+          kind: 'first',
+          x,
+          y,
+          z: z + C.EYE_HEIGHT,
+          yaw: input.yaw,
+          pitch: input.pitch,
+          speed: Math.hypot(pred.vx, pred.vy),
+          grounded: pred.grounded,
+          charge: me.charge,
+        };
+      }
+    }
     soundCues(view);
     // Drop snapshots we'll never interpolate from again.
-    while (snaps.length > 2 && snaps[1].k * C.TICK_DT < renderTime - 0.5) snaps.shift();
+    while (snaps.length > 3 && snaps[1].k * C.TICK_DT < renderTime - 0.5) snaps.shift();
   } else {
     view = attractView(now);
     sfx.silenceChargesExcept(new Set());
   }
 
-  renderer.draw(view, frozen ? 0 : dt, dt);
+  scene.render(view, cam, dt, myColor());
+  if (roomCode) {
+    hud.update(
+      { view, me, firstPerson: cam.kind === 'first', locked: input.locked || ui.isTouch, touch: ui.isTouch, roundWinner, matchWinner },
+      dt,
+    );
+  }
   requestAnimationFrame(frame);
 }
 
@@ -611,17 +761,14 @@ function frame(): void {
 // Boot
 // ---------------------------------------------------------------------------
 
-window.addEventListener('resize', () => {
-  renderer.resize();
-  refreshLayout();
-});
+window.addEventListener('resize', () => scene.resize());
 window.setInterval(() => net.send({ t: 'ping', c: performance.now() }), C.PING_INTERVAL_MS);
 
 const params = new URLSearchParams(location.search);
 const fromUrl = (params.get('room') ?? '').trim().toUpperCase();
 ui.showMenu('');
+hud.setVisible(false);
 if (ROOM_CODE_PATTERN.test(fromUrl)) joinRoom(fromUrl);
 else if (fromUrl) ui.setMenuError(`"${fromUrl}" isn't a valid room code.`);
 net.connect();
-refreshLayout();
 requestAnimationFrame(frame);

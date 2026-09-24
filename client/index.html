@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#140e38" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="description" content="RECOIL: an online party brawler for up to 8 players where the only way to move is to shoot." />
+    <meta name="description" content="RECOIL: a first-person online rooftop brawler for up to 8 players. Every shot kicks you backwards." />
     <title>RECOIL</title>
     <link
       rel="icon"
@@ -714,17 +714,41 @@
         box-shadow: 0 2px 0 var(--ink);
         background: var(--sky);
       }
-      .aim {
-        width: 80px;
-        height: 80px;
-        font-size: 28px;
+      #t-look {
+        position: absolute;
+        inset: 0;
+        pointer-events: auto;
+        touch-action: none;
+      }
+      #t-stick {
+        position: absolute;
+        left: max(22px, env(safe-area-inset-left));
         bottom: max(26px, env(safe-area-inset-bottom));
+        width: 128px;
+        height: 128px;
+        border: 4px solid var(--ink);
+        border-radius: 50%;
+        background: rgba(255, 246, 224, 0.35);
+        pointer-events: auto;
+        touch-action: none;
+        display: grid;
+        place-items: center;
       }
-      #t-left {
-        left: max(16px, env(safe-area-inset-left));
+      #t-knob {
+        width: 56px;
+        height: 56px;
+        border: 4px solid var(--ink);
+        border-radius: 50%;
+        background: var(--paper);
+        box-shadow: 0 4px 0 var(--ink);
+        pointer-events: none;
       }
-      #t-right {
-        left: calc(max(16px, env(safe-area-inset-left)) + 92px);
+      #t-jump {
+        width: 78px;
+        height: 78px;
+        right: calc(max(18px, env(safe-area-inset-right)) + 142px);
+        bottom: max(30px, env(safe-area-inset-bottom));
+        font-size: 15px;
       }
       .fire {
         width: 132px;
@@ -740,6 +764,246 @@
       }
       .fire.pressed {
         background: var(--yellow);
+      }
+
+      /* First-person HUD ------------------------------------------------ */
+      #fps {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        font-family: var(--font);
+        color: var(--paper);
+      }
+      #crosshair {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 64px;
+        height: 64px;
+        transform: translate(-50%, -50%);
+      }
+      #crosshair svg {
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      #crosshair .ring-bg {
+        fill: none;
+        stroke: rgba(27, 16, 48, 0.45);
+        stroke-width: 5;
+      }
+      #charge-ring {
+        fill: none;
+        stroke: var(--paper);
+        stroke-width: 5;
+        stroke-linecap: round;
+        transform: rotate(-90deg);
+        transform-origin: 32px 32px;
+      }
+      #crosshair.full #charge-ring {
+        stroke: var(--yellow);
+      }
+      #crosshair .tick {
+        stroke: var(--paper);
+        stroke-width: 3;
+        stroke-linecap: round;
+        filter: drop-shadow(0 0 1.5px var(--ink));
+      }
+      #hitmarker {
+        position: absolute;
+        inset: 8px;
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      #hitmarker.on {
+        opacity: 1;
+        transition: none;
+      }
+      #hitmarker::before,
+      #hitmarker::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 60px;
+        height: 4px;
+        margin: -2px 0 0 -30px;
+        background: linear-gradient(90deg, var(--yellow) 0 30%, transparent 30% 70%, var(--yellow) 70%);
+        transform: rotate(45deg);
+      }
+      #hitmarker::after {
+        transform: rotate(-45deg);
+      }
+      #scorebar {
+        position: absolute;
+        top: max(12px, env(safe-area-inset-top));
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+        max-width: calc(100% - 240px);
+      }
+      .sb {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 9px 4px 5px;
+        border: 3px solid var(--ink);
+        border-radius: 12px;
+        background: var(--paper);
+        color: var(--ink);
+        box-shadow: 3px 3px 0 var(--ink);
+        font-size: 12px;
+      }
+      .sb.out {
+        opacity: 0.45;
+      }
+      .sb.me {
+        background: var(--yellow);
+      }
+      .sb .pdot {
+        width: 16px;
+        height: 16px;
+        border: 3px solid var(--ink);
+        border-radius: 50%;
+        background: var(--c);
+      }
+      .sb .pts {
+        letter-spacing: 1px;
+      }
+      #center-text {
+        position: absolute;
+        left: 50%;
+        top: 30%;
+        transform: translate(-50%, -50%) rotate(-3deg);
+        font-size: clamp(40px, 11vw, 110px);
+        line-height: 1;
+        white-space: nowrap;
+        color: var(--yellow);
+        -webkit-text-stroke: 5px var(--ink);
+        paint-order: stroke fill;
+        text-shadow: 6px 6px 0 var(--magenta), -4px -3px 0 var(--cyan);
+      }
+      #center-text.small {
+        font-size: clamp(28px, 6vw, 60px);
+      }
+      #sub-text {
+        position: absolute;
+        left: 50%;
+        top: calc(30% + clamp(40px, 8vw, 80px));
+        transform: translateX(-50%);
+        max-width: calc(100% - 32px);
+        padding: 6px 14px;
+        border: 3px solid var(--ink);
+        border-radius: 12px;
+        background: var(--paper);
+        color: var(--ink);
+        box-shadow: 4px 4px 0 var(--ink);
+        font-size: 15px;
+        text-align: center;
+      }
+      #feed {
+        position: absolute;
+        right: max(12px, env(safe-area-inset-right));
+        top: calc(max(12px, env(safe-area-inset-top)) + 52px);
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        font-size: 13px;
+      }
+      .feed-line {
+        padding: 3px 9px;
+        border: 3px solid var(--ink);
+        border-radius: 10px;
+        background: var(--paper);
+        color: var(--ink);
+        box-shadow: 3px 3px 0 var(--ink);
+        animation: feed-in 0.2s ease-out;
+      }
+      .feed-line b {
+        color: var(--c);
+        -webkit-text-stroke: 1px var(--ink);
+      }
+      @keyframes feed-in {
+        from {
+          transform: translateX(30px);
+          opacity: 0;
+        }
+      }
+      #vitals {
+        position: absolute;
+        left: max(16px, env(safe-area-inset-left));
+        bottom: max(14px, env(safe-area-inset-bottom));
+        display: flex;
+        align-items: flex-end;
+        gap: 10px;
+      }
+      #dmg {
+        font-size: 54px;
+        line-height: 1;
+        color: #fff;
+        -webkit-text-stroke: 4px var(--ink);
+        paint-order: stroke fill;
+        text-shadow: 4px 4px 0 var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+      #dmg small {
+        font-size: 26px;
+      }
+      #chips {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 6px;
+      }
+      .chip {
+        padding: 2px 8px;
+        border: 3px solid var(--ink);
+        border-radius: 9px;
+        background: var(--c);
+        color: var(--ink);
+        font-size: 11px;
+        box-shadow: 2px 2px 0 var(--ink);
+      }
+      #lock-hint {
+        position: absolute;
+        left: 50%;
+        top: 62%;
+        transform: translateX(-50%);
+        padding: 10px 18px;
+        border: 3px solid var(--ink);
+        border-radius: 14px;
+        background: var(--yellow);
+        color: var(--ink);
+        box-shadow: 5px 5px 0 var(--ink);
+        font-size: 16px;
+        text-align: center;
+        white-space: nowrap;
+      }
+      #vignette {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse at center, transparent 55%, rgba(255, 40, 70, 0.55));
+        opacity: 0;
+      }
+      #fps.touch #crosshair {
+        width: 52px;
+        height: 52px;
+      }
+      #fps.touch #vitals {
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: auto;
+        top: calc(max(12px, env(safe-area-inset-top)) + 46px);
+      }
+      #fps.touch #dmg {
+        font-size: 34px;
+      }
+      #lobby.locked {
+        display: none;
       }
     </style>
   </head>
@@ -761,12 +1025,33 @@
       </div>
     </div>
 
+    <div id="fps" class="hidden">
+      <div id="crosshair">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <circle class="ring-bg" cx="32" cy="32" r="20" />
+          <circle id="charge-ring" cx="32" cy="32" r="20" stroke-dasharray="125.66" stroke-dashoffset="125.66" />
+          <path class="tick" d="M32 26v-5M32 38v5M26 32h-5M38 32h5" />
+        </svg>
+        <div id="hitmarker"></div>
+      </div>
+      <div id="scorebar"></div>
+      <div id="center-text"></div>
+      <div id="sub-text" class="hidden"></div>
+      <div id="feed"></div>
+      <div id="vitals">
+        <div id="dmg">0<small>%</small></div>
+        <div id="chips"></div>
+      </div>
+      <div id="lock-hint" class="hidden">Click to play</div>
+      <div id="vignette"></div>
+    </div>
+
     <div id="banner" class="hidden"></div>
 
     <section id="menu" class="overlay scroll">
       <div class="panel">
         <h1 class="logo">RECOIL</h1>
-        <p class="tag">You can't walk. Every shot kicks you backwards.<br />Last one on the roof wins. Up to 8 players.</p>
+        <p class="tag">A first-person rooftop brawl. Every shot kicks you backwards.<br />Last one on the roof wins. Up to 8 players.</p>
 
         <div class="field-label">Your name</div>
         <input id="name-input" class="text-input" autocomplete="off" spellcheck="false" placeholder="Player" aria-label="Your name" />
@@ -784,9 +1069,9 @@
         </form>
         <p id="menu-error" class="error" role="alert"></p>
         <div class="help">
-          Aim <kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd><br />
-          Hold <kbd>Space</kbd>, <kbd>W</kbd> or <kbd>↑</kbd> to charge, release to fire<br />
-          Grab power-ups. Knock everyone off. First to 5 wins.
+          Move <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> · Jump <kbd>Space</kbd> · Look with the mouse<br />
+          Hold the left mouse button to charge, release to fire<br />
+          Shoot the floor to rocket-jump. Knock everyone off. First to 5 wins.
         </div>
       </div>
     </section>
@@ -825,8 +1110,9 @@
     </aside>
 
     <div id="touch" class="hidden">
-      <div id="t-left" class="tbtn aim" role="button" aria-label="Aim left">◀</div>
-      <div id="t-right" class="tbtn aim" role="button" aria-label="Aim right">▶</div>
+      <div id="t-look" aria-label="Drag to look around"></div>
+      <div id="t-stick" role="button" aria-label="Move"><div id="t-knob"></div></div>
+      <div id="t-jump" class="tbtn" role="button" aria-label="Jump">JUMP</div>
       <div id="t-fire" class="tbtn fire" role="button" aria-label="Hold to charge, release to fire">FIRE</div>
     </div>
 
