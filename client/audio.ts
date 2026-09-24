@@ -224,6 +224,57 @@ export class Sfx {
     this.noiseBurst('bandpass', 900, 2400, 1.2, 0.08, 0.05 * volume, pan);
   }
 
+  /** A shot from a specific weapon (0 Blaster, 1 Scatter, 2 Longshot, 3 Boomer, 4 Pepper). */
+  shot(weapon: number, charge: number, pan: number, volume = 1): void {
+    switch (weapon) {
+      case 1: // Scatter: a fat crack of noise.
+        this.noiseBurst('lowpass', 5000, 400, 0.8, 0.22, 0.45 * volume, pan);
+        this.tone('square', 180, 60, 0.12, 0.12 * volume, pan);
+        this.click(3000, 0.3 * volume, pan, 0.015);
+        break;
+      case 2: // Longshot: a zap that rises with the charge.
+        this.tone('sawtooth', 900 + charge * 1400, 120, 0.18 + charge * 0.12, (0.1 + charge * 0.1) * volume, pan);
+        this.tone('sine', 2400, 300, 0.25, 0.08 * volume, pan);
+        this.click(7000, 0.2 * volume, pan, 0.01);
+        break;
+      case 3: // Boomer: a hollow tube thunk.
+        this.tone('sine', 220, 70, 0.2, 0.35 * volume, pan);
+        this.noiseBurst('bandpass', 600, 200, 1.5, 0.15, 0.15 * volume, pan);
+        break;
+      case 4: // Pepper: tiny ticks.
+        this.tone('square', 1300 + Math.random() * 300, 600, 0.03, 0.05 * volume, pan);
+        this.click(6000, 0.08 * volume, pan, 0.006);
+        break;
+      default:
+        this.fire(charge, pan);
+    }
+  }
+
+  /** A bomb bursting. */
+  boom(size: number, pan: number): void {
+    const k = Math.min(1, size / 4);
+    this.noiseBurst('lowpass', 2400, 90, 0.7, 0.55, 0.5 + 0.2 * k, pan, 0.002);
+    this.tone('sine', 120, 35, 0.45, 0.5, pan);
+    this.click(2500, 0.25, pan, 0.02);
+  }
+
+  /** Jump pad: a springy whoomp. */
+  pad(pan: number): void {
+    this.boing(180, 0.4, 0.3, pan);
+    this.tone('triangle', 300, 1200, 0.25, 0.12, pan);
+  }
+
+  /** Sliding: a swish across the roof. */
+  slide(pan: number, volume = 1): void {
+    this.noiseBurst('bandpass', 1800, 500, 0.9, 0.4, 0.18 * volume, pan, 0.02);
+  }
+
+  /** Pulling yourself up a ledge. */
+  mantle(pan: number, volume = 1): void {
+    this.noiseBurst('bandpass', 700, 1600, 1.2, 0.12, 0.12 * volume, pan);
+    this.tone('triangle', 200, 340, 0.1, 0.08 * volume, pan, 0.04);
+  }
+
   /** Soft thump when you land. */
   land(force: number): void {
     const k = Math.min(1, force / 20);

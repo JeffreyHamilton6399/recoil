@@ -1,8 +1,8 @@
 // Keyboard, mouse and touch input for first-person play.
-// Keyboard: WASD or arrows to move, Space to jump. Mouse: look (with pointer
-// lock) and hold the left button to charge, release to fire.
-// Touch: a move stick on the left, drag anywhere else to look, and
-// FIRE / JUMP buttons.
+// Keyboard: WASD or arrows to move, Space to jump, Shift to sprint, C to
+// slide. Mouse: look (with pointer lock) and hold the left button to fire.
+// Touch: a move stick on the left (push it all the way to sprint), drag
+// anywhere else to look, and FIRE / JUMP / SLIDE buttons.
 //
 // The look direction changes every frame; everything else is sampled once
 // per simulation tick with sample(), so short taps are never lost.
@@ -11,7 +11,7 @@ import * as C from '../shared/constants.js';
 import { clamp, wrapAngle } from '../shared/sim.js';
 import type { InputState } from '../shared/types.js';
 
-type Key = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'fire';
+type Key = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'fire' | 'sprint' | 'crouch';
 
 const KEYS: Record<string, Key> = {
   KeyW: 'forward',
@@ -24,6 +24,9 @@ const KEYS: Record<string, Key> = {
   ArrowRight: 'right',
   Space: 'jump',
   KeyF: 'fire',
+  ShiftLeft: 'sprint',
+  ShiftRight: 'sprint',
+  KeyC: 'crouch',
 };
 
 /** Radians per pixel of touch drag. */
@@ -37,6 +40,7 @@ export interface TouchElements {
   look: HTMLElement;
   fire: HTMLElement;
   jump: HTMLElement;
+  slide: HTMLElement;
 }
 
 export class Input {
@@ -52,9 +56,11 @@ export class Input {
   private mouseFire = false;
   private touchFire = new Set<number>();
   private touchJump = new Set<number>();
+  private touchSlide = new Set<number>();
   /** Presses since the last sample, so a tap shorter than a tick still counts. */
   private fireLatch = false;
   private jumpLatch = false;
+  private crouchLatch = false;
   private stickId: number | null = null;
   private stickOrigin = { x: 0, y: 0 };
   private stick = { x: 0, y: 0 };
@@ -74,6 +80,7 @@ export class Input {
       this.keys.set(e.code, key);
       if (key === 'jump') this.jumpLatch = true;
       if (key === 'fire') this.fireLatch = true;
+      if (key === 'crouch') this.crouchLatch = true;
       this.fireChanged();
     });
     window.addEventListener('keyup', (e) => {
@@ -165,7 +172,9 @@ export class Input {
   sample(): InputState {
     let forward = (this.held('forward') ? 1 : 0) - (this.held('back') ? 1 : 0);
     let strafe = (this.held('right') ? 1 : 0) - (this.held('left') ? 1 : 0);
+    let sprint = this.held('sprint');
     if (this.stickId !== null) {
+      sprint = -this.stick.y / STICK_RANGE > 0.9;
       forward = clamp(-this.stick.y / STICK_RANGE, -1, 1);
       strafe = clamp(this.stick.x / STICK_RANGE, -1, 1);
       // Round to 2 decimals to keep messages small; tiny wobbles are dead zone.
@@ -177,11 +186,14 @@ export class Input {
       strafe,
       jump: this.held('jump') || this.touchJump.size > 0 || this.jumpLatch,
       firing: this.firing || this.fireLatch,
+      sprint,
+      crouch: this.held('crouch') || this.touchSlide.size > 0 || this.crouchLatch,
       yaw: Math.round(this.yaw * 10000) / 10000,
       pitch: Math.round(this.pitch * 10000) / 10000,
     };
     this.fireLatch = false;
     this.jumpLatch = false;
+    this.crouchLatch = false;
     return s;
   }
 
@@ -190,6 +202,7 @@ export class Input {
     this.mouseFire = false;
     this.touchFire.clear();
     this.touchJump.clear();
+    this.touchSlide.clear();
     this.stickId = null;
     this.lookId = null;
     this.stick = { x: 0, y: 0 };
@@ -203,7 +216,7 @@ export class Input {
   // -------------------------------------------------------------------------
 
   private bindTouch(): void {
-    const { stick, knob, look, fire, jump } = this.touch;
+    const { stick, knob, look, fire, jump, slide } = this.touch;
 
     const capture = (el: HTMLElement, e: PointerEvent): void => {
       e.preventDefault();
@@ -275,6 +288,7 @@ export class Input {
     };
     button(fire, this.touchFire, () => (this.fireLatch = true));
     button(jump, this.touchJump, () => (this.jumpLatch = true));
+    button(slide, this.touchSlide, () => (this.crouchLatch = true));
   }
 
   private moveStick(e: PointerEvent): void {

@@ -1,6 +1,7 @@
-// The 3D world, drawn with three.js: a city at dusk, the tower whose roof is
-// the arena (it shrinks with the arena), bumper pillars, players, bullets,
-// power-ups, particles, comic words and the first-person gun.
+// The 3D world, drawn with three.js and inked by ink.ts: a city at dusk,
+// the tower whose roof is the arena (it shrinks with the arena), obstacles
+// and jump pads, bumper pillars, players with their guns, bullets,
+// power-ups, particles, comic words and your own gun in first person.
 //
 // Simulation coordinates are x, y horizontal and z up. three.js uses y up,
 // so a sim point (x, y, z) is drawn at (x, z, -y), which keeps handedness.
@@ -10,7 +11,12 @@ import * as C from '../shared/constants.js';
 import { MAPS, mapScale, scaledBumpers, type MapDef } from '../shared/maps.js';
 import { clamp } from '../shared/sim.js';
 import { FX_SHIELD, type GameEvent, type PlayerId, type PowerupKind, type RosterEntry } from '../shared/types.js';
+import { weaponDef } from '../shared/weapons.js';
 import { FONT, INK, POWERUP_STYLE, arenaOutline, makeSurfaceCanvas } from './art.js';
+import { makeGun, type Gun } from './guns.js';
+import { Inker } from './ink.js';
+import { buildBlocks, buildPads, type Pads } from './props.js';
+import { GLOW, TOON, disposeTree, glowSprite, outlined, toon } from './toon.js';
 
 // ---------------------------------------------------------------------------
 // View types (what main.ts hands the renderer each frame)
@@ -28,11 +34,14 @@ export interface ViewPlayer {
   /** Seconds since falling, or -1 while standing. */
   fallTime: number;
   fx: number;
+  weapon: number;
+  sliding: boolean;
 }
 
 export interface ViewBullet {
   id: number;
   owner: PlayerId;
+  weapon: number;
   x: number;
   y: number;
   z: number;
@@ -65,11 +74,25 @@ export interface View {
 
 /** Where the camera is: your own eyes, or circling the roof. */
 export type CameraView =
-  | { kind: 'first'; x: number; y: number; z: number; yaw: number; pitch: number; speed: number; grounded: boolean; charge: number }
+  | {
+      kind: 'first';
+      x: number;
+      y: number;
+      /** Eye height (sim z). */
+      z: number;
+      yaw: number;
+      pitch: number;
+      speed: number;
+      grounded: boolean;
+      charge: number;
+      weapon: number;
+      sprinting: boolean;
+      sliding: boolean;
+    }
   | { kind: 'orbit' };
 
 // ---------------------------------------------------------------------------
-// Constants and shared resources
+// Constants
 // ---------------------------------------------------------------------------
 
 /** How far the tower drops to the street. */
@@ -79,7 +102,8 @@ const SKY_MID = new THREE.Color('#5b3a8c');
 const SKY_HORIZON = new THREE.Color('#ff9a86');
 const FOG = new THREE.Color('#9a5a8e');
 const SUN_DIR = new THREE.Vector3(-0.75, 0.22, 0.62).normalize();
-const WORDS = ['POW!', 'BAM!', 'WHAM!', 'KA-POW!', 'BOOM!', 'SMASH!', 'THWACK!'];
+const WORDS = ['POW!', 'BAM!', 'WHAM!', 'KA-POW!', 'SMASH!', 'THWACK!'];
+const BOOM_WORDS = ['KABOOM!', 'BOOM!', 'KRAKOOM!'];
 
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
@@ -100,37 +124,9 @@ function prng(seed: number): () => number {
   };
 }
 
-/** Three-step ramp for cel shading. */
-function toonRamp(): THREE.DataTexture {
-  const tex = new THREE.DataTexture(new Uint8Array([70, 160, 255]), 3, 1, THREE.RedFormat);
-  tex.minFilter = THREE.NearestFilter;
-  tex.magFilter = THREE.NearestFilter;
-  tex.generateMipmaps = false;
-  tex.needsUpdate = true;
-  return tex;
-}
-const TOON = toonRamp();
-/** Inverted-hull ink outline. */
-const OUTLINE = new THREE.MeshBasicMaterial({ color: INK, side: THREE.BackSide });
-
-function glowTexture(): THREE.CanvasTexture {
-  const cv = document.createElement('canvas');
-  cv.width = 64;
-  cv.height = 64;
-  const ctx = cv.getContext('2d');
-  if (ctx) {
-    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.3, 'rgba(255,255,255,0.55)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 64, 64);
-  }
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-const GLOW = glowTexture();
+// ---------------------------------------------------------------------------
+// Textures
+// ---------------------------------------------------------------------------
 
 /** Office windows: a wall texture (white walls, dark frames) and a glow texture (lit windows). */
 function windowTextures(seed: number, cols: number, rows: number): { wall: THREE.CanvasTexture; glow: THREE.CanvasTexture } {
@@ -210,30 +206,6 @@ function streetTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-function disposeTree(root: THREE.Object3D): void {
-  root.traverse((o) => {
-    const mesh = o as THREE.Mesh;
-    if (mesh.geometry) mesh.geometry.dispose();
-    const mats = mesh.material ? (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) : [];
-    for (const m of mats) {
-      if (m === OUTLINE) continue;
-      for (const v of Object.values(m)) if (v instanceof THREE.Texture && v !== TOON && v !== GLOW) v.dispose();
-      m.dispose();
-    }
-  });
-}
-
-function outlined(mesh: THREE.Mesh, thickness = 1.06): THREE.Mesh {
-  const o = new THREE.Mesh(mesh.geometry, OUTLINE);
-  o.scale.setScalar(thickness);
-  mesh.add(o);
-  return mesh;
-}
-
-// ---------------------------------------------------------------------------
-// Text sprites (name tags and comic words)
-// ---------------------------------------------------------------------------
-
 function textCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D | null] {
   const cv = document.createElement('canvas');
   cv.width = w;
@@ -245,9 +217,9 @@ const wordTextures = new Map<string, THREE.CanvasTexture>();
 function wordTexture(word: string): THREE.CanvasTexture {
   let tex = wordTextures.get(word);
   if (tex) return tex;
-  const [cv, ctx] = textCanvas(512, 192);
+  const [cv, ctx] = textCanvas(640, 192);
   if (ctx) {
-    ctx.font = `900 112px ${FONT}`;
+    ctx.font = `900 108px ${FONT}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
@@ -255,12 +227,12 @@ function wordTexture(word: string): THREE.CanvasTexture {
     ctx.strokeStyle = INK;
     // Off-register cyan and magenta, like cheap comic printing.
     ctx.fillStyle = '#00e1ff';
-    ctx.fillText(word, 262, 100);
+    ctx.fillText(word, 326, 100);
     ctx.fillStyle = '#ff2e88';
-    ctx.fillText(word, 250, 92);
-    ctx.strokeText(word, 256, 96);
+    ctx.fillText(word, 314, 92);
+    ctx.strokeText(word, 320, 96);
     ctx.fillStyle = '#ffd93d';
-    ctx.fillText(word, 256, 96);
+    ctx.fillText(word, 320, 96);
   }
   tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -273,49 +245,45 @@ function wordTexture(word: string): THREE.CanvasTexture {
 // ---------------------------------------------------------------------------
 
 interface Rig {
+  key: string;
   group: THREE.Group;
-  body: THREE.Mesh;
+  body: THREE.Group;
   bodyMat: THREE.MeshToonMaterial;
   gunPivot: THREE.Group;
-  muzzleMat: THREE.MeshBasicMaterial;
+  gun: Gun;
   shield: THREE.Mesh;
   label: THREE.Sprite;
   labelCtx: CanvasRenderingContext2D | null;
   labelTex: THREE.CanvasTexture;
   labelText: string;
-  color: string;
   flash: number;
+  lean: number;
 }
 
-function makeRig(color: string): Rig {
+function makeRig(color: string, weapon: number): Rig {
   const group = new THREE.Group();
-  const bodyMat = new THREE.MeshToonMaterial({ color, gradientMap: TOON, emissive: new THREE.Color('#ffffff'), emissiveIntensity: 0 });
-  const body = outlined(new THREE.Mesh(new THREE.CapsuleGeometry(C.PLAYER_RADIUS, C.PLAYER_HEIGHT - C.PLAYER_RADIUS * 2, 6, 16), bodyMat));
-  body.position.y = C.PLAYER_HEIGHT / 2;
-  body.castShadow = true;
+  const body = new THREE.Group();
   group.add(body);
+  const bodyMat = new THREE.MeshToonMaterial({ color, gradientMap: TOON, emissive: new THREE.Color('#ffffff'), emissiveIntensity: 0 });
+  const torso = outlined(new THREE.Mesh(new THREE.CapsuleGeometry(C.PLAYER_RADIUS, C.PLAYER_HEIGHT - C.PLAYER_RADIUS * 2, 6, 16), bodyMat));
+  torso.position.y = C.PLAYER_HEIGHT / 2;
+  torso.castShadow = true;
+  body.add(torso);
 
   // Visor, facing -z (the rig's forward).
   const visor = new THREE.Mesh(
     new THREE.BoxGeometry(0.62, 0.2, 0.3),
     new THREE.MeshStandardMaterial({ color: INK, emissive: new THREE.Color('#00e1ff'), emissiveIntensity: 0.7, roughness: 0.2 }),
   );
-  visor.position.set(0, C.EYE_HEIGHT - C.PLAYER_HEIGHT / 2, -0.3);
+  visor.position.set(0, C.EYE_HEIGHT, -0.3);
   body.add(visor);
 
   // Gun on the right shoulder, pitched with the aim.
   const gunPivot = new THREE.Group();
   gunPivot.position.set(0.42, 1.2, -0.05);
-  const gunMat = new THREE.MeshToonMaterial({ color: '#2b2250', gradientMap: TOON });
-  const gun = outlined(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.2, 0.7), gunMat), 1.12);
-  gun.position.z = -0.3;
-  gunPivot.add(gun);
-  const muzzleMat = new THREE.MeshBasicMaterial({ color });
-  const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.14, 12), muzzleMat);
-  muzzle.rotation.x = Math.PI / 2;
-  muzzle.position.z = -0.68;
-  gunPivot.add(muzzle);
-  group.add(gunPivot);
+  const gun = makeGun(weapon, color);
+  gunPivot.add(gun.group);
+  body.add(gunPivot);
 
   const shield = new THREE.Mesh(
     new THREE.SphereGeometry(1.2, 24, 16),
@@ -333,7 +301,7 @@ function makeRig(color: string): Rig {
   label.position.y = C.PLAYER_HEIGHT + 0.55;
   group.add(label);
 
-  return { group, body, bodyMat, gunPivot, muzzleMat, shield, label, labelCtx, labelTex, labelText: '', color, flash: 0 };
+  return { key: `${color}|${weapon}`, group, body, bodyMat, gunPivot, gun, shield, label, labelCtx, labelTex, labelText: '', flash: 0, lean: 0 };
 }
 
 function drawLabel(rig: Rig, name: string, damage: number): void {
@@ -364,12 +332,12 @@ function drawLabel(rig: Rig, name: string, damage: number): void {
 }
 
 // ---------------------------------------------------------------------------
-// Particles: one additive point cloud for sparks, smoke and confetti
+// Particles: one additive point cloud for sparks, dust and confetti
 // ---------------------------------------------------------------------------
 
 class Particles {
   readonly points: THREE.Points;
-  private readonly n = 2500;
+  private readonly n = 3000;
   private readonly pos: Float32Array;
   private readonly col: Float32Array;
   private readonly base: Float32Array;
@@ -462,6 +430,7 @@ class Particles {
 interface BulletObj {
   group: THREE.Group;
   tail: THREE.Mesh;
+  weapon: number;
 }
 
 interface PowerupObj {
@@ -476,8 +445,15 @@ interface Word {
   size: number;
 }
 
+interface Shock {
+  mesh: THREE.Mesh;
+  life: number;
+  radius: number;
+}
+
 export class Scene3D {
   private readonly renderer: THREE.WebGLRenderer;
+  private readonly inker: Inker;
   private readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(C.FOV, 1, 0.05, 2000);
   private readonly sky: THREE.Mesh;
@@ -487,18 +463,22 @@ export class Scene3D {
   private mapIndex = -1;
   private arena = new THREE.Group();
   private edgeMat: THREE.MeshBasicMaterial | null = null;
+  private pads: Pads | null = null;
 
   private readonly rigs = new Map<PlayerId, Rig>();
   private readonly bullets = new Map<number, BulletObj>();
   private readonly powerups = new Map<number, PowerupObj>();
   private words: Word[] = [];
+  private shocks: Shock[] = [];
 
   private readonly viewmodel = new THREE.Group();
-  private readonly vmGlow: THREE.Sprite;
-  private readonly vmCoilMat: THREE.MeshBasicMaterial;
-  private vmColor = '';
+  private vmGun: Gun | null = null;
+  private vmKey = '';
   private kick = 0;
+  private flashTime = 0;
   private bob = 0;
+  private fov = C.FOV;
+  private roll = 0;
 
   private trauma = 0;
   private time = 0;
@@ -507,13 +487,14 @@ export class Scene3D {
   private readonly tailGeo = new THREE.ConeGeometry(1, 1, 10, 1, true).translate(0, 0.5, 0);
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.inker = new Inker(this.renderer);
 
     this.scene.fog = new THREE.Fog(FOG, 90, 700);
 
@@ -542,13 +523,14 @@ export class Scene3D {
           varying vec3 vDir;
           void main() {
             float h = vDir.y;
-            vec3 c = mix(horizon, mid, smoothstep(0.0, 0.25, h));
-            c = mix(c, top, smoothstep(0.25, 0.8, h));
+            // Banded like a painted sky, not a smooth gradient.
+            float band = floor(h * 14.0) / 14.0;
+            vec3 c = mix(horizon, mid, smoothstep(0.0, 0.25, band));
+            c = mix(c, top, smoothstep(0.25, 0.8, band));
             c = mix(c, fogColor, smoothstep(0.02, -0.08, h));
             float sun = max(dot(vDir, sunDir), 0.0);
-            c += vec3(1.0, 0.62, 0.35) * (pow(sun, 8.0) * 0.45 + pow(sun, 400.0) * 2.5);
+            c += vec3(1.0, 0.62, 0.35) * (pow(sun, 8.0) * 0.45 + step(0.9993, sun) * 2.0);
             gl_FragColor = vec4(c, 1.0);
-            #include <colorspace_fragment>
           }`,
       }),
     );
@@ -577,26 +559,8 @@ export class Scene3D {
     this.scene.add(this.arena);
     this.scene.add(this.particles.points);
 
-    // First-person gun, attached to the camera.
-    const vmGunMat = new THREE.MeshToonMaterial({ color: '#2b2250', gradientMap: TOON });
-    const body = outlined(new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.15, 0.55), vmGunMat), 1.08);
-    body.position.z = -0.05;
-    this.viewmodel.add(body);
-    const barrel = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.35, 12), vmGunMat), 1.12);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.02, -0.45);
-    this.viewmodel.add(barrel);
-    this.vmCoilMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-    for (const z of [-0.12, 0.02, 0.16]) {
-      const coil = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.022, 8, 20), this.vmCoilMat);
-      coil.position.set(0, 0, z);
-      this.viewmodel.add(coil);
-    }
-    this.vmGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color: '#ffffff', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-    this.vmGlow.position.set(0, 0.02, -0.66);
-    this.viewmodel.add(this.vmGlow);
-    this.viewmodel.position.set(0.2, -0.19, -0.5);
-    this.viewmodel.scale.setScalar(0.6);
+    // Your gun, attached to the camera.
+    this.viewmodel.scale.setScalar(0.48);
     this.camera.add(this.viewmodel);
     this.scene.add(this.camera);
 
@@ -607,6 +571,7 @@ export class Scene3D {
     const w = Math.max(1, window.innerWidth);
     const h = Math.max(1, window.innerHeight);
     this.renderer.setSize(w, h, false);
+    this.inker.setSize(w, h, this.renderer.getPixelRatio());
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -634,10 +599,7 @@ export class Scene3D {
 
   private makeCity(): THREE.Group {
     const city = new THREE.Group();
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(4000, 4000),
-      new THREE.MeshLambertMaterial({ map: streetTexture(), color: '#b8a8d8' }),
-    );
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshLambertMaterial({ map: streetTexture(), color: '#b8a8d8' }));
     const gmap = (ground.material as THREE.MeshLambertMaterial).map;
     if (gmap) gmap.repeat.set(4000 / 32, 4000 / 32);
     ground.rotation.x = -Math.PI / 2;
@@ -724,12 +686,7 @@ export class Scene3D {
     // Hazard stripe around the edge and around every hole.
     this.edgeMat = new THREE.MeshBasicMaterial({ color: '#ffd93d', transparent: true, opacity: 0.9, depthWrite: false });
     const ring = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
-    const inner = new THREE.Path(
-      arenaOutline(map, R - 0.45)
-        .map(([x, y]) => new THREE.Vector2(x, y))
-        .reverse(),
-    );
-    ring.holes.push(inner);
+    ring.holes.push(new THREE.Path(arenaOutline(map, R - 0.45).map(([x, y]) => new THREE.Vector2(x, y)).reverse()));
     const edge = new THREE.Mesh(new THREE.ShapeGeometry(ring, 40), this.edgeMat);
     edge.position.z = 0.02;
     roof.add(edge);
@@ -740,8 +697,13 @@ export class Scene3D {
     }
     this.arena.add(roof);
 
+    // Obstacles and jump pads.
+    this.arena.add(buildBlocks(map, S));
+    this.pads = buildPads(map, S);
+    this.arena.add(this.pads.group);
+
     // Bumper pillars.
-    const bumperMat = new THREE.MeshToonMaterial({ color: map.theme.bumper, gradientMap: TOON });
+    const bumperMat = toon(map.theme.bumper);
     const capMat = new THREE.MeshBasicMaterial({ color: '#fff6e0' });
     for (const b of scaledBumpers(map, R)) {
       const g = new THREE.Group();
@@ -780,13 +742,13 @@ export class Scene3D {
       seen.add(p.id);
       const color = this.colorOf(view, p.id);
       let rig = this.rigs.get(p.id);
-      if (rig && rig.color !== color) {
+      if (rig && rig.key !== `${color}|${p.weapon}`) {
         this.scene.remove(rig.group);
         disposeTree(rig.group);
         rig = undefined;
       }
       if (!rig) {
-        rig = makeRig(color);
+        rig = makeRig(color, p.weapon);
         this.rigs.set(p.id, rig);
         this.scene.add(rig.group);
       }
@@ -794,17 +756,20 @@ export class Scene3D {
       rig.group.visible = !gone && !(cam.kind === 'first' && p.id === view.myId);
       toThree(p.x, p.y, p.z, rig.group.position);
       rig.group.rotation.set(0, p.yaw - Math.PI / 2, 0);
+      // Lean back into a slide.
+      rig.lean += ((p.sliding ? 1 : 0) - rig.lean) * Math.min(1, dt * 12);
+      rig.body.rotation.x = rig.lean * 0.9;
+      rig.body.position.y = -rig.lean * 0.2;
       if (p.fallTime >= 0) {
         // Tumble as you fall.
         rig.group.rotation.x = p.fallTime * 3;
         rig.group.rotation.z = p.fallTime * 2;
       }
-      rig.gunPivot.rotation.x = p.pitch;
+      rig.gunPivot.rotation.x = p.pitch - rig.lean * 0.9;
       rig.shield.visible = (p.fx & FX_SHIELD) !== 0;
       rig.flash = Math.max(0, rig.flash - dt);
       rig.bodyMat.emissiveIntensity = rig.flash > 0 ? 0.8 : 0;
-      const glow = new THREE.Color(color).lerp(new THREE.Color('#ffffff'), p.charge * 0.8);
-      rig.muzzleMat.color.copy(glow);
+      rig.gun.muzzle.scale.setScalar(0.1 + p.charge * 0.4);
       drawLabel(rig, this.nameOf(view, p.id), p.damage);
     }
     for (const [id, rig] of this.rigs) {
@@ -822,19 +787,21 @@ export class Scene3D {
       let obj = this.bullets.get(b.id);
       if (!obj) {
         const color = new THREE.Color(this.colorOf(view, b.owner));
-        const bright = color.clone().lerp(new THREE.Color('#ffffff'), 0.55);
+        const accent = new THREE.Color(weaponDef(b.weapon).accent);
+        // Bombs are dark with a hot glow; everything else is a bright bolt.
+        const core = b.weapon === 3 ? new THREE.Color('#2b2250') : color.clone().lerp(new THREE.Color('#ffffff'), 0.55);
         const group = new THREE.Group();
-        group.add(new THREE.Mesh(this.bulletGeo, new THREE.MeshBasicMaterial({ color: bright })));
-        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-        glow.scale.setScalar(4.5);
-        group.add(glow);
+        const ball = new THREE.Mesh(this.bulletGeo, b.weapon === 3 ? toon(core) : new THREE.MeshBasicMaterial({ color: core }));
+        if (b.weapon === 3) outlined(ball, 1.15);
+        group.add(ball);
+        group.add(glowSprite(b.weapon === 3 ? accent : color, b.weapon === 2 ? 6 : 4.5));
         const tail = new THREE.Mesh(
           this.tailGeo,
           new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
         );
         this.scene.add(tail);
         this.scene.add(group);
-        obj = { group, tail };
+        obj = { group, tail, weapon: b.weapon };
         this.bullets.set(b.id, obj);
       }
       toThree(b.x, b.y, b.z, obj.group.position);
@@ -845,9 +812,15 @@ export class Scene3D {
         obj.tail.visible = true;
         obj.tail.position.copy(obj.group.position);
         obj.tail.quaternion.setFromUnitVectors(UP, v.multiplyScalar(-1 / speed));
-        obj.tail.scale.set(b.r * 0.9, Math.min(4, speed * 0.06), b.r * 0.9);
+        // The Longshot leaves a long streak; pellets barely any.
+        const len = obj.weapon === 2 ? Math.min(9, speed * 0.07) : obj.weapon === 1 || obj.weapon === 4 ? Math.min(1.2, speed * 0.03) : Math.min(4, speed * 0.06);
+        obj.tail.scale.set(b.r * 0.9, len, b.r * 0.9);
       } else {
         obj.tail.visible = false;
+      }
+      if (obj.weapon === 3 && Math.random() < 0.5) {
+        // Bombs trail sparks from their fuse.
+        this.particles.burst(obj.group.position, 1, new THREE.Color(weaponDef(3).accent), 1, 0.3, -1);
       }
     }
     for (const [id, obj] of this.bullets) {
@@ -872,21 +845,19 @@ export class Scene3D {
       if (!obj) {
         const color = POWERUP_STYLE[u.kind].color;
         const group = new THREE.Group();
-        const core = outlined(new THREE.Mesh(new THREE.IcosahedronGeometry(0.38, 0), new THREE.MeshToonMaterial({ color, gradientMap: TOON })), 1.12);
+        const core = outlined(new THREE.Mesh(new THREE.IcosahedronGeometry(0.38, 0), toon(color)), 1.12);
         group.add(core);
         const ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.05, 8, 32), new THREE.MeshBasicMaterial({ color }));
         group.add(ring);
-        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-        glow.scale.setScalar(2.2);
-        group.add(glow);
+        group.add(glowSprite(color, 2.2));
         this.scene.add(group);
         obj = { group, core, ring };
         this.powerups.set(u.id, obj);
       }
       const pop = Math.min(1, u.age * 4);
-      const fade = u.age > C.POWERUP_LIFETIME - 2 ? (Math.sin(u.age * 20) > 0 ? 1 : 0.3) : 1;
+      const blink = u.age > C.POWERUP_LIFETIME - 2 && Math.sin(u.age * 20) < 0;
       toThree(u.x, u.y, C.POWERUP_HEIGHT + Math.sin(u.age * 3) * 0.15, obj.group.position);
-      obj.group.scale.setScalar(pop * (fade > 0.5 ? 1 : 0.8));
+      obj.group.scale.setScalar(pop * (blink ? 0.8 : 1));
       obj.core.rotation.set(u.age * 1.3, u.age * 2, 0);
       obj.ring.rotation.set(Math.PI / 2 + Math.sin(u.age) * 0.4, u.age * 1.7, 0);
     }
@@ -908,7 +879,7 @@ export class Scene3D {
       }
       const age = 0.8 - w.life;
       const pop = age < 0.12 ? age / 0.12 : 1 + (age - 0.12) * 0.25;
-      w.sprite.scale.set(w.size * pop, w.size * 0.375 * pop, 1);
+      w.sprite.scale.set(w.size * pop, w.size * 0.3 * pop, 1);
       w.sprite.material.opacity = Math.min(1, w.life / 0.25);
       w.sprite.position.y += dt * 0.8;
       return true;
@@ -924,6 +895,22 @@ export class Scene3D {
     this.words.push({ sprite, life: 0.8, size });
   }
 
+  private updateShocks(dt: number): void {
+    this.shocks = this.shocks.filter((s) => {
+      s.life -= dt;
+      if (s.life <= 0) {
+        this.scene.remove(s.mesh);
+        s.mesh.geometry.dispose();
+        (s.mesh.material as THREE.Material).dispose();
+        return false;
+      }
+      const t = 1 - s.life / 0.35;
+      s.mesh.scale.setScalar(s.radius * (0.3 + t * 0.9));
+      (s.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - t) * 0.7;
+      return true;
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Events and feedback
   // -------------------------------------------------------------------------
@@ -932,13 +919,21 @@ export class Scene3D {
     this.trauma = Math.min(1, this.trauma + amount);
   }
 
-  /** Your own shot, shown the moment you release (before the server confirms it). */
-  localFire(charge: number, color: string): void {
-    this.kick = Math.min(1.5, this.kick + 0.5 + charge);
-    this.addTrauma(0.08 + charge * 0.2);
-    this.vmGlow.getWorldPosition(tmpV);
+  /** Your own shot, shown the moment you fire (before the server confirms it). */
+  localFire(weapon: number, charge: number, color: string): void {
+    const heavy = weapon === 1 || weapon === 3 ? 1 : weapon === 4 ? 0.15 : charge;
+    this.kick = Math.min(1.5, this.kick + 0.3 + heavy * 0.9);
+    this.flashTime = 0.06;
+    this.addTrauma(0.04 + heavy * 0.18);
+    if (!this.vmGun) return;
+    this.vmGun.muzzle.getWorldPosition(tmpV);
     const dir = this.camera.getWorldDirection(tmpV2);
-    this.particles.burst(tmpV, 10 + Math.round(charge * 16), new THREE.Color(color).lerp(new THREE.Color('#ffffff'), 0.4), 6 + charge * 6, 0.25, 0, dir, 0.6);
+    this.particles.burst(tmpV, 6 + Math.round(heavy * 16), new THREE.Color(color).lerp(new THREE.Color('#ffffff'), 0.4), 5 + heavy * 6, 0.2, 0, dir, 0.6);
+  }
+
+  /** Dust at your feet (or someone else's) when a slide starts. */
+  slideDust(x: number, y: number, z: number): void {
+    this.particles.burst(toThree(x, y, z + 0.1), 18, new THREE.Color('#fff6e0'), 4, 0.45, 3);
   }
 
   /** Plays a server event. Returns true for heavy hits. */
@@ -955,20 +950,46 @@ export class Scene3D {
       case 'hit': {
         const at = toThree(ev.x, ev.y, ev.z);
         const heavy = ev.f >= C.HEAVY_HIT_IMPULSE;
-        this.particles.burst(at, 18 + Math.round(ev.f * 2), new THREE.Color(this.colorOf(view, ev.o)).lerp(white, 0.3), 7 + ev.f * 0.5, 0.5, 6);
-        this.particles.burst(at, 10, new THREE.Color('#ffd93d'), 10, 0.25, 0);
+        this.particles.burst(at, 12 + Math.round(ev.f * 2), new THREE.Color(this.colorOf(view, ev.o)).lerp(white, 0.3), 7 + ev.f * 0.5, 0.5, 6);
+        this.particles.burst(at, 8, new THREE.Color('#ffd93d'), 10, 0.25, 0);
         const rig = this.rigs.get(ev.p);
         if (rig) rig.flash = 0.12;
-        if (heavy) this.addWord(at.add(tmpV.set(0, 0.8, 0)), WORDS[Math.floor(Math.random() * WORDS.length)], 2.4 + ev.f * 0.06);
-        if (ev.p === view.myId) this.addTrauma(0.25 + ev.f / 30);
+        if (heavy) this.addWord(at.add(tmpV.set(0, 0.8, 0)), WORDS[Math.floor(Math.random() * WORDS.length)], 2.6 + ev.f * 0.06);
+        if (ev.p === view.myId) this.addTrauma(0.2 + ev.f / 35);
         return heavy;
+      }
+      case 'boom': {
+        const at = toThree(ev.x, ev.y, ev.z);
+        this.particles.burst(at, 60, new THREE.Color('#ffb347'), 12, 0.6, 4);
+        this.particles.burst(at, 30, new THREE.Color('#fff6e0'), 7, 0.4, 0);
+        this.particles.burst(at, 24, new THREE.Color(weaponDef(3).accent), 9, 0.7, 6);
+        const shock = new THREE.Mesh(
+          new THREE.SphereGeometry(1, 24, 16),
+          new THREE.MeshBasicMaterial({ color: '#ffd93d', transparent: true, opacity: 0.7, depthWrite: false }),
+        );
+        shock.position.copy(at);
+        this.scene.add(shock);
+        this.shocks.push({ mesh: shock, life: 0.35, radius: ev.r });
+        this.addWord(at.clone().add(tmpV.set(0, 1.2, 0)), BOOM_WORDS[Math.floor(Math.random() * BOOM_WORDS.length)], 3.4);
+        const dist = at.distanceTo(this.camera.position);
+        this.addTrauma(clamp(0.6 - dist / 25, 0, 0.6));
+        return false;
+      }
+      case 'pad': {
+        this.particles.burst(toThree(ev.x, ev.y, 0.3), 30, new THREE.Color('#00e1ff'), 7, 0.6, -2, UP, 0.5);
+        return false;
+      }
+      case 'slide': {
+        const p = view.players.find((q) => q.id === ev.p);
+        if (p && ev.p !== view.myId) this.slideDust(p.x, p.y, p.z);
+        return false;
       }
       case 'block': {
         this.particles.burst(toThree(ev.x, ev.y, ev.z), 30, new THREE.Color('#7fd8ff'), 8, 0.5, 0);
         return false;
       }
       case 'cancel': {
-        this.particles.burst(toThree(ev.x, ev.y, ev.z), 16, new THREE.Color('#fff6e0'), 5, 0.35, 2);
+        this.particles.burst(toThree(ev.x, ev.y, ev.z), 12, new THREE.Color('#fff6e0'), 5, 0.3, 2);
         return false;
       }
       case 'bump': {
@@ -1010,6 +1031,37 @@ export class Scene3D {
   // Frame
   // -------------------------------------------------------------------------
 
+  private updateViewmodel(cam: Extract<CameraView, { kind: 'first' }>, myColor: string, dt: number): void {
+    const key = `${myColor}|${cam.weapon}`;
+    if (key !== this.vmKey) {
+      this.vmKey = key;
+      if (this.vmGun) {
+        this.viewmodel.remove(this.vmGun.group);
+        disposeTree(this.vmGun.group);
+      }
+      this.vmGun = makeGun(cam.weapon, myColor);
+      this.viewmodel.add(this.vmGun.group);
+    }
+    // Bob while running, kick after a shot, lower while sliding, glow while charging.
+    if (cam.grounded) this.bob += dt * cam.speed * (cam.sprinting ? 1.1 : 1.4);
+    const bobAmt = cam.grounded && !cam.sliding ? Math.min(1.4, cam.speed / C.MOVE_SPEED) : 0;
+    this.kick = Math.max(0, this.kick - dt * 6);
+    const sprintTuck = cam.sprinting ? 1 : 0;
+    this.viewmodel.position.set(
+      0.19 + Math.cos(this.bob) * 0.01 * bobAmt - sprintTuck * 0.03,
+      -0.2 + Math.abs(Math.sin(this.bob)) * 0.012 * bobAmt - cam.charge * 0.012 - (cam.sliding ? 0.03 : 0),
+      -0.5 + this.kick * 0.06,
+    );
+    this.viewmodel.rotation.set(this.kick * 0.18 - sprintTuck * 0.25, sprintTuck * 0.35, cam.charge * 0.05 + (cam.sliding ? 0.25 : 0));
+    if (this.vmGun) {
+      this.flashTime = Math.max(0, this.flashTime - dt);
+      const pulse = cam.charge >= 1 ? 1 + Math.sin(this.time * 30) * 0.15 : 1;
+      const flash = this.flashTime > 0 ? 0.6 : 0;
+      this.vmGun.muzzle.scale.setScalar((0.08 + cam.charge * 0.35 + flash) * pulse);
+      this.vmGun.muzzle.material.opacity = Math.min(1, 0.35 + cam.charge * 0.65 + flash);
+    }
+  }
+
   render(view: View, cam: CameraView, dt: number, myColor: string): void {
     this.time += dt;
     if (view.mapIndex !== this.mapIndex) {
@@ -1018,6 +1070,7 @@ export class Scene3D {
     }
     const s = view.arenaRadius / C.ARENA_START_RADIUS;
     this.arena.scale.set(s, 1, s);
+    this.pads?.update(this.time);
     if (this.edgeMat) {
       // The edge pulses red while the roof shrinks.
       const warn = view.shrinking ? 0.5 + 0.5 * Math.sin(this.time * 8) : 0;
@@ -1029,29 +1082,21 @@ export class Scene3D {
     this.syncPowerups(view);
     this.particles.update(dt);
     this.updateWords(dt);
+    this.updateShocks(dt);
 
     // Camera.
     this.trauma = Math.max(0, this.trauma - C.SHAKE_DECAY * dt);
     const shake = this.trauma * this.trauma * C.SHAKE_MAX_ANGLE;
     const n = (k: number): number => Math.sin(this.time * (37 + k * 11) + k * 3) * shake;
+    let fov = C.FOV;
     if (cam.kind === 'first') {
+      // Wider view at speed; a lean into slides.
+      fov = C.FOV + (cam.sliding ? 12 : cam.sprinting ? 7 : 0);
+      this.roll += ((cam.sliding ? 0.08 : 0) - this.roll) * Math.min(1, dt * 10);
       toThree(cam.x, cam.y, cam.z, this.camera.position);
-      this.camera.rotation.set(cam.pitch + n(1), cam.yaw - Math.PI / 2 + n(2), n(3), 'YXZ');
+      this.camera.rotation.set(cam.pitch + n(1), cam.yaw - Math.PI / 2 + n(2), this.roll + n(3), 'YXZ');
       this.viewmodel.visible = true;
-      // Gun bob while running, recoil kick after a shot, glow while charging.
-      if (cam.grounded) this.bob += dt * cam.speed * 1.4;
-      const bobAmt = cam.grounded ? Math.min(1, cam.speed / C.MOVE_SPEED) : 0;
-      this.kick = Math.max(0, this.kick - dt * 6);
-      this.viewmodel.position.set(0.2 + Math.cos(this.bob) * 0.01 * bobAmt, -0.19 + Math.abs(Math.sin(this.bob)) * 0.012 * bobAmt - cam.charge * 0.012, -0.5 + this.kick * 0.06);
-      this.viewmodel.rotation.set(this.kick * 0.18, 0, cam.charge * 0.05);
-      if (myColor !== this.vmColor) {
-        this.vmColor = myColor;
-        this.vmCoilMat.color.set(myColor);
-        this.vmGlow.material.color.set(myColor);
-      }
-      const pulse = cam.charge >= 1 ? 1 + Math.sin(this.time * 30) * 0.15 : 1;
-      this.vmGlow.scale.setScalar((0.08 + cam.charge * 0.35) * pulse);
-      this.vmGlow.material.opacity = 0.35 + cam.charge * 0.65;
+      this.updateViewmodel(cam, myColor, dt);
     } else {
       const t = this.time * 0.07;
       const r = 20 + view.arenaRadius * 0.9;
@@ -1060,11 +1105,13 @@ export class Scene3D {
       this.camera.rotation.z += n(3);
       this.viewmodel.visible = false;
     }
+    this.fov += (fov - this.fov) * Math.min(1, dt * 8);
+    if (Math.abs(this.camera.fov - this.fov) > 0.01) {
+      this.camera.fov = this.fov;
+      this.camera.updateProjectionMatrix();
+    }
     this.sky.position.copy(this.camera.position);
-    // Keep the shadow map centred on the action.
-    this.sun.target.position.set(0, 0, 0);
-    this.sun.position.copy(SUN_DIR).multiplyScalar(80);
 
-    this.renderer.render(this.scene, this.camera);
+    this.inker.render(this.scene, this.camera, dt);
   }
 }

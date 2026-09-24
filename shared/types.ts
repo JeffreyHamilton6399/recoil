@@ -17,6 +17,9 @@ export interface InputState {
   strafe: number;
   jump: boolean;
   firing: boolean;
+  sprint: boolean;
+  /** Crouch: starts a slide when you're moving. */
+  crouch: boolean;
   /** Look direction in radians. Yaw 0 faces +x, and yaw grows counter-clockwise seen from above. */
   yaw: number;
   /** Radians above the horizon (negative looks down). */
@@ -33,8 +36,21 @@ export interface PlayerState {
   vz: number;
   yaw: number;
   pitch: number;
-  /** Standing on the roof. */
+  /** Standing on the roof or on a block. */
   grounded: boolean;
+  /** Index into WEAPONS. */
+  weapon: number;
+  /** Weapon to switch to at the next spawn. */
+  nextWeapon: number;
+  /** Seconds of slide left (0 = not sliding). */
+  slide: number;
+  slideCd: number;
+  /** Crouch was held last tick (a slide needs a fresh press). */
+  crouchHeld: boolean;
+  /** Top of the block you're pressing against (-1 if none), and its outward normal. Set by movePlayer. */
+  wallTop: number;
+  wallNx: number;
+  wallNy: number;
   /** Charge amount, 0..1. */
   charge: number;
   charging: boolean;
@@ -64,6 +80,8 @@ export interface PlayerState {
 export interface Bullet {
   id: number;
   owner: PlayerId;
+  /** Weapon it came from (for explosions, drop and looks). */
+  weapon: number;
   x: number;
   y: number;
   z: number;
@@ -86,8 +104,13 @@ export interface Powerup {
 
 /** Things that happened during a tick, sent to clients for effects and sound. */
 export type GameEvent =
-  /** a is yaw, b is pitch, c is charge. */
-  | { k: 'fire'; p: PlayerId; c: number; x: number; y: number; z: number; a: number; b: number }
+  /** a is yaw, b is pitch, c is charge, w the weapon. */
+  | { k: 'fire'; p: PlayerId; w: number; c: number; x: number; y: number; z: number; a: number; b: number }
+  /** An explosion of radius r. */
+  | { k: 'boom'; p: PlayerId; x: number; y: number; z: number; r: number }
+  | { k: 'pad'; p: PlayerId; x: number; y: number }
+  | { k: 'slide'; p: PlayerId }
+  | { k: 'mantle'; p: PlayerId }
   /** f is the knockback strength, d the damage added. */
   | { k: 'hit'; p: PlayerId; o: PlayerId; x: number; y: number; z: number; f: number; d: number }
   | { k: 'block'; p: PlayerId; x: number; y: number; z: number }
@@ -140,18 +163,20 @@ export const FX_TRIPLE = 4;
 export const FX_MEGA = 8;
 export const FX_GROUNDED = 16;
 export const FX_CHARGING = 32;
+export const FX_CROUCH = 64;
 
 /**
  * [id, x, y, z, vx, vy, vz, yaw, pitch, charge, damage,
- *  fallTime (-1 while standing), fx bits, cooldown, input ack]
+ *  fallTime (-1 while standing), fx bits, cooldown, input ack,
+ *  weapon, slide seconds left, slide cooldown]
  */
 export type PlayerSnap = [
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number, number,
 ];
 
-/** [id, owner, x, y, z, radius] */
-export type BulletSnap = [number, number, number, number, number, number];
+/** [id, owner, x, y, z, radius, weapon] */
+export type BulletSnap = [number, number, number, number, number, number, number];
 
 /** [id, kind index into POWERUP_KINDS, x, y, age] */
 export type PowerupSnap = [number, number, number, number, number];
@@ -181,21 +206,25 @@ export interface RosterEntry {
   /** Index into PLAYER_PALETTE. */
   color: number;
   score: number;
+  /** Chosen weapon (index into WEAPONS). */
+  weapon: number;
   online: boolean;
   host: boolean;
 }
 
 export type ClientMessage =
-  | { t: 'create'; id: string; name: string; color: number }
-  | { t: 'join'; code: string; id: string; name: string; color: number }
+  | { t: 'create'; id: string; name: string; color: number; w: number }
+  | { t: 'join'; code: string; id: string; name: string; color: number; w: number }
   /** Quick play: join (or open) a public room. */
-  | { t: 'quick'; id: string; name: string; color: number }
+  | { t: 'quick'; id: string; name: string; color: number; w: number }
   /** Host of a private room picks the map (-1 = random). */
   | { t: 'map'; choice: number }
   | { t: 'profile'; name: string; color: number }
   | { t: 'start' }
-  /** One tick of input: sequence number, forward, strafe, jump, fire, yaw, pitch. */
-  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; a: number; b: number }
+  /** Pick a weapon (index into WEAPONS). */
+  | { t: 'weapon'; w: number }
+  /** One tick of input: sequence number, forward, strafe, jump, fire, sprint, crouch, yaw, pitch. */
+  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; a: number; b: number }
   | { t: 'ping'; c: number }
   | { t: 'leave' };
 

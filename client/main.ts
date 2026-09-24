@@ -7,6 +7,7 @@ import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import { angleDiff, clamp, controlPlayer, lerp, movePlayer, phaseRules, playerFromSnap } from '../shared/sim.js';
 import { POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
+import { weaponDef } from '../shared/weapons.js';
 import type { GameEvent, InputState, PlayerId, PlayerSnap, PlayerState, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
 import { carouselPosition } from './art.js';
 import { Sfx } from './audio.js';
@@ -70,6 +71,8 @@ let correction: Vec3 = { x: 0, y: 0, z: 0 };
 let tickAcc = 0;
 let lookReset = true; // face where the server puts you on the next snapshot
 let chargeDinged = false;
+let lastInput: InputState | null = null;
+let eyeHeight: number = C.EYE_HEIGHT;
 
 // Feed: who last hit whom, to credit knock-offs.
 const lastHitBy = new Map<PlayerId, { by: PlayerId; time: number }>();
@@ -114,6 +117,10 @@ const ui = new UI({
   onProfile: () => {
     if (roomCode && myId !== -1) net.send({ t: 'profile', name: ui.name, color: ui.color });
   },
+  onWeapon: (w) => {
+    sfx.uiPop();
+    if (roomCode && myId !== -1) net.send({ t: 'weapon', w });
+  },
   onToggleMute: () => {
     sfx.unlock();
     ui.setMuted(sfx.toggleMute());
@@ -135,7 +142,11 @@ canvas.addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyM' && !(e.target instanceof HTMLInputElement)) ui.setMuted(sfx.toggleMute());
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.code === 'KeyM') ui.setMuted(sfx.toggleMute());
+  // Number keys pick a weapon while the lobby is up.
+  const digit = /^Digit([1-9])$/.exec(e.code);
+  if (digit && ui.inLobby && myId !== -1) ui.setWeapon(Number(digit[1]) - 1);
 });
 // Crisp UI sounds for every button in the menus and lobby.
 document.addEventListener('click', (e) => {
@@ -182,10 +193,10 @@ const net = new Net({
 
 function sendHello(): void {
   if (wantRoom) {
-    net.send({ t: wantRoom, id: CLIENT_ID, name: ui.name, color: ui.color });
+    net.send({ t: wantRoom, id: CLIENT_ID, name: ui.name, color: ui.color, w: ui.weapon });
     wantRoom = null;
   } else if (roomCode) {
-    net.send({ t: 'join', code: roomCode, id: CLIENT_ID, name: ui.name, color: ui.color });
+    net.send({ t: 'join', code: roomCode, id: CLIENT_ID, name: ui.name, color: ui.color, w: ui.weapon });
   }
 }
 
@@ -309,13 +320,13 @@ function onSnapshot(s: Snapshot): void {
 // Prediction
 // ---------------------------------------------------------------------------
 
-/** Runs one tick of your own movement, exactly as the server will. */
-function advance(p: PlayerState, inp: InputState, snap: Snapshot): number {
+/** Runs one tick of your own movement, exactly as the server will. Jumps, slides, climbs and pads land in `events`. */
+function advance(p: PlayerState, inp: InputState, snap: Snapshot, events?: GameEvent[]): number {
   const rules = phaseRules(snap.ph);
-  const fired = controlPlayer(p, inp, C.TICK_DT, rules.canMove, rules.canFire);
+  const fired = controlPlayer(p, inp, C.TICK_DT, rules.canMove, rules.canFire, events);
   const map = MAPS[snap.m] ?? MAPS[0];
   const h = C.TICK_DT / C.PHYSICS_SUBSTEPS;
-  for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) movePlayer(p, h, map, snap.r);
+  for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) movePlayer(p, h, map, snap.r, events);
   return fired;
 }
 
@@ -366,20 +377,30 @@ function clientTick(): void {
   // Without the mouse captured, don't charge or fire by accident.
   if (!input.locked && !ui.isTouch) inp.firing = false;
   seq++;
-  net.send({ t: 'input', s: seq, f: inp.forward, r: inp.strafe, j: inp.jump, x: inp.firing, a: inp.yaw, b: inp.pitch });
+  net.send({ t: 'input', s: seq, f: inp.forward, r: inp.strafe, j: inp.jump, x: inp.firing, k: inp.sprint, c: inp.crouch, a: inp.yaw, b: inp.pitch });
   history.push({ seq, input: inp });
+  lastInput = inp;
   if (history.length > 90) history.shift();
   if (!pred) return;
 
   predPrev = { x: pred.x, y: pred.y, z: pred.z };
   const wasGrounded = pred.grounded;
   const vzBefore = pred.vz;
-  const fired = advance(pred, inp, latest);
+  const events: GameEvent[] = [];
+  const fired = advance(pred, inp, latest, events);
   if (fired >= 0) {
-    sfx.fire(fired, 0);
-    scene.localFire(fired, myColor());
+    sfx.shot(pred.weapon, fired, 0);
+    scene.localFire(pred.weapon, fired, myColor());
   }
-  if (wasGrounded && !pred.grounded && inp.jump && fired < 0) sfx.jump(0);
+  // Your own moves sound right away; the server's copies of these events are skipped.
+  for (const ev of events) {
+    if (ev.k === 'jump') sfx.jump(0);
+    else if (ev.k === 'slide') {
+      sfx.slide(0);
+      scene.slideDust(pred.x, pred.y, pred.z);
+    } else if (ev.k === 'mantle') sfx.mantle(0);
+    else if (ev.k === 'pad') sfx.pad(0);
+  }
   if (!wasGrounded && pred.grounded) sfx.land(-vzBefore);
 
   // Ding once when your charge tops out.
@@ -398,7 +419,20 @@ function myColor(): string {
 // ---------------------------------------------------------------------------
 
 function toViewPlayer(p: PlayerSnap): ViewPlayer {
-  return { id: p[0], x: p[1], y: p[2], z: p[3], yaw: p[7], pitch: p[8], charge: p[9], damage: p[10], fallTime: p[11], fx: p[12] };
+  return {
+    id: p[0],
+    x: p[1],
+    y: p[2],
+    z: p[3],
+    yaw: p[7],
+    pitch: p[8],
+    charge: p[9],
+    damage: p[10],
+    fallTime: p[11],
+    fx: p[12],
+    weapon: p[15],
+    sliding: p[16] > 0,
+  };
 }
 
 function lerpPlayer(a: PlayerSnap, b: PlayerSnap, t: number): ViewPlayer {
@@ -417,6 +451,8 @@ function lerpPlayer(a: PlayerSnap, b: PlayerSnap, t: number): ViewPlayer {
     damage: b[10],
     fallTime: fall,
     fx: b[12],
+    weapon: b[15],
+    sliding: b[16] > 0,
   };
 }
 
@@ -459,6 +495,7 @@ function viewAt(time: number): View | null {
     bullets.push({
       id: bb[0],
       owner: bb[1],
+      weapon: bb[6],
       x: lerp(ba[2], bb[2], t),
       y: lerp(ba[3], bb[3], t),
       z: lerp(ba[4], bb[4], t),
@@ -506,7 +543,7 @@ function ownBullets(): ViewBullet[] {
     const vx = (b[2] - p[2]) / dt;
     const vy = (b[3] - p[3]) / dt;
     const vz = (b[4] - p[4]) / dt;
-    out.push({ id: b[0], owner: b[1], x: b[2] + vx * ahead, y: b[3] + vy * ahead, z: b[4] + vz * ahead, r: b[5], vx, vy, vz });
+    out.push({ id: b[0], owner: b[1], weapon: b[6], x: b[2] + vx * ahead, y: b[3] + vy * ahead, z: b[4] + vz * ahead, r: b[5], vx, vy, vz });
   }
   return out;
 }
@@ -517,6 +554,7 @@ const attractRoster: RosterEntry[] = [0, 1, 2, 3].map((i) => ({
   id: i,
   name: ['Zip', 'Boom', 'Kick', 'Pow'][i],
   color: (i * 2 + 1) % C.PLAYER_PALETTE.length,
+  weapon: i % 5,
   score: 0,
   online: true,
   host: false,
@@ -536,6 +574,8 @@ function attractView(time: number): View {
       damage: (i * 37) % 120,
       fallTime: -1,
       fx: 0,
+      weapon: i % 5,
+      sliding: false,
     };
   });
   return {
@@ -568,8 +608,23 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
   const heavy = scene.onEvent(ev, view);
   switch (ev.k) {
     case 'fire':
-      if (ev.p !== myId) sfx.fire(ev.c, scene.panFor(ev.x, ev.y, ev.z));
+      if (ev.p !== myId) sfx.shot(ev.w, ev.c, scene.panFor(ev.x, ev.y, ev.z), 0.7);
       break;
+    case 'boom':
+      sfx.boom(ev.r, scene.panFor(ev.x, ev.y, ev.z));
+      break;
+    case 'pad':
+      if (ev.p !== myId) sfx.pad(scene.panFor(ev.x, ev.y, 0));
+      break;
+    case 'slide':
+    case 'mantle': {
+      if (ev.p === myId) break;
+      const p = view.players.find((q) => q.id === ev.p);
+      const pan = p ? scene.panFor(p.x, p.y, p.z) : 0;
+      if (ev.k === 'slide') sfx.slide(pan, 0.5);
+      else sfx.mantle(pan, 0.5);
+      break;
+    }
     case 'hit':
       sfx.hit(ev.f, scene.panFor(ev.x, ev.y, ev.z));
       lastHitBy.set(ev.p, { by: ev.o, time });
@@ -722,20 +777,29 @@ function frame(): void {
         damage: serverMe?.damage ?? pred.damage,
         fallTime: pred.falling ? pred.fallTime : -1,
         fx: serverMe?.fx ?? 0,
+        weapon: pred.weapon,
+        sliding: pred.slide > 0,
       };
       view.players = view.players.map((p) => (p.id === myId && me ? me : p));
       const out = pred.falling && pred.fallTime > C.FALL_DURATION * 0.7;
+      // Duck smoothly into a slide and back up.
+      const eyeTarget = pred.slide > 0 ? C.SLIDE_EYE_HEIGHT : C.EYE_HEIGHT;
+      eyeHeight += (eyeTarget - eyeHeight) * Math.min(1, dt * 14);
+      const speed = Math.hypot(pred.vx, pred.vy);
       if (!out) {
         cam = {
           kind: 'first',
           x,
           y,
-          z: z + C.EYE_HEIGHT,
+          z: z + eyeHeight,
           yaw: input.yaw,
           pitch: input.pitch,
-          speed: Math.hypot(pred.vx, pred.vy),
+          speed,
           grounded: pred.grounded,
           charge: me.charge,
+          weapon: pred.weapon,
+          sprinting: (lastInput?.sprint ?? false) && pred.grounded && speed > C.MOVE_SPEED * 1.1,
+          sliding: pred.slide > 0,
         };
       }
     }
@@ -750,7 +814,17 @@ function frame(): void {
   scene.render(view, cam, dt, myColor());
   if (roomCode) {
     hud.update(
-      { view, me, firstPerson: cam.kind === 'first', locked: input.locked || ui.isTouch, touch: ui.isTouch, roundWinner, matchWinner },
+      {
+        view,
+        me,
+        firstPerson: cam.kind === 'first',
+        locked: input.locked || ui.isTouch,
+        touch: ui.isTouch,
+        roundWinner,
+        matchWinner,
+        weapon: pred?.weapon ?? 0,
+        ready: pred ? 1 - Math.min(1, pred.cooldown / Math.max(0.05, weaponDef(pred.weapon).cooldown)) : 1,
+      },
       dt,
     );
   }

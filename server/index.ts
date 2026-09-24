@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
-import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, startMatch, step } from '../shared/sim.js';
+import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, setWeapon, startMatch, step } from '../shared/sim.js';
+import { isWeapon } from '../shared/weapons.js';
 import {
   POWERUP_KINDS,
   ROOM_CODE_PATTERN,
@@ -47,6 +48,7 @@ interface Seat {
   client: Client | null;
   name: string;
   color: number;
+  weapon: number;
   /** Inputs received but not yet simulated, one per tick, oldest first. */
   inputs: { seq: number; input: InputState }[];
   /** The last input simulated, repeated when the queue runs dry. */
@@ -153,7 +155,7 @@ function cleanName(name: string, id: PlayerId): string {
   return clean || `Player ${id + 1}`;
 }
 
-function joinRoom(client: Client, room: Room, name: string, color: number): void {
+function joinRoom(client: Client, room: Room, name: string, color: number, weapon: number): void {
   leaveRoom(client);
   const { seats } = room;
 
@@ -178,13 +180,15 @@ function joinRoom(client: Client, room: Room, name: string, color: number): void
       client,
       name: cleanName(name, seat),
       color: freeColor(room, color, seat),
+      weapon,
       inputs: [],
       lastInput: { ...NO_INPUT },
       lastSeq: 0,
       disconnectedAt: 0,
       joinedAt: prev?.joinedAt ?? joinCounter++,
     };
-    addPlayer(room.state, seat);
+    addPlayer(room.state, seat, weapon);
+    setWeapon(room.state, seat, weapon);
   }
   send(client, { t: 'joined', code: room.code, you: seat });
   room.lastRoster = ''; // force a roster update
@@ -224,11 +228,11 @@ function handleMessage(client: Client, msg: ClientMessage): void {
   switch (msg.t) {
     case 'create':
       client.id = msg.id;
-      joinRoom(client, createRoom(false), msg.name, msg.color);
+      joinRoom(client, createRoom(false), msg.name, msg.color, msg.w);
       break;
     case 'quick':
       client.id = msg.id;
-      joinRoom(client, findPublicRoom(), msg.name, msg.color);
+      joinRoom(client, findPublicRoom(), msg.name, msg.color, msg.w);
       break;
     case 'map': {
       const room = client.room;
@@ -238,7 +242,7 @@ function handleMessage(client: Client, msg: ClientMessage): void {
     case 'join': {
       client.id = msg.id;
       const room = rooms.get(msg.code);
-      if (room) joinRoom(client, room, msg.name, msg.color);
+      if (room) joinRoom(client, room, msg.name, msg.color, msg.w);
       else send(client, { t: 'error', msg: `Room ${msg.code} not found. It may have expired.` });
       break;
     }
@@ -248,6 +252,14 @@ function handleMessage(client: Client, msg: ClientMessage): void {
       if (!room || !seat || seat.client !== client) break;
       seat.name = cleanName(msg.name, client.seat);
       if (!colorTaken(room, msg.color, client.seat)) seat.color = msg.color;
+      break;
+    }
+    case 'weapon': {
+      const room = client.room;
+      const seat = room && client.seat !== -1 ? room.seats[client.seat] : null;
+      if (!room || !seat || seat.client !== client) break;
+      seat.weapon = msg.w;
+      setWeapon(room.state, client.seat, msg.w);
       break;
     }
     case 'start': {
@@ -263,7 +275,10 @@ function handleMessage(client: Client, msg: ClientMessage): void {
       // A reconnecting tab starts counting again from 1.
       if (msg.s <= seat.lastSeq && seat.lastSeq - msg.s > 1000) seat.lastSeq = 0;
       if (msg.s <= seat.lastSeq || seat.inputs.some((q) => q.seq >= msg.s)) break;
-      seat.inputs.push({ seq: msg.s, input: { forward: msg.f, strafe: msg.r, jump: msg.j, firing: msg.x, yaw: msg.a, pitch: msg.b } });
+      seat.inputs.push({
+        seq: msg.s,
+        input: { forward: msg.f, strafe: msg.r, jump: msg.j, firing: msg.x, sprint: msg.k, crouch: msg.c, yaw: msg.a, pitch: msg.b },
+      });
       // A client far ahead (a burst after a stall): drop the oldest to keep latency down.
       if (seat.inputs.length > C.INPUT_BUFFER_MAX) seat.inputs.splice(0, seat.inputs.length - 2);
       break;
@@ -295,6 +310,10 @@ function asName(v: unknown): string {
   return typeof v === 'string' ? v.slice(0, 64) : '';
 }
 
+function asWeapon(v: unknown): number {
+  return isWeapon(v) ? v : 0;
+}
+
 function asColor(v: unknown): number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < C.PLAYER_PALETTE.length ? v : 0;
 }
@@ -310,13 +329,15 @@ function parseMessage(data: RawData): ClientMessage | null {
   const m = v as Record<string, unknown>;
   switch (m.t) {
     case 'create':
-      return isId(m.id) ? { t: 'create', id: m.id, name: asName(m.name), color: asColor(m.color) } : null;
+      return isId(m.id) ? { t: 'create', id: m.id, name: asName(m.name), color: asColor(m.color), w: asWeapon(m.w) } : null;
     case 'join': {
       const code = typeof m.code === 'string' ? m.code.trim().toUpperCase() : '';
-      return ROOM_CODE_PATTERN.test(code) && isId(m.id) ? { t: 'join', code, id: m.id, name: asName(m.name), color: asColor(m.color) } : null;
+      return ROOM_CODE_PATTERN.test(code) && isId(m.id) ? { t: 'join', code, id: m.id, name: asName(m.name), color: asColor(m.color), w: asWeapon(m.w) } : null;
     }
     case 'quick':
-      return isId(m.id) ? { t: 'quick', id: m.id, name: asName(m.name), color: asColor(m.color) } : null;
+      return isId(m.id) ? { t: 'quick', id: m.id, name: asName(m.name), color: asColor(m.color), w: asWeapon(m.w) } : null;
+    case 'weapon':
+      return isWeapon(m.w) ? { t: 'weapon', w: m.w } : null;
     case 'map':
       return typeof m.choice === 'number' && Number.isInteger(m.choice) && m.choice >= -1 && m.choice < MAPS.length
         ? { t: 'map', choice: m.choice }
@@ -335,8 +356,8 @@ function parseMessage(data: RawData): ClientMessage | null {
       const b = angle(m.b);
       const seq = typeof m.s === 'number' && Number.isInteger(m.s) && m.s > 0 ? m.s : null;
       if (f === null || r === null || a === null || b === null || seq === null) return null;
-      if (typeof m.j !== 'boolean' || typeof m.x !== 'boolean') return null;
-      return { t: 'input', s: seq, f, r, j: m.j, x: m.x, a, b };
+      if (typeof m.j !== 'boolean' || typeof m.x !== 'boolean' || typeof m.k !== 'boolean' || typeof m.c !== 'boolean') return null;
+      return { t: 'input', s: seq, f, r, j: m.j, x: m.x, k: m.k, c: m.c, a, b };
     }
     case 'ping':
       return typeof m.c === 'number' && Number.isFinite(m.c) ? { t: 'ping', c: m.c } : null;
@@ -423,7 +444,7 @@ function tickRoom(room: Room, now: number): void {
   const host = hostId(room);
   const roster: RosterEntry[] = [];
   seats.forEach((s, id) => {
-    if (s) roster.push({ id, name: s.name, color: s.color, score: state.scores[id] ?? 0, online: s.client !== null, host: id === host });
+    if (s) roster.push({ id, name: s.name, color: s.color, score: state.scores[id] ?? 0, weapon: s.weapon, online: s.client !== null, host: id === host });
   });
   const startsIn = room.autoStartAt === null ? -1 : Math.max(0, Math.ceil((room.autoStartAt - now) / 1000));
   const rosterMsg = JSON.stringify({
@@ -447,7 +468,7 @@ function tickRoom(room: Room, now: number): void {
     r: state.arenaRadius,
     m: state.mapIndex,
     p: state.players.filter((p) => p.inRound).map(playerSnap),
-    b: state.bullets.map((b): BulletSnap => [b.id, b.owner, b.x, b.y, b.z, b.radius]),
+    b: state.bullets.map((b): BulletSnap => [b.id, b.owner, b.x, b.y, b.z, b.radius, b.weapon]),
     u: state.powerups.map((u): PowerupSnap => [u.id, POWERUP_KINDS.indexOf(u.kind), u.x, u.y, u.age]),
     e: events,
     rw: state.roundWinner,

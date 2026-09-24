@@ -6,6 +6,7 @@
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import { FX_MEGA, FX_RAPID, FX_SHIELD, FX_TRIPLE, type PlayerId, type RosterEntry } from '../shared/types.js';
+import { weaponDef } from '../shared/weapons.js';
 import { POWERUP_STYLE, carouselPosition } from './art.js';
 import type { View, ViewPlayer } from './scene.js';
 
@@ -27,6 +28,9 @@ export interface HudInfo {
   touch: boolean;
   roundWinner: PlayerId | null;
   matchWinner: PlayerId | null;
+  /** Your weapon, and how ready it is to fire again (0..1). */
+  weapon: number;
+  ready: number;
 }
 
 export class Hud {
@@ -47,7 +51,7 @@ export class Hud {
   private hurtLevel = 0;
   private hitTimer = 0;
   private lastScoreKey = '';
-  private lastChips = -1;
+  private lastChips = '';
   private lastDmg = -1;
   private lastCenter = '';
   private lastSub = '';
@@ -94,11 +98,12 @@ export class Hud {
     this.hurtLevel = Math.max(0, this.hurtLevel - dt * 2.5);
     this.vignette.style.opacity = this.hurtLevel.toFixed(3);
 
-    // Crosshair and charge ring.
+    // Crosshair ring: the charge for charge weapons, the reload for automatic ones.
     this.crosshair.classList.toggle('hidden', !info.firstPerson);
-    const charge = me?.charge ?? 0;
-    this.ring.setAttribute('stroke-dashoffset', (RING * (1 - charge)).toFixed(1));
-    this.crosshair.classList.toggle('full', charge >= 1);
+    const def = weaponDef(info.weapon);
+    const fill = def.mode === 'charge' ? (me?.charge ?? 0) : info.ready;
+    this.ring.setAttribute('stroke-dashoffset', (RING * (1 - fill)).toFixed(1));
+    this.crosshair.classList.toggle('full', def.mode === 'charge' && fill >= 1);
 
     // Damage and power-ups.
     const alive = me !== undefined && me.fallTime < 0;
@@ -112,9 +117,15 @@ export class Hud {
         this.dmg.style.color = t < 0.5 ? `hsl(${50 - t * 40}, 100%, ${100 - t * 80}%)` : `hsl(${50 - t * 50}, 100%, ${70 - (t - 0.5) * 20}%)`;
       }
       const fx = me.fx & (FX_SHIELD | FX_RAPID | FX_TRIPLE | FX_MEGA);
-      if (fx !== this.lastChips) {
-        this.lastChips = fx;
+      const chipKey = `${fx}|${info.weapon}`;
+      if (chipKey !== this.lastChips) {
+        this.lastChips = chipKey;
         this.chips.textContent = '';
+        const gun = document.createElement('div');
+        gun.className = 'chip';
+        gun.style.setProperty('--c', def.accent);
+        gun.textContent = def.name.toUpperCase();
+        this.chips.append(gun);
         const add = (bit: number, kind: keyof typeof POWERUP_STYLE): void => {
           if (!(fx & bit)) return;
           const chip = document.createElement('div');

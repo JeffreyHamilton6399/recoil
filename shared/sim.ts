@@ -1,16 +1,17 @@
 // The RECOIL simulation. Pure functions over plain data: no timers, no I/O.
-// Randomness (map picks, power-up spawns) comes from a seeded PRNG stored in
-// the state, so a given seed and input sequence always plays out the same.
-// The server runs it authoritatively. The client runs controlPlayer and
-// movePlayer on its own player to predict movement without waiting for the
-// server.
+// Randomness (map picks, power-up spawns, pellet spread) comes from a seeded
+// PRNG stored in the state, so a given seed and input sequence always plays
+// out the same. The server runs it authoritatively. The client runs
+// controlPlayer and movePlayer on its own player to predict movement
+// without waiting for the server.
 //
 // The world is 3D: x and y are horizontal, z is up, and the roof is at z = 0.
 
 import * as C from './constants.js';
-import { MAPS, isOffMap, scaledBumpers, spawnPoint, type MapDef } from './maps.js';
+import { MAPS, floorAt, inBlock, isOffMap, scaledBlocks, scaledBumpers, scaledPads, spawnPoint, type MapDef } from './maps.js';
 import {
   FX_CHARGING,
+  FX_CROUCH,
   FX_GROUNDED,
   FX_MEGA,
   FX_RAPID,
@@ -26,8 +27,18 @@ import {
   type PlayerState,
   type PowerupKind,
 } from './types.js';
+import { WEAPONS, weaponDef, type WeaponDef } from './weapons.js';
 
-export const NO_INPUT: InputState = Object.freeze({ forward: 0, strafe: 0, jump: false, firing: false, yaw: 0, pitch: 0 });
+export const NO_INPUT: InputState = Object.freeze({
+  forward: 0,
+  strafe: 0,
+  jump: false,
+  firing: false,
+  sprint: false,
+  crouch: false,
+  yaw: 0,
+  pitch: 0,
+});
 
 export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -69,7 +80,7 @@ export function aimDir(yaw: number, pitch: number): Vec3 {
   return { x: Math.cos(yaw) * cp, y: Math.sin(yaw) * cp, z: Math.sin(pitch) };
 }
 
-export interface ChargeStats {
+export interface ShotStats {
   radius: number;
   speed: number;
   knockback: number;
@@ -77,15 +88,15 @@ export interface ChargeStats {
   recoil: number;
 }
 
-/** Bullet properties for a given charge (0..1). */
-export function chargeStats(charge: number): ChargeStats {
+/** Bullet properties for a weapon at a given charge (0..1). */
+export function shotStats(w: WeaponDef, charge: number): ShotStats {
   const c = clamp(charge, 0, 1);
   return {
-    radius: lerp(C.BULLET_RADIUS[0], C.BULLET_RADIUS[1], c),
-    speed: lerp(C.BULLET_SPEED[0], C.BULLET_SPEED[1], c),
-    knockback: lerp(C.BULLET_KNOCKBACK[0], C.BULLET_KNOCKBACK[1], c),
-    damage: lerp(C.BULLET_DAMAGE[0], C.BULLET_DAMAGE[1], c),
-    recoil: lerp(C.SHOT_RECOIL[0], C.SHOT_RECOIL[1], c),
+    radius: lerp(w.radius[0], w.radius[1], c),
+    speed: lerp(w.speed[0], w.speed[1], c),
+    knockback: lerp(w.knockback[0], w.knockback[1], c),
+    damage: lerp(w.damage[0], w.damage[1], c),
+    recoil: lerp(w.recoil[0], w.recoil[1], c),
   };
 }
 
@@ -105,11 +116,18 @@ export function phaseRules(phase: GameState['phase']): { canMove: boolean; canFi
   return { canMove: canFire || phase === 'roundEnd' || phase === 'matchEnd', canFire };
 }
 
+/** Running speed for a player right now. */
+export function runSpeed(p: PlayerState, input: InputState): number {
+  const w = weaponDef(p.weapon);
+  const sprint = input.sprint && input.forward > 0 && !p.charging ? C.SPRINT_MULT : 1;
+  return C.MOVE_SPEED * w.moveMult * sprint * (p.charging ? C.CHARGE_MOVE_MULT : 1);
+}
+
 // ---------------------------------------------------------------------------
 // Setup and flow
 // ---------------------------------------------------------------------------
 
-export function createPlayer(id: PlayerId): PlayerState {
+export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
   return {
     id,
     x: 0,
@@ -121,6 +139,14 @@ export function createPlayer(id: PlayerId): PlayerState {
     yaw: 0,
     pitch: 0,
     grounded: true,
+    weapon,
+    nextWeapon: weapon,
+    slide: 0,
+    slideCd: 0,
+    crouchHeld: false,
+    wallTop: -1,
+    wallNx: 0,
+    wallNy: 0,
     charge: 0,
     charging: false,
     cooldown: 0,
@@ -148,6 +174,10 @@ function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number
   p.vy = 0;
   p.vz = 0;
   p.grounded = true;
+  p.weapon = p.nextWeapon;
+  p.slide = 0;
+  p.slideCd = 0;
+  p.wallTop = -1;
   p.charge = 0;
   p.charging = false;
   p.cooldown = 0;
@@ -196,9 +226,9 @@ export function getPlayer(s: GameState, id: PlayerId): PlayerState | undefined {
 }
 
 /** Adds a player. In the lobby they join the warm-up; mid-match they watch until the next round. */
-export function addPlayer(s: GameState, id: PlayerId): void {
+export function addPlayer(s: GameState, id: PlayerId, weapon = 0): void {
   if (getPlayer(s, id)) return;
-  const p = createPlayer(id);
+  const p = createPlayer(id, WEAPONS[weapon] ? weapon : 0);
   s.players.push(p);
   s.players.sort((a, b) => a.id - b.id);
   if (s.phase === 'lobby') placeAll(s);
@@ -208,6 +238,19 @@ export function removePlayer(s: GameState, id: PlayerId): void {
   s.players = s.players.filter((p) => p.id !== id);
   s.scores[id] = 0;
   if (s.phase === 'lobby') placeAll(s);
+}
+
+/** Picks a weapon. In the lobby it's yours right away; mid-match, from your next spawn. */
+export function setWeapon(s: GameState, id: PlayerId, weapon: number): void {
+  const p = getPlayer(s, id);
+  if (!p || !WEAPONS[weapon]) return;
+  p.nextWeapon = weapon;
+  if (s.phase === 'lobby') {
+    p.weapon = weapon;
+    p.charge = 0;
+    p.charging = false;
+    p.cooldown = 0;
+  }
 }
 
 /** Back to the lobby warm-up, on the picked map. Scores are kept for display until the next match. */
@@ -273,42 +316,71 @@ export function startMatch(s: GameState): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Applies one tick of input to a player: look, charge and fire, jump, and
- * running. Returns the charge of the shot fired this tick, or -1. The shot's
- * recoil is applied here; the caller spawns the bullets (see spawnBullets).
+ * Applies one tick of input to a player: look, charge and fire, slide,
+ * climb, jump and run. Returns the charge of the shot fired this tick, or
+ * -1. The shot's recoil is applied here; the caller spawns the bullets.
+ * Jumps, slides and climbs are reported in `events` when given.
  */
-export function controlPlayer(p: PlayerState, input: InputState, dt: number, canMove: boolean, canFire: boolean): number {
+export function controlPlayer(p: PlayerState, input: InputState, dt: number, canMove: boolean, canFire: boolean, events?: GameEvent[]): number {
   if (p.falling) return -1;
+  const w = weaponDef(p.weapon);
 
   p.yaw = wrapAngle(Number.isFinite(input.yaw) ? input.yaw : p.yaw);
   p.pitch = clamp(Number.isFinite(input.pitch) ? input.pitch : p.pitch, -C.PITCH_LIMIT, C.PITCH_LIMIT);
   p.cooldown = Math.max(0, p.cooldown - dt);
 
+  // Shooting.
   let fired = -1;
   if (!canFire) {
     p.charging = false;
     p.charge = 0;
+  } else if (w.mode === 'auto') {
+    p.charging = false;
+    p.charge = 0;
+    if (input.firing && p.cooldown <= 0) {
+      fired = 1;
+      p.cooldown = w.cooldown * (p.rapid > 0 ? 0.5 : 1);
+    }
   } else if (input.firing) {
     if (p.charging) {
       const rate = p.rapid > 0 ? C.RAPID_CHARGE_MULT : 1;
-      p.charge = Math.min(1, p.charge + (dt * rate) / C.CHARGE_TIME);
+      p.charge = Math.min(1, p.charge + (dt * rate) / w.chargeTime);
     } else if (p.cooldown <= 0) {
       p.charging = true;
       p.charge = 0;
     }
   } else if (p.charging) {
     fired = p.charge;
-    // Recoil: shoot down to rocket-jump, shoot behind you to boost forward.
+    p.charging = false;
+    p.charge = 0;
+    p.cooldown = p.rapid > 0 ? C.RAPID_COOLDOWN : w.cooldown;
+  }
+  if (fired >= 0) {
+    // A kick opposite where you aim. Small for most guns.
     const d = aimDir(p.yaw, p.pitch);
-    const kick = chargeStats(p.charge).recoil;
+    const kick = shotStats(w, fired).recoil;
     p.vx -= d.x * kick;
     p.vy -= d.y * kick;
     p.vz -= d.z * kick;
     if (p.vz > 0) p.grounded = false;
-    p.charging = false;
-    p.charge = 0;
-    p.cooldown = p.rapid > 0 ? C.RAPID_COOLDOWN : C.FIRE_COOLDOWN;
   }
+
+  // A tap of crouch while moving on the ground slides; it runs its course unless you leave the ground.
+  p.slideCd = Math.max(0, p.slideCd - dt);
+  if (p.slide > 0) {
+    p.slide = Math.max(0, p.slide - dt);
+    if (!p.grounded || !canMove) p.slide = 0;
+    if (p.slide === 0) p.slideCd = C.SLIDE_COOLDOWN;
+  }
+  const flat = Math.hypot(p.vx, p.vy);
+  if (canMove && input.crouch && !p.crouchHeld && p.grounded && p.slide <= 0 && p.slideCd <= 0 && flat > C.SLIDE_MIN_SPEED) {
+    const k = Math.max(flat, C.SLIDE_SPEED) / flat;
+    p.vx *= k;
+    p.vy *= k;
+    p.slide = C.SLIDE_TIME;
+    events?.push({ k: 'slide', p: p.id });
+  }
+  p.crouchHeld = input.crouch;
 
   if (!canMove) {
     if (p.grounded) {
@@ -332,26 +404,52 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
   const wx = cy * f + sy * r;
   const wy = sy * f - cy * r;
   const wishing = len > 0;
+  const target = runSpeed(p, input);
+
+  // Climb: pushing forward into a ledge you can reach, and jumping (or already in the air).
+  if (p.wallTop >= 0 && f > 0 && (input.jump || !p.grounded) && p.vz < 4) {
+    const rise = p.wallTop - p.z;
+    const facing = -(wx * p.wallNx + wy * p.wallNy);
+    if (rise > C.STEP_HEIGHT && rise <= C.MANTLE_MAX && facing > 0.3) {
+      p.vz = Math.sqrt(2 * C.GRAVITY * (rise + 0.35));
+      p.vx = -p.wallNx * 3.5;
+      p.vy = -p.wallNy * 3.5;
+      p.grounded = false;
+      p.slide = 0;
+      p.wallTop = -1;
+      events?.push({ k: 'mantle', p: p.id });
+      return fired;
+    }
+  }
 
   if (p.grounded) {
     const speed = Math.hypot(p.vx, p.vy);
-    if (speed <= C.MOVE_SPEED * 1.05) {
+    if (p.slide > 0) {
+      // Sliding: keep your speed a while, steer a little.
+      const decay = Math.exp(-C.SLIDE_DECAY * dt);
+      p.vx *= decay;
+      p.vy *= decay;
+      if (wishing) {
+        p.vx += wx * C.SLIDE_ACCEL * 0.5 * dt;
+        p.vy += wy * C.SLIDE_ACCEL * 0.5 * dt;
+      }
+    } else if (speed <= target * 1.05) {
       // Running: move the velocity straight towards the wish velocity.
-      const tx = wx * C.MOVE_SPEED - p.vx;
-      const ty = wy * C.MOVE_SPEED - p.vy;
+      const tx = wx * target - p.vx;
+      const ty = wy * target - p.vy;
       const dist = Math.hypot(tx, ty);
       const step = C.GROUND_ACCEL * dt;
       if (dist <= step) {
-        p.vx = wx * C.MOVE_SPEED;
-        p.vy = wy * C.MOVE_SPEED;
+        p.vx = wx * target;
+        p.vy = wy * target;
       } else {
         p.vx += (tx / dist) * step;
         p.vy += (ty / dist) * step;
       }
     } else {
-      // Sliding after a knockback or boost: the extra speed bleeds away.
+      // Skidding after a knockback, a boost or a slide: the extra speed bleeds away.
       const decay = Math.exp(-C.SLIDE_FRICTION * dt);
-      const k = Math.max(decay, (C.MOVE_SPEED * 0.9) / speed);
+      const k = Math.max(decay, (target * 0.9) / speed);
       p.vx *= k;
       p.vy *= k;
       if (wishing) {
@@ -360,8 +458,11 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
       }
     }
     if (input.jump && p.vz <= 0) {
+      // Jumping out of a slide keeps its speed: slide-hop.
       p.vz = C.JUMP_SPEED;
       p.grounded = false;
+      p.slide = 0;
+      events?.push({ k: 'jump', p: p.id });
     }
   } else {
     const drag = Math.exp(-C.AIR_DRAG * dt);
@@ -370,7 +471,7 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
     if (wishing) {
       // Quake-style air control: add speed along the wish direction up to running speed.
       const along = p.vx * wx + p.vy * wy;
-      const add = Math.min(C.AIR_ACCEL * dt, C.MOVE_SPEED - along);
+      const add = Math.min(C.AIR_ACCEL * dt, target - along);
       if (add > 0) {
         p.vx += wx * add;
         p.vy += wy * add;
@@ -381,8 +482,9 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
 }
 
 /**
- * Moves a player for one physics substep: gravity, the roof, the walls
- * under its edges, and the bumper pillars. Shared with client prediction.
+ * Moves a player for one physics substep: gravity, the roof and blocks
+ * underfoot, block sides, the walls under the roof's edges, bumper pillars
+ * and jump pads. Shared with client prediction.
  */
 export function movePlayer(p: PlayerState, h: number, map: MapDef, arenaRadius: number, events?: GameEvent[]): void {
   if (p.falling) {
@@ -401,7 +503,10 @@ export function movePlayer(p: PlayerState, h: number, map: MapDef, arenaRadius: 
     p.vz *= k;
   }
 
-  if (p.grounded && (p.vz > 0 || isOffMap(map, arenaRadius, p.x, p.y))) p.grounded = false;
+  if (p.grounded) {
+    const under = floorAt(map, arenaRadius, p.x, p.y, p.z + C.STEP_HEIGHT);
+    if (p.vz > 0 || under < p.z - 0.05) p.grounded = false;
+  }
   if (!p.grounded) p.vz -= C.GRAVITY * h;
 
   const px = p.x;
@@ -411,20 +516,71 @@ export function movePlayer(p: PlayerState, h: number, map: MapDef, arenaRadius: 
   p.y += p.vy * h;
   p.z += p.vz * h;
 
+  // Block sides: push out, and remember the ledge for climbing.
+  const blocks = scaledBlocks(map, arenaRadius);
+  let touched = false;
+  for (const b of blocks) {
+    if (p.z >= b.top - C.STEP_HEIGHT || p.z + C.PLAYER_HEIGHT <= 0) continue;
+    const cx = clamp(p.x, b.minX, b.maxX);
+    const cy = clamp(p.y, b.minY, b.maxY);
+    let nx = p.x - cx;
+    let ny = p.y - cy;
+    let d = Math.hypot(nx, ny);
+    if (d >= C.PLAYER_RADIUS) continue;
+    if (d < 1e-6) {
+      // Centre inside the box: leave by the nearest side.
+      const exits = [
+        [p.x - b.minX, -1, 0],
+        [b.maxX - p.x, 1, 0],
+        [p.y - b.minY, 0, -1],
+        [b.maxY - p.y, 0, 1],
+      ].sort((a, c) => a[0] - c[0])[0];
+      nx = exits[1];
+      ny = exits[2];
+      d = -exits[0];
+    } else {
+      nx /= d;
+      ny /= d;
+    }
+    const push = C.PLAYER_RADIUS - d;
+    p.x += nx * push;
+    p.y += ny * push;
+    const vn = p.vx * nx + p.vy * ny;
+    if (vn < 0) {
+      p.vx -= vn * nx;
+      p.vy -= vn * ny;
+    }
+    if (!touched || b.top > p.wallTop) {
+      p.wallTop = b.top;
+      p.wallNx = nx;
+      p.wallNy = ny;
+      touched = true;
+    }
+  }
+  if (!touched) p.wallTop = -1;
+
   if (p.grounded) {
-    p.z = 0;
+    // Stay on the floor, stepping up onto low things.
+    const floor = floorAt(map, arenaRadius, p.x, p.y, p.z + C.STEP_HEIGHT);
+    if (floor > -Infinity) {
+      p.z = Math.max(p.z, floor);
+      if (floor > pz - 0.05) p.z = floor;
+    }
     p.vz = 0;
-  } else if (p.z <= 0 && pz >= -0.35 && p.vz <= 0 && !isOffMap(map, arenaRadius, p.x, p.y)) {
-    // Landed on the roof.
-    p.z = 0;
-    p.vz = 0;
-    p.grounded = true;
-  } else if (p.z < -0.35 && !isOffMap(map, arenaRadius, p.x, p.y)) {
-    // Below the roof, inside a hole or past the edge: the building's walls stop you.
-    p.x = px;
-    p.y = py;
-    p.vx *= -0.2;
-    p.vy *= -0.2;
+  } else {
+    const floor = floorAt(map, arenaRadius, p.x, p.y, Math.max(pz, p.z) + C.STEP_HEIGHT);
+    if (p.vz <= 0 && floor > -Infinity && p.z <= floor && pz >= floor - 0.35) {
+      // Landed.
+      p.z = floor;
+      p.vz = 0;
+      p.grounded = true;
+    } else if (p.z < -0.35 && !isOffMap(map, arenaRadius, p.x, p.y)) {
+      // Below the roof, inside a hole or past the edge: the building's walls stop you.
+      p.x = px;
+      p.y = py;
+      p.vx *= -0.2;
+      p.vy *= -0.2;
+    }
   }
 
   // Bumper pillars push you away, like pinball.
@@ -452,6 +608,20 @@ export function movePlayer(p: PlayerState, h: number, map: MapDef, arenaRadius: 
       }
     }
   }
+
+  // Jump pads.
+  if (p.grounded && p.z < 0.05) {
+    for (const pad of scaledPads(map, arenaRadius)) {
+      if (Math.hypot(p.x - pad.x, p.y - pad.y) >= pad.r) continue;
+      p.vz = C.PAD_SPEED;
+      p.vx *= C.PAD_BOOST;
+      p.vy *= C.PAD_BOOST;
+      p.grounded = false;
+      p.slide = 0;
+      events?.push({ k: 'pad', p: p.id, x: pad.x, y: pad.y });
+      break;
+    }
+  }
 }
 
 /** True once a player has dropped too far below the roof to get back. */
@@ -464,7 +634,8 @@ export function hasFallen(p: PlayerState): boolean {
 // ---------------------------------------------------------------------------
 
 function spawnBullets(s: GameState, p: PlayerState, charge: number, events: GameEvent[]): void {
-  const st = chargeStats(charge);
+  const w = weaponDef(p.weapon);
+  const st = shotStats(w, charge);
   let { radius, knockback, damage } = st;
   if (p.mega > 0) {
     radius *= C.MEGA_RADIUS_MULT;
@@ -472,29 +643,34 @@ function spawnBullets(s: GameState, p: PlayerState, charge: number, events: Game
     damage *= C.MEGA_DAMAGE_MULT;
     p.mega--;
   }
-  const spreads = p.triple > 0 ? [-C.TRIPLE_SPREAD, 0, C.TRIPLE_SPREAD] : [0];
+  const volleys = p.triple > 0 ? [-C.TRIPLE_SPREAD, 0, C.TRIPLE_SPREAD] : [0];
   const offset = C.PLAYER_RADIUS + radius + C.MUZZLE_GAP;
-  const eyeZ = p.z + C.EYE_HEIGHT;
-  for (const spread of spreads) {
-    const d = aimDir(p.yaw + spread, p.pitch);
-    const bullet: Bullet = {
-      id: s.nextId++,
-      owner: p.id,
-      x: p.x + d.x * offset,
-      y: p.y + d.y * offset,
-      z: eyeZ + d.z * offset,
-      vx: d.x * st.speed,
-      vy: d.y * st.speed,
-      vz: d.z * st.speed,
-      radius,
-      knockback,
-      damage,
-      age: 0,
-    };
-    s.bullets.push(bullet);
+  const eyeZ = p.z + (p.slide > 0 ? C.SLIDE_EYE_HEIGHT : C.EYE_HEIGHT);
+  for (const volley of volleys) {
+    for (let i = 0; i < w.pellets; i++) {
+      // Pellets scatter in a cone; single-shot guns only wobble by their spread.
+      const u = w.spread > 0 ? (random(s) * 2 - 1) * w.spread : 0;
+      const v = w.spread > 0 ? (random(s) * 2 - 1) * w.spread * 0.7 : 0;
+      const d = aimDir(p.yaw + volley + u, p.pitch + v);
+      s.bullets.push({
+        id: s.nextId++,
+        owner: p.id,
+        weapon: p.weapon,
+        x: p.x + d.x * offset,
+        y: p.y + d.y * offset,
+        z: eyeZ + d.z * offset,
+        vx: d.x * st.speed,
+        vy: d.y * st.speed,
+        vz: d.z * st.speed,
+        radius,
+        knockback,
+        damage,
+        age: 0,
+      });
+    }
   }
   const d = aimDir(p.yaw, p.pitch);
-  events.push({ k: 'fire', p: p.id, c: charge, x: p.x + d.x * offset, y: p.y + d.y * offset, z: eyeZ + d.z * offset, a: p.yaw, b: p.pitch });
+  events.push({ k: 'fire', p: p.id, w: p.weapon, c: charge, x: p.x + d.x * offset, y: p.y + d.y * offset, z: eyeZ + d.z * offset, a: p.yaw, b: p.pitch });
 }
 
 function applyPowerup(p: PlayerState, kind: PowerupKind): void {
@@ -521,6 +697,7 @@ function updatePowerups(s: GameState, dt: number, events: GameEvent[]): void {
   const map = currentMap(s);
   const R = s.arenaRadius;
   const bumpers = scaledBumpers(map, R);
+  const pads = scaledPads(map, R);
 
   for (const u of s.powerups) u.age += dt;
   s.powerups = s.powerups.filter((u) => u.age < C.POWERUP_LIFETIME && !isOffMap(map, R, u.x, u.y));
@@ -554,9 +731,11 @@ function updatePowerups(s: GameState, dt: number, events: GameEvent[]): void {
     const x = Math.cos(a) * r;
     const y = Math.sin(a) * r;
     if (isOffMap(map, R, x, y)) continue;
-    // Keep clear of hole edges, bumpers and players.
+    // Keep clear of hole edges, bumpers, blocks, pads and players.
     if (isOffMap(map, R, x + edge, y) || isOffMap(map, R, x - edge, y) || isOffMap(map, R, x, y + edge) || isOffMap(map, R, x, y - edge)) continue;
     if (bumpers.some((b) => Math.hypot(x - b.x, y - b.y) < b.r + edge)) continue;
+    if (pads.some((b) => Math.hypot(x - b.x, y - b.y) < b.r + edge)) continue;
+    if (inBlock(map, R, x, y, 0, edge)) continue;
     if (s.players.some((p) => p.inRound && Math.hypot(x - p.x, y - p.y) < 3)) continue;
     const kind = POWERUP_KINDS[Math.floor(random(s) * POWERUP_KINDS.length)];
     s.powerups.push({ id: s.nextId++, kind, x, y, age: 0 });
@@ -569,10 +748,11 @@ function updatePowerups(s: GameState, dt: number, events: GameEvent[]): void {
 // Physics
 // ---------------------------------------------------------------------------
 
-/** Squared distance from a point to a player's body (a vertical capsule). */
+/** Squared distance from a point to a player's body (a vertical capsule; shorter while sliding). */
 function capsuleDist2(p: PlayerState, x: number, y: number, z: number): number {
+  const height = p.slide > 0 ? C.SLIDE_EYE_HEIGHT + 0.3 : C.PLAYER_HEIGHT;
   const lo = p.z + C.PLAYER_RADIUS;
-  const hi = p.z + C.PLAYER_HEIGHT - C.PLAYER_RADIUS;
+  const hi = p.z + Math.max(C.PLAYER_RADIUS, height - C.PLAYER_RADIUS);
   const cz = clamp(z, lo, hi);
   const dx = x - p.x;
   const dy = y - p.y;
@@ -580,29 +760,98 @@ function capsuleDist2(p: PlayerState, x: number, y: number, z: number): number {
   return dx * dx + dy * dy + dz * dz;
 }
 
-function integrate(s: GameState, h: number, events: GameEvent[]): void {
+/** Pushes a player by an impulse along a direction and adds damage. */
+function knock(p: PlayerState, dx: number, dy: number, dz: number, impulse: number): void {
+  const flat = Math.hypot(dx, dy);
+  const len = Math.hypot(dx, dy, dz) || 1;
+  if (flat > 1e-6) {
+    // Knocked along the direction, and always a little off your feet.
+    const k = impulse * Math.max(0.6, flat / len);
+    p.vx += (dx / flat) * k;
+    p.vy += (dy / flat) * k;
+  }
+  p.vz += impulse * C.KNOCKBACK_LIFT + Math.max(0, (dz / len) * impulse);
+  p.grounded = false;
+  p.slide = 0;
+}
+
+/** A bomb bursting: everyone nearby is thrown away from it, the shooter too (without damage). */
+function explode(s: GameState, b: Bullet, x: number, y: number, z: number, events: GameEvent[]): void {
+  const radius = weaponDef(b.weapon).splash;
+  events.push({ k: 'boom', p: b.owner, x, y, z, r: radius });
+  for (const p of s.players) {
+    if (!p.inRound || p.falling) continue;
+    const cz = p.z + C.PLAYER_HEIGHT / 2;
+    const dx = p.x - x;
+    const dy = p.y - y;
+    const dz = cz - z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d >= radius) continue;
+    const falloff = 1 - d / radius;
+    if (p.id === b.owner) {
+      knock(p, dx, dy, dz + 0.5, b.knockback * falloff * C.SELF_SPLASH);
+      continue;
+    }
+    if (p.shield > 0) {
+      p.shield = 0;
+      events.push({ k: 'block', p: p.id, x: p.x, y: p.y, z: cz });
+      continue;
+    }
+    const impulse = b.knockback * falloff * (1 + p.damage / C.DAMAGE_SCALE);
+    knock(p, dx, dy, dz + 0.3, impulse);
+    p.damage += b.damage * falloff;
+    events.push({ k: 'hit', p: p.id, o: b.owner, x: p.x, y: p.y, z: cz, f: impulse, d: b.damage * falloff });
+  }
+}
+
+/**
+ * Moves one bullet for a substep, in small hops so even the fastest shots
+ * can't skip past a player. Returns false once the bullet is gone.
+ */
+function moveBullet(s: GameState, b: Bullet, h: number, standing: PlayerState[], events: GameEvent[]): boolean {
   const map = currentMap(s);
   const R = s.arenaRadius;
-  const active = s.players.filter((p) => p.inRound);
-  for (const p of active) movePlayer(p, h, map, R, events);
-  for (const b of s.bullets) {
-    b.x += b.vx * h;
-    b.y += b.vy * h;
-    b.z += b.vz * h;
-  }
+  const w = weaponDef(b.weapon);
+  b.vz -= w.gravity * h;
+  const hops = Math.max(1, Math.ceil((Math.hypot(b.vx, b.vy, b.vz) * h) / 0.3));
+  const hh = h / hops;
+  for (let n = 0; n < hops; n++) {
+    b.x += b.vx * hh;
+    b.y += b.vy * hh;
+    b.z += b.vz * hh;
 
-  const standing = active.filter((p) => !p.falling);
-  for (let i = 0; i < standing.length; i++) {
-    for (let j = i + 1; j < standing.length; j++) collidePlayers(standing[i], standing[j], events);
-  }
+    // Players.
+    for (const p of standing) {
+      if (p.id === b.owner) continue;
+      const rr = C.PLAYER_RADIUS + b.radius;
+      if (capsuleDist2(p, b.x, b.y, b.z) >= rr * rr) continue;
+      if (w.splash > 0) {
+        explode(s, b, b.x, b.y, b.z, events);
+        return false;
+      }
+      if (p.shield > 0) {
+        p.shield = 0;
+        events.push({ k: 'block', p: p.id, x: b.x, y: b.y, z: b.z });
+        return false;
+      }
+      const impulse = b.knockback * (1 + p.damage / C.DAMAGE_SCALE);
+      knock(p, b.vx, b.vy, b.vz, impulse);
+      p.damage += b.damage;
+      events.push({ k: 'hit', p: p.id, o: b.owner, x: b.x, y: b.y, z: b.z, f: impulse, d: b.damage });
+      return false;
+    }
 
-  const dead = new Set<number>();
+    // Blocks and the roof.
+    const onRoof = b.z < b.radius * 0.5 && b.z > -1.5 && !isOffMap(map, R, b.x, b.y);
+    if (onRoof || inBlock(map, R, b.x, b.y, b.z, b.radius * 0.5)) {
+      if (w.splash > 0) explode(s, b, b.x, b.y, Math.max(b.z, 0.05), events);
+      else events.push({ k: 'cancel', x: b.x, y: b.y, z: Math.max(b.z, 0.05), r: b.radius });
+      return false;
+    }
 
-  // Bullets bounce off bumper pillars and splat on the roof.
-  const bumpers = scaledBumpers(map, R);
-  for (const b of s.bullets) {
+    // Bumper pillars bounce bullets.
     if (b.z < C.BUMPER_HEIGHT) {
-      for (const bp of bumpers) {
+      for (const bp of scaledBumpers(map, R)) {
         const dx = b.x - bp.x;
         const dy = b.y - bp.y;
         const dist = Math.hypot(dx, dy) || 1e-6;
@@ -619,11 +868,23 @@ function integrate(s: GameState, h: number, events: GameEvent[]): void {
         }
       }
     }
-    if (b.z < b.radius * 0.5 && b.z > -1.5 && !isOffMap(map, R, b.x, b.y)) {
-      dead.add(b.id);
-      events.push({ k: 'cancel', x: b.x, y: b.y, z: 0.05, r: b.radius });
-    }
   }
+  return true;
+}
+
+function integrate(s: GameState, h: number, events: GameEvent[]): void {
+  const map = currentMap(s);
+  const R = s.arenaRadius;
+  const active = s.players.filter((p) => p.inRound);
+  for (const p of active) movePlayer(p, h, map, R, events);
+
+  const standing = active.filter((p) => !p.falling);
+  for (let i = 0; i < standing.length; i++) {
+    for (let j = i + 1; j < standing.length; j++) collidePlayers(standing[i], standing[j], events);
+  }
+
+  const dead = new Set<number>();
+  for (const b of s.bullets) if (!moveBullet(s, b, h, standing, events)) dead.add(b.id);
 
   // Bullets from different players cancel each other out.
   for (let a = 0; a < s.bullets.length; a++) {
@@ -642,36 +903,6 @@ function integrate(s: GameState, h: number, events: GameEvent[]): void {
         events.push({ k: 'cancel', x: (ba.x + bb.x) / 2, y: (ba.y + bb.y) / 2, z: (ba.z + bb.z) / 2, r: Math.max(ba.radius, bb.radius) });
         break;
       }
-    }
-  }
-
-  // Bullets hitting other players.
-  for (const b of s.bullets) {
-    if (dead.has(b.id)) continue;
-    for (const p of standing) {
-      if (p.id === b.owner) continue;
-      const rr = C.PLAYER_RADIUS + b.radius;
-      if (capsuleDist2(p, b.x, b.y, b.z) >= rr * rr) continue;
-      dead.add(b.id);
-      if (p.shield > 0) {
-        p.shield = 0;
-        events.push({ k: 'block', p: p.id, x: b.x, y: b.y, z: b.z });
-        break;
-      }
-      const speed = Math.hypot(b.vx, b.vy, b.vz) || 1;
-      const flat = Math.hypot(b.vx, b.vy);
-      const impulse = b.knockback * (1 + p.damage / C.DAMAGE_SCALE);
-      if (flat > 1e-6) {
-        // Knocked along the bullet's path, and always a little off your feet.
-        const k = impulse * Math.max(0.6, flat / speed);
-        p.vx += (b.vx / flat) * k;
-        p.vy += (b.vy / flat) * k;
-      }
-      p.vz += impulse * C.KNOCKBACK_LIFT + Math.max(0, (b.vz / speed) * impulse);
-      p.grounded = false;
-      p.damage += b.damage;
-      events.push({ k: 'hit', p: p.id, o: b.owner, x: b.x, y: b.y, z: b.z, f: impulse, d: b.damage });
-      break;
     }
   }
 
@@ -731,10 +962,8 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
   for (const p of s.players) {
     if (!p.inRound) continue;
     const input = inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
-    const wasGrounded = p.grounded;
-    const charge = controlPlayer(p, input, dt, canMove, canFire);
+    const charge = controlPlayer(p, input, dt, canMove, canFire, events);
     if (charge >= 0) spawnBullets(s, p, charge, events);
-    if (wasGrounded && !p.grounded && input.jump && charge < 0) events.push({ k: 'jump', p: p.id });
     p.rapid = Math.max(0, p.rapid - dt);
     p.triple = Math.max(0, p.triple - dt);
     p.shield = Math.max(0, p.shield - dt);
@@ -752,7 +981,7 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
   const cullRadius = s.arenaRadius + C.BULLET_CULL_MARGIN;
   s.bullets = s.bullets.filter((b) => {
     b.age += dt;
-    return b.age < C.BULLET_LIFETIME && Math.hypot(b.x, b.y) < cullRadius && b.z > -30;
+    return b.age < weaponDef(b.weapon).lifetime && Math.hypot(b.x, b.y) < cullRadius && b.z > -30;
   });
 
   // Falling off the edge or into a hole.
@@ -769,6 +998,7 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
       p.fallTime = 0;
       p.charging = false;
       p.charge = 0;
+      p.slide = 0;
       events.push({ k: 'fall', p: p.id, x: p.x, y: p.y });
     }
   }
@@ -820,7 +1050,8 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     (p.triple > 0 ? FX_TRIPLE : 0) |
     (p.mega > 0 ? FX_MEGA : 0) |
     (p.grounded ? FX_GROUNDED : 0) |
-    (p.charging ? FX_CHARGING : 0);
+    (p.charging ? FX_CHARGING : 0) |
+    (p.crouchHeld ? FX_CROUCH : 0);
   return [
     p.id,
     round3(p.x),
@@ -837,12 +1068,15 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     fx,
     round3(p.cooldown),
     p.ack,
+    p.weapon,
+    round3(p.slide),
+    round3(p.slideCd),
   ];
 }
 
 /** Rebuilds the parts of a player that client prediction needs from a snapshot. */
 export function playerFromSnap(s: PlayerSnap): PlayerState {
-  const p = createPlayer(s[0]);
+  const p = createPlayer(s[0], s[15]);
   p.x = s[1];
   p.y = s[2];
   p.z = s[3];
@@ -862,8 +1096,11 @@ export function playerFromSnap(s: PlayerSnap): PlayerState {
   p.mega = fx & FX_MEGA ? 1 : 0;
   p.grounded = (fx & FX_GROUNDED) !== 0;
   p.charging = (fx & FX_CHARGING) !== 0;
+  p.crouchHeld = (fx & FX_CROUCH) !== 0;
   p.cooldown = s[13];
   p.ack = s[14];
+  p.slide = s[16];
+  p.slideCd = s[17];
   p.inRound = true;
   return p;
 }

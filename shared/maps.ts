@@ -45,6 +45,19 @@ export interface MapTheme {
 /** Arena outline. Hex and diamond are regular polygons scaled to feel about as big as the circle. */
 export type MapShape = 'circle' | 'square' | 'hex' | 'diamond';
 
+/**
+ * A solid box standing on the roof: crates, AC units, walls, planters.
+ * x, y, w (along x) and d (along y) are design units; h is its height in
+ * metres. You can stand on it and climb it if it's low enough.
+ */
+export interface Block {
+  x: number;
+  y: number;
+  w: number;
+  d: number;
+  h: number;
+}
+
 export interface MapDef {
   name: string;
   blurb: string;
@@ -53,6 +66,10 @@ export interface MapDef {
   holes: Circle[];
   /** Bouncy posts that knock players (and bullets) away. */
   bumpers: Circle[];
+  /** Obstacles to climb, hide behind and stand on. */
+  blocks: Block[];
+  /** Jump pads: step on one to be launched into the air. */
+  pads: Circle[];
   theme: MapTheme;
 }
 
@@ -61,6 +78,21 @@ const polar = (r: number, deg: number, size: number): Circle => {
   return { x: Math.cos(a) * r, y: Math.sin(a) * r, r: size };
 };
 
+/** A square box centred at a polar position. */
+const crate = (r: number, deg: number, size: number, h: number): Block => {
+  const c = polar(r, deg, 0);
+  return { x: c.x, y: c.y, w: size, d: size, h };
+};
+
+/** A wall at a polar position, running around the centre (tangent to the ring). */
+const wall = (r: number, deg: number, len: number, thick: number, h: number): Block => {
+  const c = polar(r, deg, 0);
+  const radial = Math.abs(Math.cos((deg * Math.PI) / 180)) > 0.7;
+  return radial ? { x: c.x, y: c.y, w: thick, d: len, h } : { x: c.x, y: c.y, w: len, d: thick, h };
+};
+
+const pad = (r: number, deg: number): Circle => polar(r, deg, 0.55);
+
 export const MAPS: readonly MapDef[] = [
   {
     name: 'Helipad',
@@ -68,6 +100,8 @@ export const MAPS: readonly MapDef[] = [
     shape: 'circle',
     holes: [],
     bumpers: [],
+    blocks: [0, 1, 2, 3].map((k) => crate(6.5, 45 + k * 90, 0.8, 1.1)),
+    pads: [pad(2.3, 90), pad(2.3, 270)],
     theme: { top: '#b9c3d6', shade: '#8d98b3', side: '#5b5f86', sideShade: '#3f4166', surface: 'helipad', bumper: '#ff3d8b' },
   },
   {
@@ -76,6 +110,8 @@ export const MAPS: readonly MapDef[] = [
     shape: 'circle',
     holes: [{ x: 0, y: 0, r: 2 }],
     bumpers: [],
+    blocks: [wall(6.4, 0, 1.6, 0.45, 2.2), wall(6.4, 90, 1.6, 0.45, 2.2), wall(6.4, 180, 1.6, 0.45, 2.2), wall(6.4, 270, 1.6, 0.45, 2.2)],
+    pads: [pad(6.6, 45), pad(6.6, 225)],
     theme: { top: '#d8cfc4', shade: '#b3a797', side: '#7a5f6e', sideShade: '#5a4152', surface: 'gravel', bumper: '#ff3d8b' },
   },
   {
@@ -84,6 +120,8 @@ export const MAPS: readonly MapDef[] = [
     shape: 'circle',
     holes: [],
     bumpers: [{ x: 0, y: 0, r: 1 }, polar(6.3, 0, 0.8), polar(6.3, 90, 0.8), polar(6.3, 180, 0.8), polar(6.3, 270, 0.8)],
+    blocks: [crate(3.2, 0, 0.6, 1), crate(3.2, 180, 0.6, 1)],
+    pads: [0, 1, 2, 3].map((k) => pad(3.6, 45 + k * 90)),
     theme: { top: '#3b2a6b', shade: '#2a1d52', side: '#2c2158', sideShade: '#1b1440', surface: 'neon', bumper: '#ff2e88' },
   },
   {
@@ -92,6 +130,14 @@ export const MAPS: readonly MapDef[] = [
     shape: 'square',
     holes: [],
     bumpers: [],
+    blocks: [
+      { x: 0, y: 0, w: 1.5, d: 1.5, h: 3.4 },
+      { x: -3.2, y: -3.2, w: 1.2, d: 1.2, h: 1.6 },
+      { x: 3.2, y: -3.2, w: 1.2, d: 1.2, h: 1.6 },
+      { x: -3.2, y: 3.2, w: 1.2, d: 1.2, h: 1.6 },
+      { x: 3.2, y: 3.2, w: 1.2, d: 1.2, h: 1.6 },
+    ],
+    pads: [pad(6.3, 90), pad(6.3, 270)],
     theme: { top: '#55566d', shade: '#3e3f55', side: '#6b4a5a', sideShade: '#4d3342', surface: 'tar', bumper: '#ff3d8b' },
   },
   {
@@ -100,6 +146,8 @@ export const MAPS: readonly MapDef[] = [
     shape: 'circle',
     holes: [polar(2.4, 90, 0.9), polar(2.4, 210, 0.9), polar(2.4, 330, 0.9), polar(6.8, 30, 0.8), polar(6.8, 150, 0.8), polar(6.8, 270, 0.8)],
     bumpers: [],
+    blocks: [crate(6.8, 90, 0.75, 1.1), crate(6.8, 210, 0.75, 1.1), crate(6.8, 330, 0.75, 1.1), crate(0, 0, 0.9, 2.2)],
+    pads: [],
     theme: { top: '#a9b8c6', shade: '#8293a8', side: '#4f6a82', sideShade: '#374d63', surface: 'plate', bumper: '#ff3d8b' },
   },
   {
@@ -108,6 +156,8 @@ export const MAPS: readonly MapDef[] = [
     shape: 'square',
     holes: [],
     bumpers: [polar(2.6, 0, 0.75), polar(2.6, 90, 0.75), polar(2.6, 180, 0.75), polar(2.6, 270, 0.75)],
+    blocks: [wall(6, 0, 2.6, 0.45, 1.4), wall(6, 180, 2.6, 0.45, 1.4)],
+    pads: [0, 1, 2, 3].map((k) => pad(7, 45 + k * 90)),
     theme: { top: '#e08462', shade: '#b85e44', side: '#6d4a6a', sideShade: '#4f324d', surface: 'tiles', bumper: '#9c3b31' },
   },
   {
@@ -116,6 +166,8 @@ export const MAPS: readonly MapDef[] = [
     shape: 'hex',
     holes: [],
     bumpers: [],
+    blocks: [...[0, 1, 2, 3, 4, 5].map((k) => crate(2.5, 30 + k * 60, 0.8, 1)), crate(0, 0, 1.2, 2.4)],
+    pads: [],
     theme: { top: '#e3d8c4', shade: '#c2b39b', side: '#7d6a8a', sideShade: '#5d4c6b', surface: 'paving', bumper: '#ff3d8b' },
   },
   {
@@ -124,6 +176,11 @@ export const MAPS: readonly MapDef[] = [
     shape: 'diamond',
     holes: [],
     bumpers: [{ x: 0, y: 0, r: 0.9 }],
+    blocks: [
+      { x: 0, y: -2.6, w: 2.6, d: 0.4, h: 2.2 },
+      { x: 0, y: 2.6, w: 2.6, d: 0.4, h: 2.2 },
+    ],
+    pads: [pad(6, 0), pad(6, 180)],
     theme: { top: '#ffd93d', shade: '#f0b21e', side: '#3a3f7a', sideShade: '#282b5c', surface: 'billboard', bumper: '#ff2e88' },
   },
   {
@@ -132,6 +189,11 @@ export const MAPS: readonly MapDef[] = [
     shape: 'circle',
     holes: [0, 1, 2, 3, 4, 5, 6, 7].map((k) => polar(6.6, 22.5 + k * 45, 0.8)),
     bumpers: [],
+    blocks: [
+      ...[0, 90, 180, 270].map((deg) => wall(2.4, deg, 1.8, 0.5, 1.2)),
+      ...[45, 135, 225, 315].map((deg) => crate(6.2, deg, 0.7, 3.6)),
+    ],
+    pads: [],
     theme: { top: '#74d27e', shade: '#4fa85c', side: '#5a6a8a', sideShade: '#3f4d6b', surface: 'garden', bumper: '#ff3d8b' },
   },
   {
@@ -140,6 +202,11 @@ export const MAPS: readonly MapDef[] = [
     shape: 'circle',
     holes: [-5.8, -3.5, -1.2, 1.2, 3.5, 5.8].map((y) => ({ x: 0, y, r: 1.05 })),
     bumpers: [],
+    blocks: [
+      { x: -4.4, y: 0, w: 1.7, d: 1.7, h: 1.4 },
+      { x: 4.4, y: 0, w: 1.7, d: 1.7, h: 1.4 },
+    ],
+    pads: [pad(2.3, 45), pad(2.3, 135), pad(2.3, 225), pad(2.3, 315)],
     theme: { top: '#e6bb7e', shade: '#c4955a', side: '#6a5a7a', sideShade: '#4c3f5c', surface: 'plywood', bumper: '#ff3d8b' },
   },
   {
@@ -155,6 +222,13 @@ export const MAPS: readonly MapDef[] = [
       { x: 0, y: -5.4, r: 0.7 },
       { x: 0, y: 5.4, r: 0.7 },
     ],
+    blocks: [
+      { x: -5.6, y: -2.4, w: 1, d: 2, h: 1.2 },
+      { x: 5.6, y: -2.4, w: 1, d: 2, h: 1.2 },
+      { x: -5.6, y: 2.4, w: 1, d: 2, h: 1.2 },
+      { x: 5.6, y: 2.4, w: 1, d: 2, h: 1.2 },
+    ],
+    pads: [],
     theme: { top: '#5c5f74', shade: '#46485c', side: '#8a8fa3', sideShade: '#666a80', surface: 'parking', bumper: '#ff7a1a' },
   },
   {
@@ -163,6 +237,8 @@ export const MAPS: readonly MapDef[] = [
     shape: 'hex',
     holes: [0, 1, 2, 3, 4, 5].map((k) => polar(6.2, 30 + k * 60, 0.85)),
     bumpers: [{ x: 0, y: 0, r: 0.85 }],
+    blocks: [0, 1, 2, 3, 4, 5].map((k) => crate(2.6, k * 60, 0.9, 0.9)),
+    pads: [0, 1, 2, 3, 4, 5].map((k) => pad(6.3, k * 60)),
     theme: { top: '#3a5ea3', shade: '#29467f', side: '#56607a', sideShade: '#3c455c', surface: 'solar', bumper: '#ffd93d' },
   },
 ];
@@ -219,8 +295,60 @@ export function scaledBumpers(map: MapDef, arenaRadius: number): Circle[] {
   return map.bumpers.map((b) => ({ x: b.x * s, y: b.y * s, r: b.r * s }));
 }
 
-/** True if a player can stand here safely: on the roof, clear of hole edges and bumpers. */
+export interface Box {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  /** Height of the top face above the roof. */
+  top: number;
+}
+
+/** Blocks at the current arena size, as boxes in world units. */
+export function scaledBlocks(map: MapDef, arenaRadius: number): Box[] {
+  const s = mapScale(arenaRadius);
+  return map.blocks.map((b) => ({
+    minX: (b.x - b.w / 2) * s,
+    maxX: (b.x + b.w / 2) * s,
+    minY: (b.y - b.d / 2) * s,
+    maxY: (b.y + b.d / 2) * s,
+    top: b.h,
+  }));
+}
+
+/** Jump pads at the current arena size. */
+export function scaledPads(map: MapDef, arenaRadius: number): Circle[] {
+  const s = mapScale(arenaRadius);
+  return map.pads.map((p) => ({ x: p.x * s, y: p.y * s, r: p.r * s }));
+}
+
+/**
+ * Height of whatever you would stand on at (x, y): the tallest block top no
+ * higher than maxTop, else the roof (0), else -Infinity over a hole or past
+ * the edge.
+ */
+export function floorAt(map: MapDef, arenaRadius: number, x: number, y: number, maxTop: number): number {
+  let floor = isOffMap(map, arenaRadius, x, y) ? -Infinity : 0;
+  for (const b of scaledBlocks(map, arenaRadius)) {
+    if (b.top > maxTop || b.top <= floor) continue;
+    // A little give at the edges, so you don't slip off a crate you're standing on.
+    if (x >= b.minX - 0.15 && x <= b.maxX + 0.15 && y >= b.minY - 0.15 && y <= b.maxY + 0.15) floor = b.top;
+  }
+  return floor;
+}
+
+/** True if a point is inside a block (below its top). */
+export function inBlock(map: MapDef, arenaRadius: number, x: number, y: number, z: number, margin = 0): boolean {
+  for (const b of scaledBlocks(map, arenaRadius)) {
+    if (z < b.top + margin && x > b.minX - margin && x < b.maxX + margin && y > b.minY - margin && y < b.maxY + margin) return true;
+  }
+  return false;
+}
+
+/** True if a player can stand here safely: on the roof, clear of hole edges, bumpers, blocks and pads. */
 function spawnIsSafe(map: MapDef, arenaRadius: number, x: number, y: number): boolean {
+  if (inBlock(map, arenaRadius, x, y, 0, C.PLAYER_RADIUS + 0.5)) return false;
+  if (scaledPads(map, arenaRadius).some((p) => Math.hypot(x - p.x, y - p.y) < p.r + C.PLAYER_RADIUS + 0.5)) return false;
   const m = C.PLAYER_RADIUS + 0.8;
   for (let k = 0; k < 8; k++) {
     const a = (k * Math.PI) / 4;

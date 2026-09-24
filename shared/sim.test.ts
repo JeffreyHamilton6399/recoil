@@ -3,12 +3,13 @@
 // 2. A scripted 2-player duel until someone wins a round.
 // 3. Full 6-player matches with random inputs, back to the lobby, on every map.
 // 4. Spawn points are safe on every map for every player count.
-// 5. Movement: running, jumping, a recoil rocket-jump, and running off the edge.
+// 5. Movement: running, sprinting, sliding, jumping, climbing, jump pads,
+//    a bomb-jump, and running off the edge.
 // 6. Client prediction replays the same inputs to the same place as the server.
 
 import assert from 'node:assert/strict';
 import * as C from './constants.js';
-import { MAPS, isOffMap, scaledBumpers, spawnPoint } from './maps.js';
+import { MAPS, inBlock, isOffMap, mapScale, scaledBumpers, spawnPoint } from './maps.js';
 import {
   NO_INPUT,
   addPlayer,
@@ -21,9 +22,12 @@ import {
   playerFromSnap,
   playerSnap,
   removePlayer,
+  setMapChoice,
+  setWeapon,
   startMatch,
   step,
 } from './sim.js';
+import { WEAPONS } from './weapons.js';
 import type { GameState, InputState, PlayerId } from './types.js';
 
 /** Small seeded PRNG for test inputs, so failures are reproducible. */
@@ -51,7 +55,10 @@ function assertSane(s: GameState): void {
   assert.ok(s.powerups.length <= C.POWERUP_MAX);
   for (const p of s.players) {
     assert.ok(p.charge >= 0 && p.charge <= 1);
-    if (p.grounded && !p.falling) assert.equal(p.z, 0, 'grounded players stand on the roof');
+    if (p.grounded && !p.falling) {
+      const onBlock = currentMap(s).blocks.some((b) => Math.abs(b.h - p.z) < 1e-9);
+      assert.ok(p.z === 0 || onBlock, `grounded players stand on the roof or a block (z=${p.z})`);
+    }
   }
   for (const sc of s.scores) assert.ok(sc <= C.WIN_SCORE);
 }
@@ -62,6 +69,8 @@ function randomInput(rand: () => number): InputState {
     strafe: Math.floor(rand() * 3) - 1,
     jump: rand() < 0.1,
     firing: rand() < 0.5,
+    sprint: rand() < 0.5,
+    crouch: rand() < 0.15,
     yaw: (rand() * 2 - 1) * Math.PI,
     pitch: (rand() * 2 - 1) * 1.2,
   };
@@ -77,7 +86,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
 {
   const rand = mulberry32(1234);
   const s = createGame(42);
-  for (const id of [0, 1, 2, 3]) addPlayer(s, id);
+  for (const id of [0, 1, 2, 3]) addPlayer(s, id, id % WEAPONS.length);
   let inputs = new Map<PlayerId, InputState>();
   let shots = 0;
   let respawns = 0;
@@ -110,7 +119,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
     const dz = them.z + 1.1 - (me.z + C.EYE_HEIGHT);
     const yaw = Math.atan2(dy, dx);
     const pitch = Math.atan2(dz, Math.hypot(dx, dy));
-    const firing = chargeTicks < C.CHARGE_TIME * C.TICK_RATE + 1;
+    const firing = chargeTicks < WEAPONS[0].chargeTime * C.TICK_RATE + 1;
     chargeTicks = firing ? chargeTicks + 1 : 0;
     const inputs = new Map<PlayerId, InputState>([[0, { ...NO_INPUT, yaw, pitch, firing }]]);
     hits += step(s, inputs).filter((e) => e.k === 'hit' || e.k === 'block').length;
@@ -125,7 +134,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
 {
   const rand = mulberry32(99);
   const s = createGame(2024);
-  for (const id of [0, 1, 2, 3, 4, 5]) addPlayer(s, id);
+  for (const id of [0, 1, 2, 3, 4, 5]) addPlayer(s, id, id % WEAPONS.length);
   startMatch(s);
   let inputs = new Map<PlayerId, InputState>();
   const mapsSeen = new Set<number>();
@@ -162,6 +171,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
       for (let i = 0; i < n; i++) {
         const sp = spawnPoint(map, i, n);
         assert.ok(!isOffMap(map, C.ARENA_START_RADIUS, sp.x, sp.y), `${map.name}: spawn ${i}/${n} is off the roof`);
+        assert.ok(!inBlock(map, C.ARENA_START_RADIUS, sp.x, sp.y, 0, C.PLAYER_RADIUS), `${map.name}: spawn ${i}/${n} is inside a block`);
         for (const b of scaledBumpers(map, C.ARENA_START_RADIUS)) {
           assert.ok(Math.hypot(sp.x - b.x, sp.y - b.y) >= b.r + C.PLAYER_RADIUS, `${map.name}: spawn ${i}/${n} is inside a bumper`);
         }
@@ -171,7 +181,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   console.log(`ok 4 - safe spawns on all ${MAPS.length} maps for 1-${C.MAX_PLAYERS} players`);
 }
 
-// 5. Movement on the Helipad (no holes or bumpers).
+// 5. Movement.
 {
   const s = createGame(5);
   addPlayer(s, 0);
@@ -184,34 +194,70 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
     }
     return top;
   };
-  // Stand in the middle facing +x and run.
-  p.x = 0;
-  p.y = 0;
+  const place = (x: number, y: number): void => {
+    Object.assign(p, { x, y, z: 0, vx: 0, vy: 0, vz: 0, grounded: true, slide: 0, slideCd: 0 });
+  };
+  const speed = (): number => Math.hypot(p.vx, p.vy);
+
+  // Helipad: run, sprint, stop.
+  place(-4, 0);
   hold({ yaw: 0, forward: 1 }, 15);
-  assert.ok(Math.abs(Math.hypot(p.vx, p.vy) - C.MOVE_SPEED) < 1e-6, 'reaches running speed');
+  assert.ok(Math.abs(speed() - C.MOVE_SPEED) < 1e-6, 'reaches running speed');
   assert.ok(p.vx > 0 && Math.abs(p.vy) < 1e-6, 'runs where it looks');
+  hold({ yaw: 0, forward: 1, sprint: true }, 15);
+  assert.ok(Math.abs(speed() - C.MOVE_SPEED * C.SPRINT_MULT) < 1e-6, 'sprints faster');
   hold({ yaw: 0 }, 10);
-  assert.ok(Math.hypot(p.vx, p.vy) < 1e-6, 'stops when the keys are released');
-  p.x = 0;
-  p.y = 0;
+  assert.ok(speed() < 1e-6, 'stops when the keys are released');
+
+  // Slide: a burst of speed that lasts.
+  place(-8, 0);
+  hold({ yaw: 0, forward: 1, sprint: true }, 15);
+  hold({ yaw: 0, forward: 1, sprint: true, crouch: true }, 1);
+  assert.ok(p.slide > 0 && speed() >= C.SLIDE_SPEED * 0.9, 'crouching while sprinting slides');
+  hold({ yaw: 0, forward: 1 }, 10);
+  assert.ok(speed() > C.MOVE_SPEED * C.SPRINT_MULT, 'a slide is faster than sprinting');
+
   // Jump.
+  place(-4, 0);
   hold({ jump: true }, 1);
   const jumpTop = hold({}, 40);
   assert.ok(p.grounded && p.z === 0, 'lands after a jump');
   assert.ok(jumpTop > 1, `jumps over a metre (got ${jumpTop.toFixed(2)})`);
-  // Rocket-jump: full charge straight down.
-  hold({ pitch: -C.PITCH_LIMIT, firing: true }, C.CHARGE_TIME * C.TICK_RATE + 2);
-  const rocketTop = hold({ pitch: -C.PITCH_LIMIT }, 40);
-  assert.ok(rocketTop > jumpTop, `a rocket-jump beats a jump (${rocketTop.toFixed(2)} vs ${jumpTop.toFixed(2)})`);
+
+  // Jump pad (Helipad has one at 90 degrees).
+  const S = mapScale(s.arenaRadius);
+  place(0, 2.3 * S);
+  const padTop = hold({}, 50);
+  assert.ok(padTop > 5, `a jump pad launches you high (got ${padTop.toFixed(2)})`);
+
+  // Bomb-jump with the Boomer: shoot your feet.
+  setWeapon(s, 0, 3);
+  place(-4, -4);
+  hold({ pitch: -C.PITCH_LIMIT, firing: true }, 1);
+  const bombTop = hold({ pitch: -C.PITCH_LIMIT }, 40);
+  assert.ok(bombTop > jumpTop, `a bomb-jump beats a jump (${bombTop.toFixed(2)} vs ${jumpTop.toFixed(2)})`);
+  setWeapon(s, 0, 0);
+
+  // Climb onto The Block's corner AC unit (1.6m: too tall to jump, low enough to climb).
+  setMapChoice(s, 3);
+  const T = mapScale(s.arenaRadius);
+  const ac = MAPS[3].blocks[1];
+  place((ac.x - ac.w / 2) * T - 1.2, ac.y * T);
+  hold({ yaw: 0, forward: 1 }, 8);
+  hold({ yaw: 0, forward: 1, jump: true }, 1);
+  hold({ yaw: 0, forward: 1 }, 10);
+  hold({ yaw: 0 }, 20);
+  assert.ok(p.grounded && Math.abs(p.z - ac.h) < 1e-6, `climbs onto the AC unit (z=${p.z.toFixed(2)})`);
+
   // Run off the edge.
-  p.x = 0;
-  p.y = 0;
+  setMapChoice(s, 0);
+  place(0, 0);
   const ev: string[] = [];
   for (let i = 0; i < 200 && !p.falling; i++) {
-    for (const e of step(s, new Map([[0, { ...NO_INPUT, yaw: 0, forward: 1 }]]))) ev.push(e.k);
+    for (const e of step(s, new Map([[0, { ...NO_INPUT, yaw: 0.3, forward: 1 }]]))) ev.push(e.k);
   }
   assert.ok(p.falling && ev.includes('fall'), 'running off the edge is a fall');
-  console.log(`ok 5 - run, jump (${jumpTop.toFixed(2)}m), rocket-jump (${rocketTop.toFixed(2)}m), fall off the edge`);
+  console.log(`ok 5 - run, sprint, slide, jump (${jumpTop.toFixed(2)}m), pad (${padTop.toFixed(2)}m), bomb-jump (${bombTop.toFixed(2)}m), climb, fall`);
 }
 
 // 6. Prediction: replaying inputs on a snapshot copy matches the server (one player, no shots).
@@ -220,6 +266,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   const s = createGame(11);
   addPlayer(s, 0);
   const server = s.players[0];
+  setMapChoice(s, 3); // The Block: blocks to climb and walk into
   const local = playerFromSnap(playerSnap(server));
   const map = currentMap(s);
   const { canMove, canFire } = phaseRules(s.phase);

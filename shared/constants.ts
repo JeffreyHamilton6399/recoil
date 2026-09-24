@@ -106,32 +106,46 @@ export const FALL_DURATION = 1.6;
 export const LOBBY_RESPAWN_DELAY = 0.4;
 
 // ---------------------------------------------------------------------------
-// Shooting. Each pair is [min charge, full charge] and is linearly
-// interpolated by the charge amount (0..1).
+// Moving like a shooter: sprint, slide, climb, jump pads
 // ---------------------------------------------------------------------------
 
-/** Seconds of holding fire needed to reach full charge. */
-export const CHARGE_TIME = 0.8;
-/** Seconds after a shot before you can start charging again. */
-export const FIRE_COOLDOWN = 0.15;
-/** Bullet radius. */
-export const BULLET_RADIUS: readonly [number, number] = [0.2, 0.45];
-/** Bullet speed in units per second. */
-export const BULLET_SPEED: readonly [number, number] = [30, 48];
-/** Base knockback applied to the player who gets hit. */
-export const BULLET_KNOCKBACK: readonly [number, number] = [4.5, 11];
+/** Holding sprint while moving forward multiplies running speed by this. */
+export const SPRINT_MULT = 1.45;
+/** Running speed multiplier while charging a shot. */
+export const CHARGE_MOVE_MULT = 0.8;
+/** A slide starts at least this fast... */
+export const SLIDE_SPEED = 13.5;
+/** ...lasts this long... */
+export const SLIDE_TIME = 0.85;
+/** ...slows like velocity *= exp(-SLIDE_DECAY * dt)... */
+export const SLIDE_DECAY = 0.9;
+/** ...and needs you to be moving at least this fast to start. */
+export const SLIDE_MIN_SPEED = 5;
+/** Seconds after a slide before the next one. */
+export const SLIDE_COOLDOWN = 0.45;
+/** Eye height while sliding. */
+export const SLIDE_EYE_HEIGHT = 0.95;
+/** You walk up anything shorter than this without jumping. */
+export const STEP_HEIGHT = 0.4;
+/** Ledges up to this far above your feet can be climbed (hold forward and jump). */
+export const MANTLE_MAX = 2.7;
+/** Jump pads launch you up this fast... */
+export const PAD_SPEED = 17;
+/** ...and multiply your running speed by this, so you can aim the leap. */
+export const PAD_BOOST = 1.35;
+
+// ---------------------------------------------------------------------------
+// Shooting (per-weapon stats are in weapons.ts)
+// ---------------------------------------------------------------------------
+
 /** Knockback also lifts you off your feet by this fraction of its strength. */
 export const KNOCKBACK_LIFT = 0.4;
-/** Damage percentage added to the player who gets hit. */
-export const BULLET_DAMAGE: readonly [number, number] = [6, 22];
-/** Velocity kick applied to the shooter, opposite the aim direction. Shoot down to rocket-jump. */
-export const SHOT_RECOIL: readonly [number, number] = [4, 13];
 /** Knockback is multiplied by (1 + damage / DAMAGE_SCALE). */
 export const DAMAGE_SCALE = 100;
+/** Explosions push the shooter too (for bomb jumps), by this fraction and without damage. */
+export const SELF_SPLASH = 0.85;
 /** Gap between the player's edge and a freshly spawned bullet. */
 export const MUZZLE_GAP = 0.05;
-/** Bullets expire after this many seconds. */
-export const BULLET_LIFETIME = 2;
 /** Bullets are removed once this far outside the current arena edge. */
 export const BULLET_CULL_MARGIN = 40;
 
@@ -155,7 +169,7 @@ export const POWERUP_LIFETIME = 12;
 export const RAPID_TIME = 6;
 export const RAPID_COOLDOWN = 0.05;
 export const RAPID_CHARGE_MULT = 2;
-/** Triple Shot: duration and the angle between the three bullets (radians). */
+/** Triple Shot: duration and the angle between the three volleys (radians). */
 export const TRIPLE_TIME = 7;
 export const TRIPLE_SPREAD = 0.12;
 /** Mega Shot: number of boosted shots and how much they are boosted. */

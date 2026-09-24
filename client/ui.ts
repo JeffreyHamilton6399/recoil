@@ -1,11 +1,12 @@
 // DOM overlays: main menu (name + colour), lobby panel (players, colours,
-// map carousel, start), banners, the room HUD and touch controls. The game
+// weapon picker, map carousel, start), banners, the room HUD and touch controls. The game
 // itself is drawn on the canvas by scene.ts; the in-game HUD is hud.ts.
 
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import type { PlayerId, RosterEntry } from '../shared/types.js';
-import { FONT, INK, makeMapThumb } from './art.js';
+import { WEAPONS } from '../shared/weapons.js';
+import { FONT, INK, makeMapThumb, makeWeaponIcon } from './art.js';
 import type { TouchElements } from './input.js';
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -24,6 +25,8 @@ export interface UiHandlers {
   onPickMap(choice: number): void;
   /** Name or colour changed. */
   onProfile(): void;
+  /** Picked a weapon. */
+  onWeapon(weapon: number): void;
   onToggleMute(): void;
 }
 
@@ -50,6 +53,7 @@ export class UI {
     look: el('t-look'),
     fire: el('t-fire'),
     jump: el('t-jump'),
+    slide: el('t-slide'),
   };
 
   private readonly menu = el('menu');
@@ -64,6 +68,8 @@ export class UI {
   private readonly playerList = el('player-list');
   private readonly lobbyColors = el('lobby-colors');
   private readonly lobbyName = el<HTMLInputElement>('lobby-name');
+  private readonly weaponList = el('weapon-list');
+  private readonly weaponsSection = el('weapons-section');
   private readonly startBtn = el<HTMLButtonElement>('btn-start');
   private readonly lobbyStatus = el('lobby-status');
   private readonly carouselTrack = el('carousel-track');
@@ -90,6 +96,7 @@ export class UI {
 
   name = '';
   color = 0;
+  weapon = 0;
 
   constructor(private readonly handlers: UiHandlers) {
     this.loadProfile();
@@ -127,6 +134,7 @@ export class UI {
     this.buildSwatches(this.menuColors);
     this.buildSwatches(this.lobbyColors);
     this.buildCarousel();
+    this.buildWeapons();
 
     // No pinch-zoom, double-tap zoom or rubber-band scrolling on mobile.
     const stop = (e: Event): void => e.preventDefault();
@@ -173,6 +181,7 @@ export class UI {
           const o = v as Record<string, unknown>;
           if (typeof o.name === 'string') this.name = o.name.slice(0, C.NAME_MAX);
           if (typeof o.color === 'number' && o.color >= 0 && o.color < C.PLAYER_PALETTE.length) this.color = o.color;
+          if (typeof o.weapon === 'number' && WEAPONS[o.weapon]) this.weapon = o.weapon;
         }
       }
     } catch {
@@ -182,7 +191,7 @@ export class UI {
 
   private saveProfile(): void {
     try {
-      localStorage.setItem(PROFILE_KEY, JSON.stringify({ name: this.name, color: this.color }));
+      localStorage.setItem(PROFILE_KEY, JSON.stringify({ name: this.name, color: this.color, weapon: this.weapon }));
     } catch {
       // Storage unavailable: the profile just isn't remembered.
     }
@@ -202,6 +211,70 @@ export class UI {
     this.saveProfile();
     this.refreshSwatches();
     this.handlers.onProfile();
+  }
+
+  // -------------------------------------------------------------------------
+  // Weapon picker
+  // -------------------------------------------------------------------------
+
+  private buildWeapons(): void {
+    this.weaponList.textContent = '';
+    WEAPONS.forEach((w, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'weapon';
+      b.dataset.weapon = String(i);
+      b.style.setProperty('--c', w.accent);
+      const name = document.createElement('div');
+      name.className = 'wname';
+      name.textContent = `${i + 1}  ${w.name}`;
+      const stats = document.createElement('div');
+      stats.className = 'wstats';
+      for (const [label, value] of [
+        ['Power', w.stats.power],
+        ['Rate', w.stats.rate],
+        ['Range', w.stats.range],
+        ['Move', w.stats.mobility],
+      ] as const) {
+        const l = document.createElement('span');
+        l.textContent = label;
+        const bars = document.createElement('span');
+        bars.className = 'bars';
+        for (let k = 1; k <= 5; k++) {
+          const bar = document.createElement('i');
+          if (k <= value) bar.className = 'on';
+          bars.append(bar);
+        }
+        stats.append(l, bars);
+      }
+      const blurb = document.createElement('div');
+      blurb.className = 'wblurb';
+      blurb.textContent = w.blurb;
+      b.append(makeWeaponIcon(i, 76, 38), name, stats, blurb);
+      b.addEventListener('click', () => this.setWeapon(i));
+      this.weaponList.append(b);
+    });
+    this.refreshWeapons();
+  }
+
+  private refreshWeapons(): void {
+    this.weaponList.querySelectorAll<HTMLButtonElement>('.weapon').forEach((b) => {
+      b.classList.toggle('selected', Number(b.dataset.weapon) === this.weapon);
+    });
+  }
+
+  /** Picks a weapon (from a click or the number keys). */
+  setWeapon(weapon: number): void {
+    if (!WEAPONS[weapon] || weapon === this.weapon) return;
+    this.weapon = weapon;
+    this.saveProfile();
+    this.refreshWeapons();
+    this.handlers.onWeapon(weapon);
+  }
+
+  /** True while the lobby panel (and so the weapon picker) is up. */
+  get inLobby(): boolean {
+    return !this.lobby.classList.contains('hidden');
   }
 
   private buildSwatches(container: HTMLElement): void {
@@ -402,8 +475,13 @@ export class UI {
     // Colours taken by other players can't be picked.
     const me = info.roster.find((r) => r.id === info.myId);
     this.takenColors = new Set(info.roster.filter((r) => r.id !== info.myId).map((r) => r.color));
-    if (me) this.color = me.color;
+    if (me) {
+      this.color = me.color;
+      this.weapon = me.weapon;
+    }
     this.refreshSwatches();
+    this.refreshWeapons();
+    this.weaponsSection.classList.toggle('hidden', info.myId === -1);
     this.lobbyColors.parentElement?.classList.toggle('hidden', info.myId === -1);
 
     // Map carousel mode, start button for the host, status for everyone else.
