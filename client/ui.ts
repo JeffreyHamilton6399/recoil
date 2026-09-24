@@ -6,7 +6,7 @@ import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import type { PlayerId, RosterEntry } from '../shared/types.js';
 import { WEAPONS } from '../shared/weapons.js';
-import { FONT, INK, makeMapThumb, makeWeaponIcon } from './art.js';
+import { FONT, makeMapThumb, makeWeaponIcon } from './art.js';
 import type { TouchElements } from './input.js';
 
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -378,7 +378,7 @@ export class UI {
     const chosen = this.carouselIndex - 1 === this.mapChoice;
     const name = this.carouselIndex === 0 ? 'Random' : (MAPS[this.carouselIndex - 1]?.name ?? '');
     this.pickMapBtn.disabled = chosen;
-    this.pickMapBtn.textContent = chosen ? `✓ ${name} selected` : this.carouselIndex === 0 ? 'Use random maps' : `Play ${name}`;
+    this.pickMapBtn.textContent = chosen ? `${name} selected` : this.carouselIndex === 0 ? 'Use random' : `Choose ${name}`;
   }
 
   /** Updates the carousel for the room type and the host's pick. */
@@ -388,9 +388,9 @@ export class UI {
     this.mapChoice = mapChoice;
     const locked = mode === 'guest' && mapChoice >= 0;
     this.carousel.classList.toggle('locked', locked);
-    if (mode === 'public') this.mapsTitle.textContent = 'Maps · a spinner picks one each round';
-    else if (mode === 'host') this.mapsTitle.textContent = 'Pick the map · random spins a new one each round';
-    else this.mapsTitle.textContent = mapChoice >= 0 ? 'The host picked this map' : 'Random map each round';
+    if (mode === 'public') this.mapsTitle.textContent = 'Maps · random each round';
+    else if (mode === 'host') this.mapsTitle.textContent = 'Map';
+    else this.mapsTitle.textContent = mapChoice >= 0 ? 'Map · chosen by host' : 'Maps · random each round';
     if (changed) {
       if (mode === 'public') this.showCard(1, false);
       else this.showCard(mapChoice + 1, false);
@@ -458,15 +458,14 @@ export class UI {
       if (r.host) {
         const host = document.createElement('span');
         host.className = 'ptag host';
-        host.textContent = 'HOST';
+        host.textContent = 'Host';
         li.appendChild(host);
       }
       if (r.voice) {
         const mic = document.createElement('span');
         mic.className = 'vicon';
         mic.classList.toggle('talking', info.speaking.includes(r.id));
-        mic.textContent = info.speaking.includes(r.id) ? '🔊' : '🎙';
-        mic.title = 'Voice chat on';
+        mic.title = info.speaking.includes(r.id) ? 'Talking' : 'Voice chat on';
         li.appendChild(mic);
         if (r.id !== info.myId) {
           const mute = document.createElement('button');
@@ -482,7 +481,7 @@ export class UI {
       if (!r.online) {
         const off = document.createElement('span');
         off.className = 'ptag';
-        off.textContent = 'reconnecting';
+        off.textContent = 'Reconnecting';
         li.appendChild(off);
       }
       this.playerList.appendChild(li);
@@ -496,7 +495,7 @@ export class UI {
     if (info.spectators > 0) {
       const li = document.createElement('li');
       li.className = 'empty';
-      li.textContent = `+ ${info.spectators} watching`;
+      li.textContent = `${info.spectators} watching`;
       this.playerList.appendChild(li);
     }
 
@@ -520,12 +519,12 @@ export class UI {
     this.startBtn.classList.toggle('hidden', !isHost);
     this.startBtn.disabled = !enough;
     this.startBtn.textContent = enough ? `Start match (${online} players)` : 'Start match';
-    if (info.myId === -1) this.lobbyStatus.textContent = 'The room is full, so you are watching.';
-    else if (info.pub && info.startsIn >= 0) this.lobbyStatus.textContent = `Match starts in ${info.startsIn}s. Click the city to warm up!`;
-    else if (info.pub) this.lobbyStatus.textContent = 'Public game. Waiting for another player to join…';
-    else if (!enough) this.lobbyStatus.textContent = 'Waiting for more players… share the link!';
-    else if (isHost) this.lobbyStatus.textContent = 'Everyone in? Hit start. Click the city to warm up in the meantime!';
-    else this.lobbyStatus.textContent = 'Waiting for the host to start. Click the city to warm up!';
+    if (info.myId === -1) this.lobbyStatus.textContent = 'Room is full. You are spectating.';
+    else if (info.pub && info.startsIn >= 0) this.lobbyStatus.textContent = `Starting in ${info.startsIn}s`;
+    else if (info.pub) this.lobbyStatus.textContent = 'Waiting for players…';
+    else if (!enough) this.lobbyStatus.textContent = 'Waiting for players. Share the link to invite friends.';
+    else if (isHost) this.lobbyStatus.textContent = 'Start when everyone is in.';
+    else this.lobbyStatus.textContent = 'Waiting for the host to start.';
   }
 
   setBanner(text: string | null): void {
@@ -580,7 +579,7 @@ export class UI {
       }
       ta.remove();
     }
-    this.copyBtn.textContent = ok ? 'Copied!' : 'Copy failed';
+    this.copyBtn.textContent = ok ? 'Copied' : 'Copy failed';
     window.setTimeout(() => (this.copyBtn.textContent = 'Copy link'), 1800);
   }
 }
@@ -598,17 +597,13 @@ function randomThumb(px: number): HTMLCanvasElement {
   [0, 2, 4, 5].forEach((mapIndex, k) => {
     ctx.drawImage(makeMapThumb(mapIndex, half), (k % 2) * half, Math.floor(k / 2) * half, half, half);
   });
-  ctx.font = `900 ${px * 0.62}px ${FONT}`;
+  // Dim the previews and put a plain question mark on top.
+  ctx.fillStyle = 'rgba(13,9,24,0.55)';
+  ctx.fillRect(0, 0, px, px);
+  ctx.font = `800 ${px * 0.5}px ${FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = px * 0.07;
-  ctx.strokeStyle = INK;
-  ctx.fillStyle = INK;
-  ctx.strokeText('?', half + px * 0.04, half + px * 0.06);
-  ctx.fillText('?', half + px * 0.04, half + px * 0.06);
-  ctx.strokeText('?', half, half);
-  ctx.fillStyle = '#ffd93d';
-  ctx.fillText('?', half, half);
+  ctx.fillStyle = '#f4f1fb';
+  ctx.fillText('?', half, half + px * 0.02);
   return cv;
 }
