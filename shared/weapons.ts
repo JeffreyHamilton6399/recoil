@@ -39,6 +39,10 @@ export interface WeaponDef {
   stats: { power: number; rate: number; range: number; mobility: number };
   /** Accent colour for the picker and the gun. */
   accent: string;
+  /** Bounces off the roof and walls with this restitution instead of stopping (grenades). */
+  bounce?: number;
+  /** Bursts when its lifetime runs out instead of fizzling (grenades). */
+  fuse?: boolean;
 }
 
 export const WEAPONS: readonly WeaponDef[] = [
@@ -154,8 +158,49 @@ export const WEAPONS: readonly WeaponDef[] = [
   },
 ];
 
+/**
+ * The shock grenade, thrown with the offhand. It isn't in the weapon picker;
+ * bullets from it use this index.
+ */
+export const SHOCK_WEAPON = 9;
+export const SHOCK_GRENADE: WeaponDef = {
+  name: 'Shock grenade',
+  blurb: 'Bounces, then bursts into a shockwave that throws everyone nearby. Hardly any damage.',
+  mode: 'auto',
+  chargeTime: 0,
+  cooldown: 0,
+  pellets: 1,
+  spread: 0,
+  speed: [19, 19],
+  radius: [0.2, 0.2],
+  knockback: [23, 23],
+  damage: [4, 4],
+  recoil: [0, 0],
+  splash: 6,
+  gravity: 20,
+  lifetime: 1.1,
+  moveMult: 1,
+  adsFov: 60,
+  scope: false,
+  stats: { power: 4, rate: 1, range: 3, mobility: 3 },
+  accent: '#7fe7ff',
+  bounce: 0.45,
+  fuse: true,
+};
+
 export function weaponDef(index: number): WeaponDef {
+  if (index === SHOCK_WEAPON) return SHOCK_GRENADE;
   return WEAPONS[index] ?? WEAPONS[0];
+}
+
+/** Offhands for the lobby picker (index = offhand id). */
+export const OFFHANDS: readonly { name: string; blurb: string; accent: string }[] = [
+  { name: 'Knife', blurb: 'Lunge and slash for a big shove at point-blank range. Short cooldown.', accent: '#e8e4f2' },
+  { name: 'Shock grenade', blurb: 'Bounces, then bursts into a shockwave that throws everyone nearby.', accent: '#7fe7ff' },
+];
+
+export function isOffhand(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < OFFHANDS.length;
 }
 
 export function isWeapon(v: unknown): v is number {

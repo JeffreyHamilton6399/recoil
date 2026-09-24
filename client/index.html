@@ -541,6 +541,64 @@
       .weapon.selected .wblurb {
         display: block;
       }
+      .offhands {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .offhand-opt {
+        min-width: 0;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--c);
+        border-radius: var(--radius);
+        background: var(--surface-2);
+        text-align: left;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .offhand-opt:hover {
+        background: var(--surface-3);
+      }
+      .offhand-opt.selected {
+        border-color: var(--accent);
+        border-left-color: var(--c);
+        background: rgba(255, 210, 63, 0.07);
+      }
+      .oname {
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .oblurb {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+        white-space: normal;
+      }
+      .bot-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      .bc-label {
+        margin-right: auto;
+        color: var(--dim);
+        font-size: 12px;
+      }
+      .bot-controls .btn {
+        width: auto;
+        height: 30px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+      .ptag.bot {
+        color: var(--muted);
+      }
+      .ptag {
+        white-space: nowrap;
+      }
       .wstats {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
@@ -990,6 +1048,9 @@
         gap: 4px;
         margin-bottom: 4px;
       }
+      .chip.cooling {
+        opacity: 0.55;
+      }
       .chip {
         padding: 3px 8px;
         border-left: 3px solid var(--c);
@@ -1128,6 +1189,12 @@
         right: calc(max(18px, env(safe-area-inset-right)) + 118px);
         bottom: calc(max(24px, env(safe-area-inset-bottom)) + 118px);
       }
+      #t-off {
+        width: 58px;
+        height: 58px;
+        right: calc(max(18px, env(safe-area-inset-right)) + 150px);
+        bottom: calc(max(24px, env(safe-area-inset-bottom)) + 214px);
+      }
       .fire {
         right: max(18px, env(safe-area-inset-right));
         bottom: max(24px, env(safe-area-inset-bottom));
@@ -1219,6 +1286,7 @@
           <dt>Jump</dt><dd><kbd>Space</kbd></dd>
           <dt>Sprint · Slide</dt><dd><kbd>Shift</kbd> · <kbd>Ctrl</kbd></dd>
           <dt>Fire · Aim</dt><dd>Left · right mouse</dd>
+          <dt>Offhand</dt><dd><kbd>E</kbd> knife or grenade</dd>
           <dt>Voice</dt><dd>Hold <kbd>V</kbd></dd>
         </dl>
       </div>
@@ -1237,6 +1305,12 @@
 
         <div class="section-title">Players</div>
         <ul id="player-list"></ul>
+        <div id="bot-controls" class="bot-controls hidden">
+          <span class="bc-label">Add bot</span>
+          <button type="button" class="btn" data-level="1">Easy</button>
+          <button type="button" class="btn" data-level="2">Medium</button>
+          <button type="button" class="btn" data-level="3">Hard</button>
+        </div>
 
         <div>
           <div class="section-title">Profile</div>
@@ -1247,6 +1321,8 @@
         <div id="weapons-section">
           <div class="section-title">Weapon <span class="hint">keys 1–5</span></div>
           <div id="weapon-list" class="weapons"></div>
+          <div class="section-title">Offhand <span class="hint">E</span></div>
+          <div id="offhand-list" class="offhands"></div>
         </div>
 
         <div id="maps-title" class="section-title">Maps</div>
@@ -1270,6 +1346,7 @@
       <div id="t-jump" class="tbtn" role="button" aria-label="Jump">JUMP</div>
       <div id="t-slide" class="tbtn" role="button" aria-label="Slide">SLIDE</div>
       <div id="t-aim" class="tbtn" role="button" aria-label="Aim down sights">AIM</div>
+      <div id="t-off" class="tbtn" role="button" aria-label="Offhand: knife or grenade">E</div>
       <div id="t-fire" class="tbtn fire" role="button" aria-label="Hold to charge, release to fire">FIRE</div>
     </div>
 

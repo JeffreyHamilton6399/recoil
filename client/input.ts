@@ -1,7 +1,7 @@
 // Keyboard, mouse and touch input for first-person play.
 // Keyboard: WASD or arrows to move, Space to jump, Shift to sprint, Ctrl or
-// C to slide. Mouse: look (with pointer lock), left button to fire, right
-// button to aim down sights.
+// C to slide, E or G for the offhand (knife or shock grenade). Mouse: look
+// (with pointer lock), left button to fire, right button to aim down sights.
 // Touch: a move stick on the left (push it all the way to sprint), drag
 // anywhere else to look, and FIRE / JUMP / SLIDE / AIM buttons.
 //
@@ -16,7 +16,7 @@ import * as C from '../shared/constants.js';
 import { clamp, wrapAngle } from '../shared/sim.js';
 import type { InputState } from '../shared/types.js';
 
-type Key = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'fire' | 'sprint' | 'crouch' | 'aim';
+type Key = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'fire' | 'sprint' | 'crouch' | 'aim' | 'offhand';
 
 const KEYS: Record<string, Key> = {
   KeyW: 'forward',
@@ -35,6 +35,8 @@ const KEYS: Record<string, Key> = {
   ControlLeft: 'crouch',
   ControlRight: 'crouch',
   KeyQ: 'aim',
+  KeyE: 'offhand',
+  KeyG: 'offhand',
 };
 
 /** Radians per pixel of touch drag. */
@@ -50,6 +52,7 @@ export interface TouchElements {
   jump: HTMLElement;
   slide: HTMLElement;
   aim: HTMLElement;
+  offhand: HTMLElement;
 }
 
 export class Input {
@@ -70,10 +73,12 @@ export class Input {
   private touchFire = new Set<number>();
   private touchJump = new Set<number>();
   private touchSlide = new Set<number>();
+  private touchOff = new Set<number>();
   /** Presses since the last sample, so a tap shorter than a tick still counts. */
   private fireLatch = false;
   private jumpLatch = false;
   private crouchLatch = false;
+  private offLatch = false;
   private stickId: number | null = null;
   private stickOrigin = { x: 0, y: 0 };
   private stick = { x: 0, y: 0 };
@@ -94,6 +99,7 @@ export class Input {
       if (key === 'jump') this.jumpLatch = true;
       if (key === 'fire') this.fireLatch = true;
       if (key === 'crouch') this.crouchLatch = true;
+      if (key === 'offhand') this.offLatch = true;
       this.fireChanged();
     });
     window.addEventListener('keyup', (e) => {
@@ -228,12 +234,14 @@ export class Input {
       sprint,
       crouch: this.held('crouch') || this.touchSlide.size > 0 || this.crouchLatch,
       aim: this.mouseAim || this.touchAim || this.held('aim'),
+      offhand: this.held('offhand') || this.touchOff.size > 0 || this.offLatch,
       yaw: Math.round(this.yaw * 10000) / 10000,
       pitch: Math.round(this.pitch * 10000) / 10000,
     };
     this.fireLatch = false;
     this.jumpLatch = false;
     this.crouchLatch = false;
+    this.offLatch = false;
     return s;
   }
 
@@ -257,7 +265,7 @@ export class Input {
   // -------------------------------------------------------------------------
 
   private bindTouch(): void {
-    const { stick, knob, look, fire, jump, slide, aim } = this.touch;
+    const { stick, knob, look, fire, jump, slide, aim, offhand } = this.touch;
     // AIM toggles on touch: tap to zoom in, tap again to zoom out.
     aim.addEventListener('pointerdown', (e) => {
       e.preventDefault();
@@ -336,6 +344,7 @@ export class Input {
     button(fire, this.touchFire, () => (this.fireLatch = true));
     button(jump, this.touchJump, () => (this.jumpLatch = true));
     button(slide, this.touchSlide, () => (this.crouchLatch = true));
+    button(offhand, this.touchOff, () => (this.offLatch = true));
   }
 
   private moveStick(e: PointerEvent): void {

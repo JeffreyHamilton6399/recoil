@@ -22,6 +22,8 @@ export interface InputState {
   crouch: boolean;
   /** Aiming down sights (zoomed in). */
   aim: boolean;
+  /** Use the offhand (knife or shock grenade). */
+  offhand: boolean;
   /** Look direction in radians. Yaw 0 faces +x, and yaw grows counter-clockwise seen from above. */
   yaw: number;
   /** Radians above the horizon (negative looks down). */
@@ -79,6 +81,14 @@ export interface PlayerState {
   shield: number;
   /** Sequence number of the last input the server applied (for client prediction). */
   ack: number;
+  /** Offhand: OFFHAND_KNIFE or OFFHAND_SHOCK. */
+  offhand: number;
+  /** Seconds before the offhand can be used again. */
+  offCd: number;
+  /** The offhand button was held last tick (each use needs a fresh press). */
+  offHeld: boolean;
+  /** Set for the tick the offhand is used; the tick resolves the slash or throw. */
+  offUse: boolean;
 }
 
 export interface Bullet {
@@ -110,8 +120,12 @@ export interface Powerup {
 export type GameEvent =
   /** a is yaw, b is pitch, c is charge, w the weapon. */
   | { k: 'fire'; p: PlayerId; w: number; c: number; x: number; y: number; z: number; a: number; b: number }
-  /** An explosion of radius r. */
-  | { k: 'boom'; p: PlayerId; x: number; y: number; z: number; r: number }
+  /** An explosion of radius r, from weapon w (SHOCK_WEAPON for a shockwave). */
+  | { k: 'boom'; p: PlayerId; x: number; y: number; z: number; r: number; w: number }
+  /** A knife swing from (x, y, z) facing yaw a; hit if it connected. */
+  | { k: 'melee'; p: PlayerId; x: number; y: number; z: number; a: number; hit: boolean }
+  /** A shock grenade thrown. */
+  | { k: 'throw'; p: PlayerId }
   | { k: 'pad'; p: PlayerId; x: number; y: number }
   | { k: 'slide'; p: PlayerId }
   | { k: 'mantle'; p: PlayerId }
@@ -169,15 +183,17 @@ export const FX_GROUNDED = 16;
 export const FX_CHARGING = 32;
 export const FX_SLIDE_LOCK = 64;
 export const FX_AIM = 128;
+export const FX_OFF_HELD = 256;
 
 /**
  * [id, x, y, z, vx, vy, vz, yaw, pitch, charge, damage,
  *  fallTime (-1 while standing), fx bits, cooldown, input ack,
- *  weapon, slide seconds left, slide cooldown]
+ *  weapon, slide seconds left, slide cooldown, offhand, offhand cooldown]
  */
 export type PlayerSnap = [
   number, number, number, number, number, number, number, number, number,
   number, number, number, number, number, number, number, number, number,
+  number, number,
 ];
 
 /** [id, owner, x, y, z, radius, weapon] */
@@ -213,6 +229,10 @@ export interface RosterEntry {
   score: number;
   /** Chosen weapon (index into WEAPONS). */
   weapon: number;
+  /** Chosen offhand (index into OFFHANDS). */
+  offhand: number;
+  /** 0 for a person, else a bot's difficulty (1 easy, 2 medium, 3 hard). */
+  bot: number;
   /** Has voice chat switched on. */
   voice: boolean;
   online: boolean;
@@ -230,8 +250,13 @@ export type ClientMessage =
   | { t: 'start' }
   /** Pick a weapon (index into WEAPONS). */
   | { t: 'weapon'; w: number }
-  /** One tick of input: sequence number, forward, strafe, jump, fire, sprint, crouch, aim, yaw, pitch. */
-  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; z: boolean; a: number; b: number }
+  /** Pick an offhand (index into OFFHANDS). */
+  | { t: 'offhand'; o: number }
+  /** Host: add a bot of difficulty d (1 easy, 2 medium, 3 hard), or remove one. */
+  | { t: 'addBot'; d: number }
+  | { t: 'removeBot'; id: PlayerId }
+  /** One tick of input: sequence number, forward, strafe, jump, fire, sprint, crouch, aim, offhand, yaw, pitch. */
+  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; z: boolean; o: boolean; a: number; b: number }
   | { t: 'ping'; c: number }
   /** Voice chat switched on or off. */
   | { t: 'voice'; on: boolean }

@@ -11,7 +11,7 @@ import * as C from '../shared/constants.js';
 import { MAPS, mapScale, scaledBumpers, type MapDef } from '../shared/maps.js';
 import { clamp } from '../shared/sim.js';
 import { FX_SHIELD, type GameEvent, type PlayerId, type PowerupKind, type RosterEntry } from '../shared/types.js';
-import { weaponDef } from '../shared/weapons.js';
+import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
 import { FONT, INK, POWERUP_STYLE, arenaOutline, makeSurfaceCanvas } from './art.js';
 import { makeArms, makeGun, type Gun } from './guns.js';
 import { Inker } from './ink.js';
@@ -879,14 +879,15 @@ export class Scene3D {
       seen.add(b.id);
       let obj = this.bullets.get(b.id);
       const w = weaponDef(b.weapon);
-      const bomb = b.weapon === 3;
+      // Boomer bombs and shock grenades are thrown objects, not bullets.
+      const bomb = b.weapon === 3 || b.weapon === SHOCK_WEAPON;
       if (!obj) {
         const color = new THREE.Color(this.colorOf(view, b.owner));
         const accent = new THREE.Color(w.accent);
         const group = new THREE.Group();
         if (bomb) {
           // The Boomer lobs a grenade: dark, outlined, with a hot glow.
-          const ball = new THREE.Mesh(this.bulletGeo, toon(new THREE.Color('#2b2250')));
+          const ball = new THREE.Mesh(this.bulletGeo, toon(new THREE.Color(b.weapon === SHOCK_WEAPON ? '#1d4a5c' : '#2b2250')));
           outlined(ball, 1.15);
           group.add(ball);
           group.add(glowSprite(accent, 2.6));
@@ -1074,21 +1075,38 @@ export class Scene3D {
       }
       case 'boom': {
         const at = toThree(ev.x, ev.y, ev.z);
-        this.particles.burst(at, 60, new THREE.Color('#ffb347'), 12, 0.6, 4);
-        this.particles.burst(at, 30, new THREE.Color('#fff6e0'), 7, 0.4, 0);
-        this.particles.burst(at, 24, new THREE.Color(weaponDef(3).accent), 9, 0.7, 6);
+        const isShock = ev.w === SHOCK_WEAPON;
+        if (isShock) {
+          // A shockwave: an electric blue burst, no fire.
+          this.particles.burst(at, 70, new THREE.Color('#7fe7ff'), 16, 0.5, 0);
+          this.particles.burst(at, 30, new THREE.Color('#ffffff'), 10, 0.3, 0);
+        } else {
+          this.particles.burst(at, 60, new THREE.Color('#ffb347'), 12, 0.6, 4);
+          this.particles.burst(at, 30, new THREE.Color('#fff6e0'), 7, 0.4, 0);
+          this.particles.burst(at, 24, new THREE.Color(weaponDef(3).accent), 9, 0.7, 6);
+        }
         const shock = new THREE.Mesh(
           new THREE.SphereGeometry(1, 24, 16),
-          new THREE.MeshBasicMaterial({ color: '#ffd93d', transparent: true, opacity: 0.7, depthWrite: false }),
+          new THREE.MeshBasicMaterial({ color: isShock ? '#7fe7ff' : '#ffd93d', transparent: true, opacity: isShock ? 0.45 : 0.7, depthWrite: false }),
         );
         shock.position.copy(at);
         this.scene.add(shock);
         this.shocks.push({ mesh: shock, life: 0.35, radius: ev.r });
-        this.addWord(at.clone().add(tmpV.set(0, 1.2, 0)), BOOM_WORDS[Math.floor(Math.random() * BOOM_WORDS.length)], 3.4);
+        this.addWord(at.clone().add(tmpV.set(0, 1.2, 0)), isShock ? 'WHOOM!' : BOOM_WORDS[Math.floor(Math.random() * BOOM_WORDS.length)], 3.4);
         const dist = at.distanceTo(this.camera.position);
         this.addTrauma(clamp(0.6 - dist / 25, 0, 0.6));
         return false;
       }
+      case 'melee': {
+        // A slash of sparks sweeping across in front of the swinger.
+        const at = toThree(ev.x, ev.y, ev.z);
+        const d = toThree(Math.cos(ev.a), Math.sin(ev.a), 0, tmpV2);
+        this.particles.burst(at, ev.hit ? 26 : 12, new THREE.Color(ev.hit ? '#ffffff' : '#d8d2ee'), ev.hit ? 7 : 4, 0.25, 0, d, 1.2);
+        if (ev.hit) this.addWord(at.clone().add(tmpV.set(0, 0.6, 0)), 'SLASH!', 2.4);
+        return false;
+      }
+      case 'throw':
+        return false;
       case 'pad': {
         this.particles.burst(toThree(ev.x, ev.y, 0.3), 30, new THREE.Color('#00e1ff'), 7, 0.6, -2, UP, 0.5);
         return false;

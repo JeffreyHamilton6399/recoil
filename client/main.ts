@@ -7,7 +7,7 @@ import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import { angleDiff, clamp, controlPlayer, lerp, movePlayer, phaseRules, playerFromSnap } from '../shared/sim.js';
 import { POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
-import { weaponDef } from '../shared/weapons.js';
+import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
 import type { GameEvent, InputState, PlayerId, PlayerSnap, PlayerState, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
 import { carouselPosition } from './art.js';
 import { Sfx } from './audio.js';
@@ -127,6 +127,12 @@ const ui = new UI({
     sfx.uiPop();
     if (roomCode && myId !== -1) net.send({ t: 'weapon', w });
   },
+  onOffhand: (o) => {
+    sfx.uiPop();
+    if (roomCode && myId !== -1) net.send({ t: 'offhand', o });
+  },
+  onAddBot: (d) => net.send({ t: 'addBot', d }),
+  onRemoveBot: (id) => net.send({ t: 'removeBot', id }),
   onVoice: () => {
     sfx.unlock();
     void voice.cycleMode().then((err) => err && hud.addFeed([err]));
@@ -264,6 +270,7 @@ function handleMessage(msg: ServerMessage): void {
       window.history.replaceState(null, '', `/?room=${msg.code}`);
       ui.setBanner(null);
       void voice.setSeat(myId).then((err) => err && hud.addFeed([err]));
+      if (myId !== -1) net.send({ t: 'offhand', o: ui.offhand });
       refreshRoomUi();
       break;
     case 'roster':
@@ -402,7 +409,7 @@ function clientTick(): void {
     inp.aim = false;
   }
   seq++;
-  net.send({ t: 'input', s: seq, f: inp.forward, r: inp.strafe, j: inp.jump, x: inp.firing, k: inp.sprint, c: inp.crouch, z: inp.aim, a: inp.yaw, b: inp.pitch });
+  net.send({ t: 'input', s: seq, f: inp.forward, r: inp.strafe, j: inp.jump, x: inp.firing, k: inp.sprint, c: inp.crouch, z: inp.aim, o: inp.offhand, a: inp.yaw, b: inp.pitch });
   history.push({ seq, input: inp });
   lastInput = inp;
   if (history.length > 90) history.shift();
@@ -416,6 +423,11 @@ function clientTick(): void {
   if (fired >= 0) {
     sfx.shot(pred.weapon, fired, 0);
     scene.localFire(pred.weapon, fired, myColor());
+  }
+  // Your own offhand sounds right away (the server's copy is skipped).
+  if (pred.offUse) {
+    if (pred.offhand === C.OFFHAND_KNIFE) sfx.knife(false, 0);
+    else sfx.throwGrenade(0);
   }
   // Your own moves sound right away; the server's copies of these events are skipped.
   for (const ev of events) {
@@ -580,6 +592,8 @@ const attractRoster: RosterEntry[] = [0, 1, 2, 3].map((i) => ({
   name: ['Zip', 'Boom', 'Kick', 'Pow'][i],
   color: (i * 2 + 1) % C.PLAYER_PALETTE.length,
   weapon: i % 5,
+  offhand: i % 2,
+  bot: 0,
   voice: false,
   score: 0,
   online: true,
@@ -637,8 +651,19 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
       if (ev.p !== myId) sfx.shot(ev.w, ev.c, scene.panFor(ev.x, ev.y, ev.z), 0.7);
       break;
     case 'boom':
-      sfx.boom(ev.r, scene.panFor(ev.x, ev.y, ev.z));
+      if (ev.w === SHOCK_WEAPON) sfx.shockwave(scene.panFor(ev.x, ev.y, ev.z));
+      else sfx.boom(ev.r, scene.panFor(ev.x, ev.y, ev.z));
       break;
+    case 'melee':
+      if (ev.p !== myId) sfx.knife(ev.hit, scene.panFor(ev.x, ev.y, ev.z));
+      else if (ev.hit) sfx.knife(true, 0);
+      break;
+    case 'throw': {
+      if (ev.p === myId) break;
+      const p = view.players.find((q) => q.id === ev.p);
+      sfx.throwGrenade(p ? scene.panFor(p.x, p.y, p.z) : 0, 0.6);
+      break;
+    }
     case 'pad':
       if (ev.p !== myId) sfx.pad(scene.panFor(ev.x, ev.y, 0));
       break;
@@ -859,6 +884,8 @@ function frame(): void {
         weapon: pred?.weapon ?? 0,
         aiming: cam.kind === 'first' && cam.aiming,
         ready: pred ? 1 - Math.min(1, pred.cooldown / Math.max(0.05, weaponDef(pred.weapon).cooldown)) : 1,
+        offhand: pred?.offhand ?? ui.offhand,
+        offLeft: pred?.offCd ?? 0,
       },
       dt,
     );

@@ -6,7 +6,7 @@
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import { FX_MEGA, FX_RAPID, FX_SHIELD, FX_TRIPLE, type PlayerId, type RosterEntry } from '../shared/types.js';
-import { weaponDef } from '../shared/weapons.js';
+import { OFFHANDS, weaponDef } from '../shared/weapons.js';
 import { POWERUP_STYLE, carouselPosition } from './art.js';
 import type { View, ViewPlayer } from './scene.js';
 
@@ -32,6 +32,9 @@ export interface HudInfo {
   weapon: number;
   ready: number;
   aiming: boolean;
+  /** Your offhand, and seconds until it's ready (0 = ready). */
+  offhand: number;
+  offLeft: number;
 }
 
 export class Hud {
@@ -121,7 +124,8 @@ export class Hud {
         this.dmg.style.color = t < 0.5 ? `hsl(${50 - t * 40}, 100%, ${100 - t * 80}%)` : `hsl(${50 - t * 50}, 100%, ${70 - (t - 0.5) * 20}%)`;
       }
       const fx = me.fx & (FX_SHIELD | FX_RAPID | FX_TRIPLE | FX_MEGA);
-      const chipKey = `${fx}|${info.weapon}`;
+      const offLeft = Math.ceil(info.offLeft);
+      const chipKey = `${fx}|${info.weapon}|${info.offhand}|${offLeft}`;
       if (chipKey !== this.lastChips) {
         this.lastChips = chipKey;
         this.chips.textContent = '';
@@ -130,6 +134,13 @@ export class Hud {
         gun.style.setProperty('--c', def.accent);
         gun.textContent = def.name.toUpperCase();
         this.chips.append(gun);
+        // Offhand: its name when ready, a countdown while it recharges.
+        const off = OFFHANDS[info.offhand] ?? OFFHANDS[0];
+        const offChip = document.createElement('div');
+        offChip.className = offLeft > 0 ? 'chip cooling' : 'chip';
+        offChip.style.setProperty('--c', off.accent);
+        offChip.textContent = offLeft > 0 ? `E  ${off.name.toUpperCase()}  ${offLeft}s` : `E  ${off.name.toUpperCase()}`;
+        this.chips.append(offChip);
         const add = (bit: number, kind: keyof typeof POWERUP_STYLE): void => {
           if (!(fx & bit)) return;
           const chip = document.createElement('div');

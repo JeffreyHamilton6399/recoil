@@ -6,6 +6,9 @@
 // 5. Movement: running, sprinting, sliding, jumping, climbing, jump pads,
 //    a bomb-jump, and running off the edge.
 // 6. Client prediction replays the same inputs to the same place as the server.
+// 7. Offhands: the knife shoves someone in front of you; the shock grenade
+//    bounces and its shockwave throws people.
+// 8. Bots: full bot matches finish, and hard bots beat easy ones.
 
 import assert from 'node:assert/strict';
 import * as C from './constants.js';
@@ -23,11 +26,13 @@ import {
   playerSnap,
   removePlayer,
   setMapChoice,
+  setOffhand,
   setWeapon,
   startMatch,
   step,
 } from './sim.js';
-import { WEAPONS } from './weapons.js';
+import { BotBrain } from './bot.js';
+import { SHOCK_WEAPON, WEAPONS } from './weapons.js';
 import type { GameState, InputState, PlayerId } from './types.js';
 
 /** Small seeded PRNG for test inputs, so failures are reproducible. */
@@ -72,6 +77,7 @@ function randomInput(rand: () => number): InputState {
     sprint: rand() < 0.5,
     crouch: rand() < 0.15,
     aim: rand() < 0.2,
+    offhand: rand() < 0.05,
     yaw: (rand() * 2 - 1) * Math.PI,
     pitch: (rand() * 2 - 1) * 1.2,
   };
@@ -281,6 +287,86 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   }
   assert.ok(maxErr < 1e-9, `prediction drifted by ${maxErr}`);
   console.log('ok 6 - prediction replays match the server');
+}
+
+// 7. Offhands.
+{
+  const s = createGame(5);
+  addPlayer(s, 0);
+  addPlayer(s, 1);
+  const [a, b] = s.players;
+  // Face each other at 1.4 m.
+  a.x = 0; a.y = 0; b.x = 1.4; b.y = 0;
+  a.yaw = 0;
+  const noop = (p: typeof a): InputState => ({ ...NO_INPUT, yaw: p.yaw, pitch: 0 });
+  let ev = step(s, new Map([[0, { ...noop(a), offhand: true }], [1, noop(b)]]));
+  assert.ok(ev.some((e) => e.k === 'melee' && e.hit), 'knife connects at point-blank');
+  assert.ok(b.vx > 5 && b.damage > 0, `knife shoves (vx=${b.vx.toFixed(1)})`);
+  assert.ok(a.offCd > 0, 'knife goes on cooldown');
+  // Holding the button doesn't swing again.
+  ev = step(s, new Map([[0, { ...noop(a), offhand: true }], [1, noop(b)]]));
+  assert.ok(!ev.some((e) => e.k === 'melee'), 'no swing while held / on cooldown');
+
+  // Shock grenade thrown at someone 9 m away: it bursts and throws them.
+  const g = createGame(6);
+  addPlayer(g, 0);
+  addPlayer(g, 1);
+  setOffhand(g, 0, C.OFFHAND_SHOCK);
+  const [ga, gb] = g.players;
+  ga.x = -4; ga.y = 0; ga.yaw = 0; ga.pitch = -0.1;
+  gb.x = 5; gb.y = 0;
+  let thrown = false;
+  let boom = false;
+  let shoved = 0;
+  for (let i = 0; i < 90 && !boom; i++) {
+    const evs = step(g, new Map([[0, { ...noop(ga), pitch: -0.1, offhand: i === 0 }], [1, noop(gb)]]));
+    thrown ||= evs.some((e) => e.k === 'throw');
+    boom ||= evs.some((e) => e.k === 'boom' && e.w === SHOCK_WEAPON);
+    shoved = Math.max(shoved, Math.hypot(gb.vx, gb.vy, gb.vz));
+  }
+  assert.ok(thrown && boom, 'grenade thrown and burst');
+  assert.ok(shoved > 3, `shockwave throws the target (speed ${shoved.toFixed(1)})`);
+  console.log(`ok 7 - knife shove ${b.vx.toFixed(1)} m/s, shockwave throw ${shoved.toFixed(1)} m/s`);
+}
+
+// 8. Bots.
+{
+  // Duels: hard vs easy on several maps. Hard should win most rounds.
+  let hardWins = 0;
+  let easyWins = 0;
+  for (let seed = 1; seed <= 12; seed++) {
+    const s = createGame(seed * 97);
+    addPlayer(s, 0, seed % 5);
+    addPlayer(s, 1, (seed + 2) % 5);
+    setOffhand(s, 0, seed % 2);
+    setOffhand(s, 1, (seed + 1) % 2);
+    startMatch(s);
+    const bots = [new BotBrain(3), new BotBrain(1)];
+    for (let i = 0; i < 30 * 60 * 6 && s.phase !== 'matchEnd'; i++) {
+      const inputs = new Map<PlayerId, InputState>();
+      for (const p of s.players) inputs.set(p.id, bots[p.id].think(s, p));
+      step(s, inputs);
+      assertSane(s);
+    }
+    hardWins += s.scores[0];
+    easyWins += s.scores[1];
+  }
+  assert.ok(hardWins > easyWins * 2, `hard bots should beat easy bots (hard ${hardWins} rounds, easy ${easyWins})`);
+
+  // A full 6-bot free-for-all finishes.
+  const s = createGame(4242);
+  for (let id = 0; id < 6; id++) addPlayer(s, id, id % 5);
+  startMatch(s);
+  const brains = [0, 1, 2, 3, 4, 5].map((i) => new BotBrain(((i % 3) + 1) as 1 | 2 | 3));
+  let ticks = 0;
+  for (; ticks < 30 * 60 * 15 && s.phase !== 'matchEnd'; ticks++) {
+    const inputs = new Map<PlayerId, InputState>();
+    for (const p of s.players) inputs.set(p.id, brains[p.id].think(s, p));
+    step(s, inputs);
+    assertSane(s);
+  }
+  assert.equal(s.phase, 'matchEnd', 'a 6-bot match finishes');
+  console.log(`ok 8 - hard beat easy ${hardWins}-${easyWins} in rounds; 6-bot match done in ${(ticks / 30 / 60).toFixed(1)} min`);
 }
 
 console.log('all simulation tests passed');

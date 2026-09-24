@@ -239,3 +239,36 @@ export const CORRECTION_SNAP = 3;
 export const MOUSE_SENSITIVITY = 0.0022;
 /** Camera field of view in degrees (vertical). */
 export const FOV = 80;
+
+// ---------------------------------------------------------------------------
+// Offhand (E): every player carries one, picked in the lobby
+// ---------------------------------------------------------------------------
+
+/** Offhand ids. */
+export const OFFHAND_KNIFE = 0;
+export const OFFHAND_SHOCK = 1;
+/** Knife: reach (from your centre to theirs, plus body radii)... */
+export const KNIFE_RANGE = 2.3;
+/** ...only in front of you (cosine of the half-angle of the swing)... */
+export const KNIFE_CONE = 0.55;
+/** ...a big close-range shove... */
+export const KNIFE_KNOCKBACK = 15;
+export const KNIFE_DAMAGE = 11;
+/** ...with a lunge forward as you swing... */
+export const KNIFE_LUNGE = 7;
+/** ...and this many seconds before the next swing. */
+export const KNIFE_COOLDOWN = 0.9;
+/** Shock grenade: seconds before you can throw another. */
+export const SHOCK_COOLDOWN = 7;
+/** Extra upward angle when throwing, so it arcs. */
+export const SHOCK_LOFT = 0.18;
+
+// ---------------------------------------------------------------------------
+// Bots
+// ---------------------------------------------------------------------------
+
+/** Quick play: once someone has waited this long alone, bots fill the room... */
+export const PUBLIC_BOT_DELAY = 5;
+/** ...up to this many players in total (they leave as real players join). */
+export const PUBLIC_BOT_FILL = 4;
+

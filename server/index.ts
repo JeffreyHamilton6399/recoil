@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
-import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, setWeapon, startMatch, step } from '../shared/sim.js';
-import { isWeapon } from '../shared/weapons.js';
+import { BOT_LEVEL_NAMES, BotBrain, isBotLevel, type BotLevel } from '../shared/bot.js';
+import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, setOffhand, setWeapon, startMatch, step } from '../shared/sim.js';
+import { OFFHANDS, WEAPONS, isOffhand, isWeapon } from '../shared/weapons.js';
 import {
   POWERUP_KINDS,
   ROOM_CODE_PATTERN,
@@ -50,7 +51,10 @@ interface Seat {
   name: string;
   color: number;
   weapon: number;
+  offhand: number;
   voice: boolean;
+  /** Set for a bot seat (no client, never disconnects). */
+  bot: BotBrain | null;
   /** Inputs received but not yet simulated, one per tick, oldest first. */
   inputs: { seq: number; input: InputState }[];
   /** The last input simulated, repeated when the queue runs dry. */
@@ -72,6 +76,8 @@ interface Room {
   pub: boolean;
   /** Public rooms: when the match starts automatically (ms), or null. */
   autoStartAt: number | null;
+  /** Public rooms: when the next bot joins to fill the room (ms), or null. */
+  botFillAt: number | null;
 }
 
 const rooms = new Map<string, Room>();
@@ -96,6 +102,7 @@ function createRoom(pub: boolean): Room {
     lastRoster: '',
     pub,
     autoStartAt: null,
+    botFillAt: null,
   };
   rooms.set(room.code, room);
   log(`${pub ? 'public' : 'private'} room ${room.code} created (${rooms.size} total)`);
@@ -124,7 +131,7 @@ function findPublicRoom(): Room {
 function startRoomMatch(room: Room): void {
   // Anyone still reconnecting from last match loses their seat now.
   room.seats.forEach((s, id) => {
-    if (s && !s.client) freeSeat(room, id);
+    if (s && !s.client && !s.bot) freeSeat(room, id);
   });
   room.autoStartAt = null;
   startMatch(room.state);
@@ -161,9 +168,16 @@ function joinRoom(client: Client, room: Room, name: string, color: number, weapo
   leaveRoom(client);
   const { seats } = room;
 
-  // Prefer your own old seat (same browser tab), then any empty seat.
+  // Prefer your own old seat (same browser tab), then any empty seat, then a bot's.
   let seat: PlayerId | -1 = seats.findIndex((s) => s !== null && s.clientId === client.id);
   if (seat === -1) seat = seats.findIndex((s) => s === null);
+  if (seat === -1) {
+    const bot = seats.findIndex((s) => s?.bot);
+    if (bot !== -1) {
+      freeSeat(room, bot);
+      seat = bot;
+    }
+  }
 
   client.room = room;
   client.seat = seat;
@@ -183,7 +197,9 @@ function joinRoom(client: Client, room: Room, name: string, color: number, weapo
       name: cleanName(name, seat),
       color: freeColor(room, color, seat),
       weapon,
+      offhand: prev?.offhand ?? C.OFFHAND_KNIFE,
       voice: false,
+      bot: null,
       inputs: [],
       lastInput: { ...NO_INPUT },
       lastSeq: 0,
@@ -191,11 +207,44 @@ function joinRoom(client: Client, room: Room, name: string, color: number, weapo
       joinedAt: prev?.joinedAt ?? joinCounter++,
     };
     addPlayer(room.state, seat, weapon);
+    setOffhand(room.state, seat, seats[seat]?.offhand ?? C.OFFHAND_KNIFE);
     setWeapon(room.state, seat, weapon);
   }
   send(client, { t: 'joined', code: room.code, you: seat });
   room.lastRoster = ''; // force a roster update
   log(`room ${room.code}: ${seat === -1 ? 'spectator' : `seat ${seat + 1}`} joined`);
+}
+
+const BOT_NAMES = ['Rivet', 'Sprocket', 'Gizmo', 'Widget', 'Piston', 'Dynamo', 'Ratchet', 'Servo', 'Gasket', 'Flywheel'];
+
+/** Seats a bot of the given difficulty, if there's room. Returns its seat, or -1. */
+function addBot(room: Room, level: BotLevel): PlayerId | -1 {
+  const seat = room.seats.findIndex((s) => s === null);
+  if (seat === -1) return -1;
+  const used = new Set(room.seats.map((s) => s?.name));
+  const base = BOT_NAMES.find((n) => !used.has(n)) ?? `Bot ${seat + 1}`;
+  const weapon = Math.floor(Math.random() * WEAPONS.length);
+  const offhand = Math.floor(Math.random() * OFFHANDS.length);
+  room.seats[seat] = {
+    clientId: `bot-${seat}-${joinCounter}`,
+    client: null,
+    name: base,
+    color: freeColor(room, Math.floor(Math.random() * C.PLAYER_PALETTE.length), seat),
+    weapon,
+    offhand,
+    voice: false,
+    bot: new BotBrain(level),
+    inputs: [],
+    lastInput: { ...NO_INPUT },
+    lastSeq: 0,
+    disconnectedAt: 0,
+    joinedAt: joinCounter++,
+  };
+  addPlayer(room.state, seat, weapon);
+  setOffhand(room.state, seat, offhand);
+  room.lastRoster = '';
+  log(`room ${room.code}: ${BOT_LEVEL_NAMES[level].toLowerCase()} bot joined seat ${seat + 1}`);
+  return seat;
 }
 
 function freeSeat(room: Room, id: PlayerId): void {
@@ -257,6 +306,27 @@ function handleMessage(client: Client, msg: ClientMessage): void {
       if (!colorTaken(room, msg.color, client.seat)) seat.color = msg.color;
       break;
     }
+    case 'offhand': {
+      const room = client.room;
+      const seat = room && client.seat !== -1 ? room.seats[client.seat] : null;
+      if (!room || !seat || seat.client !== client) break;
+      seat.offhand = msg.o;
+      setOffhand(room.state, client.seat, msg.o);
+      break;
+    }
+    case 'addBot': {
+      const room = client.room;
+      if (room && !room.pub && room.state.phase === 'lobby' && hostId(room) === client.seat) addBot(room, msg.d as BotLevel);
+      break;
+    }
+    case 'removeBot': {
+      const room = client.room;
+      if (room && !room.pub && hostId(room) === client.seat && room.seats[msg.id]?.bot) {
+        freeSeat(room, msg.id);
+        room.lastRoster = '';
+      }
+      break;
+    }
     case 'weapon': {
       const room = client.room;
       const seat = room && client.seat !== -1 ? room.seats[client.seat] : null;
@@ -268,7 +338,7 @@ function handleMessage(client: Client, msg: ClientMessage): void {
     case 'start': {
       const room = client.room;
       if (!room || room.state.phase !== 'lobby' || hostId(room) !== client.seat) break;
-      const ready = room.seats.filter((s) => s?.client).length;
+      const ready = room.seats.filter((s) => s?.client || s?.bot).length;
       if (ready >= C.MIN_PLAYERS) startRoomMatch(room);
       break;
     }
@@ -280,7 +350,7 @@ function handleMessage(client: Client, msg: ClientMessage): void {
       if (msg.s <= seat.lastSeq || seat.inputs.some((q) => q.seq >= msg.s)) break;
       seat.inputs.push({
         seq: msg.s,
-        input: { forward: msg.f, strafe: msg.r, jump: msg.j, firing: msg.x, sprint: msg.k, crouch: msg.c, aim: msg.z, yaw: msg.a, pitch: msg.b },
+        input: { forward: msg.f, strafe: msg.r, jump: msg.j, firing: msg.x, sprint: msg.k, crouch: msg.c, aim: msg.z, offhand: msg.o, yaw: msg.a, pitch: msg.b },
       });
       // A client far ahead (a burst after a stall): drop the oldest to keep latency down.
       if (seat.inputs.length > C.INPUT_BUFFER_MAX) seat.inputs.splice(0, seat.inputs.length - 2);
@@ -374,6 +444,12 @@ function parseMessage(data: RawData): ClientMessage | null {
       return isId(m.id) ? { t: 'quick', id: m.id, name: asName(m.name), color: asColor(m.color), w: asWeapon(m.w) } : null;
     case 'weapon':
       return isWeapon(m.w) ? { t: 'weapon', w: m.w } : null;
+    case 'offhand':
+      return isOffhand(m.o) ? { t: 'offhand', o: m.o } : null;
+    case 'addBot':
+      return isBotLevel(m.d) ? { t: 'addBot', d: m.d } : null;
+    case 'removeBot':
+      return typeof m.id === 'number' && Number.isInteger(m.id) && m.id >= 0 && m.id < C.MAX_PLAYERS ? { t: 'removeBot', id: m.id } : null;
     case 'map':
       return typeof m.choice === 'number' && Number.isInteger(m.choice) && m.choice >= -1 && m.choice < MAPS.length
         ? { t: 'map', choice: m.choice }
@@ -393,7 +469,7 @@ function parseMessage(data: RawData): ClientMessage | null {
       const seq = typeof m.s === 'number' && Number.isInteger(m.s) && m.s > 0 ? m.s : null;
       if (f === null || r === null || a === null || b === null || seq === null) return null;
       if (typeof m.j !== 'boolean' || typeof m.x !== 'boolean' || typeof m.k !== 'boolean' || typeof m.c !== 'boolean') return null;
-      return { t: 'input', s: seq, f, r, j: m.j, x: m.x, k: m.k, c: m.c, z: m.z === true, a, b };
+      return { t: 'input', s: seq, f, r, j: m.j, x: m.x, k: m.k, c: m.c, z: m.z === true, o: m.o === true, a, b };
     }
     case 'ping':
       return typeof m.c === 'number' && Number.isFinite(m.c) ? { t: 'ping', c: m.c } : null;
@@ -438,16 +514,37 @@ function tickRoom(room: Room, now: number): void {
 
   // Seats of players who never came back are released.
   seats.forEach((s, id) => {
-    if (s && !s.client && now - s.disconnectedAt > C.REJOIN_WINDOW * 1000) freeSeat(room, id);
+    if (s && !s.client && !s.bot && now - s.disconnectedAt > C.REJOIN_WINDOW * 1000) freeSeat(room, id);
   });
+  // Bots leave once no people are left (seated or reconnecting).
+  if (!seats.some((s) => s && !s.bot)) {
+    seats.forEach((s, id) => {
+      if (s?.bot) freeSeat(room, id);
+    });
+  }
 
   // Not enough players left for a match: everyone back to the lobby.
   const seated = seats.filter((s) => s !== null).length;
   if (state.phase !== 'lobby' && seated < C.MIN_PLAYERS) enterLobby(state);
 
+  // Quick play: nobody waits alone. After a few seconds, bots fill the room
+  // one at a time (and give up their seats as people join).
+  if (room.pub && state.phase === 'lobby') {
+    const humans = seats.filter((s) => s?.client).length;
+    const total = seats.filter((s) => s?.client || s?.bot).length;
+    if (humans === 0 || total >= C.PUBLIC_BOT_FILL) room.botFillAt = null;
+    else {
+      room.botFillAt ??= now + C.PUBLIC_BOT_DELAY * 1000;
+      if (now >= room.botFillAt) {
+        addBot(room, Math.random() < 0.25 ? 3 : 2);
+        room.botFillAt = now + 1000;
+      }
+    }
+  }
+
   // Public rooms start by themselves once enough people are in.
   if (room.pub && state.phase === 'lobby') {
-    const online = seats.filter((s) => s?.client).length;
+    const online = seats.filter((s) => s?.client || s?.bot).length;
     if (online < C.MIN_PLAYERS) room.autoStartAt = null;
     else {
       room.autoStartAt ??= now + C.PUBLIC_START_DELAY * 1000;
@@ -461,6 +558,11 @@ function tickRoom(room: Room, now: number): void {
   const inputs = new Map<PlayerId, InputState>();
   seats.forEach((s, id) => {
     if (!s) return;
+    if (s.bot) {
+      const p = getPlayer(state, id);
+      if (p) inputs.set(id, s.bot.think(state, p));
+      return;
+    }
     const next = s.client ? s.inputs.shift() : undefined;
     if (next) {
       s.lastInput = next.input;
@@ -487,7 +589,20 @@ function tickRoom(room: Room, now: number): void {
   const host = hostId(room);
   const roster: RosterEntry[] = [];
   seats.forEach((s, id) => {
-    if (s) roster.push({ id, name: s.name, color: s.color, score: state.scores[id] ?? 0, weapon: s.weapon, voice: s.voice && s.client !== null, online: s.client !== null, host: id === host });
+    if (s) {
+      roster.push({
+        id,
+        name: s.name,
+        color: s.color,
+        score: state.scores[id] ?? 0,
+        weapon: s.weapon,
+        offhand: s.offhand,
+        bot: s.bot ? s.bot.level : 0,
+        voice: s.voice && s.client !== null,
+        online: s.client !== null || s.bot !== null,
+        host: id === host,
+      });
+    }
   });
   const startsIn = room.autoStartAt === null ? -1 : Math.max(0, Math.ceil((room.autoStartAt - now) / 1000));
   const rosterMsg = JSON.stringify({

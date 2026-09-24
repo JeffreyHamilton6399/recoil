@@ -258,6 +258,31 @@ export class Sfx {
     this.click(2500, 0.25, pan, 0.02);
   }
 
+  /** Knife: a quick swish, with a meaty thud if it connects. */
+  knife(hit: boolean, pan: number): void {
+    this.noiseBurst('bandpass', 5200, 1600, 2.5, 0.12, 0.3, pan, 0.01);
+    this.click(7000, 0.1, pan, 0.006);
+    if (hit) {
+      this.tone('sine', 150, 45, 0.18, 0.55, pan, 0.03);
+      this.noiseBurst('lowpass', 1200, 200, 1, 0.1, 0.35, pan);
+    }
+  }
+
+  /** Shock grenade tossed: a whoosh and a metallic tick. */
+  throwGrenade(pan: number, volume = 1): void {
+    this.noiseBurst('bandpass', 1800, 700, 1.5, 0.18, 0.2 * volume, pan, 0.02);
+    this.tone('triangle', 1400, 1300, 0.05, 0.08 * volume, pan, 0.02);
+  }
+
+  /** Shockwave: a deep thump and a rising electric ring. */
+  shockwave(pan: number): void {
+    this.tone('sine', 90, 30, 0.5, 0.6, pan);
+    this.noiseBurst('lowpass', 900, 80, 0.8, 0.45, 0.45, pan, 0.002);
+    this.tone('sawtooth', 300, 1600, 0.35, 0.07, pan);
+    this.tone('sine', 900, 2400, 0.3, 0.08, pan, 0.02);
+    this.click(3000, 0.3, pan, 0.02);
+  }
+
   /** Jump pad: a springy whoomp. */
   pad(pan: number): void {
     this.boing(180, 0.4, 0.3, pan);

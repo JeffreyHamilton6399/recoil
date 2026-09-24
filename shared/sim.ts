@@ -15,6 +15,7 @@ import {
   FX_SLIDE_LOCK,
   FX_GROUNDED,
   FX_MEGA,
+  FX_OFF_HELD,
   FX_RAPID,
   FX_SHIELD,
   FX_TRIPLE,
@@ -28,7 +29,7 @@ import {
   type PlayerState,
   type PowerupKind,
 } from './types.js';
-import { WEAPONS, weaponDef, type WeaponDef } from './weapons.js';
+import { OFFHANDS, SHOCK_WEAPON, WEAPONS, weaponDef, type WeaponDef } from './weapons.js';
 
 export const NO_INPUT: InputState = Object.freeze({
   forward: 0,
@@ -38,6 +39,7 @@ export const NO_INPUT: InputState = Object.freeze({
   sprint: false,
   crouch: false,
   aim: false,
+  offhand: false,
   yaw: 0,
   pitch: 0,
 });
@@ -164,6 +166,10 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
     mega: 0,
     shield: 0,
     ack: 0,
+    offhand: C.OFFHAND_KNIFE,
+    offCd: 0,
+    offHeld: false,
+    offUse: false,
   };
 }
 
@@ -193,6 +199,8 @@ function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number
   p.triple = 0;
   p.mega = 0;
   p.shield = 0;
+  p.offCd = 0;
+  p.offUse = false;
 }
 
 /** Puts every player in the round, evenly spaced on the spawn ring. */
@@ -255,6 +263,14 @@ export function setWeapon(s: GameState, id: PlayerId, weapon: number): void {
     p.charging = false;
     p.cooldown = 0;
   }
+}
+
+/** Picks an offhand (knife or shock grenade). */
+export function setOffhand(s: GameState, id: PlayerId, offhand: number): void {
+  const p = getPlayer(s, id);
+  if (!p || !OFFHANDS[offhand]) return;
+  p.offhand = offhand;
+  p.offCd = 0;
 }
 
 /** Back to the lobby warm-up, on the picked map. Scores are kept for display until the next match. */
@@ -369,6 +385,23 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
     p.vz -= d.z * kick;
     if (p.vz > 0) p.grounded = false;
   }
+
+  // Offhand: a fresh press uses it when ready. The knife lunges you forward
+  // here (so your own prediction feels it at once); the tick resolves the hit
+  // or spawns the grenade.
+  p.offCd = Math.max(0, p.offCd - dt);
+  p.offUse = false;
+  if (canFire && input.offhand && !p.offHeld && p.offCd <= 0) {
+    p.offUse = true;
+    if (p.offhand === C.OFFHAND_KNIFE) {
+      p.vx += Math.cos(p.yaw) * C.KNIFE_LUNGE;
+      p.vy += Math.sin(p.yaw) * C.KNIFE_LUNGE;
+      p.offCd = C.KNIFE_COOLDOWN;
+    } else {
+      p.offCd = C.SHOCK_COOLDOWN;
+    }
+  }
+  p.offHeld = input.offhand;
 
   // Crouch while moving on the ground slides: tap it, or hold it through a
   // landing. One slide per hold; letting go (or jumping) re-arms it, so you
@@ -684,6 +717,59 @@ function spawnBullets(s: GameState, p: PlayerState, charge: number, events: Game
   events.push({ k: 'fire', p: p.id, w: p.weapon, c: charge, x: p.x + d.x * offset, y: p.y + d.y * offset, z: eyeZ + d.z * offset, a: p.yaw, b: p.pitch });
 }
 
+/** Resolves an offhand use: a knife slash in front of you, or a thrown shock grenade. */
+function useOffhand(s: GameState, p: PlayerState, events: GameEvent[]): void {
+  const eyeZ = p.z + (p.slide > 0 ? C.SLIDE_EYE_HEIGHT : C.EYE_HEIGHT);
+  if (p.offhand === C.OFFHAND_KNIFE) {
+    const fx = Math.cos(p.yaw);
+    const fy = Math.sin(p.yaw);
+    let hit = false;
+    for (const q of s.players) {
+      if (q.id === p.id || !q.inRound || q.falling) continue;
+      const dx = q.x - p.x;
+      const dy = q.y - p.y;
+      const flat = Math.hypot(dx, dy);
+      const dz = q.z + C.PLAYER_HEIGHT / 2 - (p.z + C.PLAYER_HEIGHT / 2);
+      if (flat > C.KNIFE_RANGE + C.PLAYER_RADIUS || Math.abs(dz) > 1.6) continue;
+      // In front of you (anyone overlapping you counts too).
+      if (flat > C.PLAYER_RADIUS * 2 && (dx * fx + dy * fy) / flat < C.KNIFE_CONE) continue;
+      hit = true;
+      const cz = q.z + C.PLAYER_HEIGHT / 2;
+      if (q.shield > 0) {
+        q.shield = 0;
+        events.push({ k: 'block', p: q.id, x: q.x, y: q.y, z: cz });
+        continue;
+      }
+      const impulse = C.KNIFE_KNOCKBACK * (1 + q.damage / C.DAMAGE_SCALE);
+      knock(q, flat > 1e-3 ? dx : fx, flat > 1e-3 ? dy : fy, 0.35, impulse);
+      q.damage += C.KNIFE_DAMAGE;
+      events.push({ k: 'hit', p: q.id, o: p.id, x: q.x, y: q.y, z: cz, f: impulse, d: C.KNIFE_DAMAGE });
+    }
+    events.push({ k: 'melee', p: p.id, x: p.x + fx * 0.8, y: p.y + fy * 0.8, z: eyeZ - 0.3, a: p.yaw, hit });
+    return;
+  }
+  // Shock grenade: lobbed from the eye, carrying some of your own speed.
+  const w = weaponDef(SHOCK_WEAPON);
+  const d = aimDir(p.yaw, Math.min(C.PITCH_LIMIT, p.pitch + C.SHOCK_LOFT));
+  const offset = C.PLAYER_RADIUS + w.radius[0] + C.MUZZLE_GAP;
+  s.bullets.push({
+    id: s.nextId++,
+    owner: p.id,
+    weapon: SHOCK_WEAPON,
+    x: p.x + d.x * offset,
+    y: p.y + d.y * offset,
+    z: eyeZ + d.z * offset,
+    vx: d.x * w.speed[0] + p.vx * 0.5,
+    vy: d.y * w.speed[0] + p.vy * 0.5,
+    vz: d.z * w.speed[0] + Math.max(0, p.vz) * 0.5,
+    radius: w.radius[0],
+    knockback: w.knockback[0],
+    damage: w.damage[0],
+    age: 0,
+  });
+  events.push({ k: 'throw', p: p.id });
+}
+
 function applyPowerup(p: PlayerState, kind: PowerupKind): void {
   switch (kind) {
     case 'rapid':
@@ -789,7 +875,7 @@ function knock(p: PlayerState, dx: number, dy: number, dz: number, impulse: numb
 /** A bomb bursting: everyone nearby is thrown away from it, the shooter too (without damage). */
 function explode(s: GameState, b: Bullet, x: number, y: number, z: number, events: GameEvent[]): void {
   const radius = weaponDef(b.weapon).splash;
-  events.push({ k: 'boom', p: b.owner, x, y, z, r: radius });
+  events.push({ k: 'boom', p: b.owner, x, y, z, r: radius, w: b.weapon });
   for (const p of s.players) {
     if (!p.inRound || p.falling) continue;
     const cz = p.z + C.PLAYER_HEIGHT / 2;
@@ -854,7 +940,25 @@ function moveBullet(s: GameState, b: Bullet, h: number, standing: PlayerState[],
 
     // Blocks and the roof.
     const onRoof = b.z < b.radius * 0.5 && b.z > -1.5 && !isOffMap(map, R, b.x, b.y);
-    if (onRoof || inBlock(map, R, b.x, b.y, b.z, b.radius * 0.5)) {
+    const inWall = !onRoof && inBlock(map, R, b.x, b.y, b.z, b.radius * 0.5);
+    if (w.bounce && (onRoof || inWall)) {
+      // Grenades bounce: step back out, then flip whichever way it hit.
+      b.x -= b.vx * hh;
+      b.y -= b.vy * hh;
+      b.z -= b.vz * hh;
+      const floor = floorAt(map, R, b.x, b.y, b.z + 0.05);
+      if (onRoof || (floor > -Infinity && b.z - floor < 0.3 && b.vz < 0)) {
+        b.vz = -b.vz * w.bounce;
+        b.vx *= 0.7;
+        b.vy *= 0.7;
+      } else if (inBlock(map, R, b.x + b.vx * hh, b.y, b.z, b.radius * 0.5)) {
+        b.vx = -b.vx * w.bounce;
+      } else {
+        b.vy = -b.vy * w.bounce;
+      }
+      continue;
+    }
+    if (onRoof || inWall) {
       if (w.splash > 0) explode(s, b, b.x, b.y, Math.max(b.z, 0.05), events);
       else events.push({ k: 'cancel', x: b.x, y: b.y, z: Math.max(b.z, 0.05), r: b.radius });
       return false;
@@ -975,6 +1079,7 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
     const input = inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
     const charge = controlPlayer(p, input, dt, canMove, canFire, events);
     if (charge >= 0) spawnBullets(s, p, charge, events);
+    if (p.offUse) useOffhand(s, p, events);
     p.rapid = Math.max(0, p.rapid - dt);
     p.triple = Math.max(0, p.triple - dt);
     p.shield = Math.max(0, p.shield - dt);
@@ -992,7 +1097,13 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
   const cullRadius = s.arenaRadius + C.BULLET_CULL_MARGIN;
   s.bullets = s.bullets.filter((b) => {
     b.age += dt;
-    return b.age < weaponDef(b.weapon).lifetime && Math.hypot(b.x, b.y) < cullRadius && b.z > -30;
+    const w = weaponDef(b.weapon);
+    if (b.age >= w.lifetime) {
+      // Grenades burst when their fuse runs out; bullets just fizzle.
+      if (w.fuse) explode(s, b, b.x, b.y, b.z, events);
+      return false;
+    }
+    return Math.hypot(b.x, b.y) < cullRadius && b.z > -30;
   });
 
   // Falling off the edge or into a hole.
@@ -1063,7 +1174,8 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     (p.grounded ? FX_GROUNDED : 0) |
     (p.charging ? FX_CHARGING : 0) |
     (p.slideLock ? FX_SLIDE_LOCK : 0) |
-    (p.aiming ? FX_AIM : 0);
+    (p.aiming ? FX_AIM : 0) |
+    (p.offHeld ? FX_OFF_HELD : 0);
   return [
     p.id,
     round3(p.x),
@@ -1083,6 +1195,8 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     p.weapon,
     round3(p.slide),
     round3(p.slideCd),
+    p.offhand,
+    round3(p.offCd),
   ];
 }
 
@@ -1114,6 +1228,9 @@ export function playerFromSnap(s: PlayerSnap): PlayerState {
   p.ack = s[14];
   p.slide = s[16];
   p.slideCd = s[17];
+  p.offhand = s[18];
+  p.offCd = s[19];
+  p.offHeld = (fx & FX_OFF_HELD) !== 0;
   p.inRound = true;
   return p;
 }

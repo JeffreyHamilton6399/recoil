@@ -5,7 +5,7 @@
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import type { PlayerId, RosterEntry } from '../shared/types.js';
-import { WEAPONS } from '../shared/weapons.js';
+import { OFFHANDS, WEAPONS } from '../shared/weapons.js';
 import { FONT, makeMapThumb, makeWeaponIcon } from './art.js';
 import type { TouchElements } from './input.js';
 
@@ -27,6 +27,11 @@ export interface UiHandlers {
   onProfile(): void;
   /** Picked a weapon. */
   onWeapon(weapon: number): void;
+  /** Picked an offhand (knife or shock grenade). */
+  onOffhand(offhand: number): void;
+  /** Host: add a bot (1 easy, 2 medium, 3 hard), or remove one. */
+  onAddBot(level: number): void;
+  onRemoveBot(id: PlayerId): void;
   /** Voice button: cycle off / push-to-talk / open mic. */
   onVoice(): void;
   /** Mute or unmute one player's voice. */
@@ -62,6 +67,7 @@ export class UI {
     jump: el('t-jump'),
     slide: el('t-slide'),
     aim: el('t-aim'),
+    offhand: el('t-off'),
   };
 
   private readonly menu = el('menu');
@@ -78,6 +84,8 @@ export class UI {
   private readonly lobbyName = el<HTMLInputElement>('lobby-name');
   private readonly weaponList = el('weapon-list');
   private readonly weaponsSection = el('weapons-section');
+  private readonly offhandList = el('offhand-list');
+  private readonly botControls = el('bot-controls');
   private readonly startBtn = el<HTMLButtonElement>('btn-start');
   private readonly lobbyStatus = el('lobby-status');
   private readonly carouselTrack = el('carousel-track');
@@ -106,6 +114,7 @@ export class UI {
   name = '';
   color = 0;
   weapon = 0;
+  offhand = 0;
 
   constructor(private readonly handlers: UiHandlers) {
     this.loadProfile();
@@ -145,6 +154,7 @@ export class UI {
     this.buildSwatches(this.lobbyColors);
     this.buildCarousel();
     this.buildWeapons();
+    this.buildOffhands();
 
     // No pinch-zoom, double-tap zoom or rubber-band scrolling on mobile.
     const stop = (e: Event): void => e.preventDefault();
@@ -192,6 +202,7 @@ export class UI {
           if (typeof o.name === 'string') this.name = o.name.slice(0, C.NAME_MAX);
           if (typeof o.color === 'number' && o.color >= 0 && o.color < C.PLAYER_PALETTE.length) this.color = o.color;
           if (typeof o.weapon === 'number' && WEAPONS[o.weapon]) this.weapon = o.weapon;
+          if (typeof o.offhand === 'number' && OFFHANDS[o.offhand]) this.offhand = o.offhand;
         }
       }
     } catch {
@@ -201,7 +212,7 @@ export class UI {
 
   private saveProfile(): void {
     try {
-      localStorage.setItem(PROFILE_KEY, JSON.stringify({ name: this.name, color: this.color, weapon: this.weapon }));
+      localStorage.setItem(PROFILE_KEY, JSON.stringify({ name: this.name, color: this.color, weapon: this.weapon, offhand: this.offhand }));
     } catch {
       // Storage unavailable: the profile just isn't remembered.
     }
@@ -280,6 +291,48 @@ export class UI {
     this.saveProfile();
     this.refreshWeapons();
     this.handlers.onWeapon(weapon);
+  }
+
+  // -------------------------------------------------------------------------
+  // Offhand picker and bot controls
+  // -------------------------------------------------------------------------
+
+  private buildOffhands(): void {
+    this.offhandList.textContent = '';
+    OFFHANDS.forEach((o, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'offhand-opt';
+      b.dataset.offhand = String(i);
+      b.style.setProperty('--c', o.accent);
+      const name = document.createElement('div');
+      name.className = 'oname';
+      name.textContent = o.name;
+      const blurb = document.createElement('div');
+      blurb.className = 'oblurb';
+      blurb.textContent = o.blurb;
+      b.append(name, blurb);
+      b.addEventListener('click', () => this.setOffhand(i));
+      this.offhandList.append(b);
+    });
+    this.refreshOffhands();
+    this.botControls.querySelectorAll<HTMLButtonElement>('button[data-level]').forEach((b) => {
+      b.addEventListener('click', () => this.handlers.onAddBot(Number(b.dataset.level)));
+    });
+  }
+
+  private refreshOffhands(): void {
+    this.offhandList.querySelectorAll<HTMLButtonElement>('.offhand-opt').forEach((b) => {
+      b.classList.toggle('selected', Number(b.dataset.offhand) === this.offhand);
+    });
+  }
+
+  setOffhand(offhand: number): void {
+    if (!OFFHANDS[offhand] || offhand === this.offhand) return;
+    this.offhand = offhand;
+    this.saveProfile();
+    this.refreshOffhands();
+    this.handlers.onOffhand(offhand);
   }
 
   /** True while the lobby panel (and so the weapon picker) is up. */
@@ -461,6 +514,22 @@ export class UI {
         host.textContent = 'Host';
         li.appendChild(host);
       }
+      if (r.bot) {
+        const tag = document.createElement('span');
+        tag.className = 'ptag bot';
+        tag.textContent = ['', 'Easy', 'Medium', 'Hard'][r.bot] ?? 'Bot';
+        tag.title = `${tag.textContent} bot`;
+        li.appendChild(tag);
+        if (!info.pub && info.roster.find((q) => q.id === info.myId)?.host) {
+          const kick = document.createElement('button');
+          kick.type = 'button';
+          kick.className = 'pmute';
+          kick.textContent = 'Remove';
+          kick.title = 'Remove this bot';
+          kick.addEventListener('click', () => this.handlers.onRemoveBot(r.id));
+          li.appendChild(kick);
+        }
+      }
       if (r.voice) {
         const mic = document.createElement('span');
         mic.className = 'vicon';
@@ -505,9 +574,11 @@ export class UI {
     if (me) {
       this.color = me.color;
       this.weapon = me.weapon;
+      this.offhand = me.offhand;
     }
     this.refreshSwatches();
     this.refreshWeapons();
+    this.refreshOffhands();
     this.weaponsSection.classList.toggle('hidden', info.myId === -1);
     this.lobbyColors.parentElement?.classList.toggle('hidden', info.myId === -1);
 
@@ -517,6 +588,7 @@ export class UI {
     const enough = online >= C.MIN_PLAYERS;
     this.setMapMode(info.pub ? 'public' : isHost ? 'host' : 'guest', info.mapChoice);
     this.startBtn.classList.toggle('hidden', !isHost);
+    this.botControls.classList.toggle('hidden', !isHost || info.roster.length >= C.MAX_PLAYERS);
     this.startBtn.disabled = !enough;
     this.startBtn.textContent = enough ? `Start match (${online} players)` : 'Start match';
     if (info.myId === -1) this.lobbyStatus.textContent = 'Room is full. You are spectating.';
