@@ -1,13 +1,13 @@
 // The first-person HUD: crosshair with a charge ring, hit marker, damage
-// percentage and power-ups, scoreboard, big comic banners (map spinner,
-// countdown, FIGHT!, round and match winners), the knock-off feed, the
+// percentage and power-ups, scoreboard, big comic banners (countdown,
+// FIGHT!, round and match winners), the knock-off feed, the
 // "click to play" hint and a red flash when you get hit.
 
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import { FX_MEGA, FX_RAPID, FX_SHIELD, FX_TRIPLE, type PlayerId, type RosterEntry } from '../shared/types.js';
 import { OFFHANDS, weaponDef } from '../shared/weapons.js';
-import { POWERUP_STYLE, carouselPosition } from './art.js';
+import { POWERUP_STYLE } from './art.js';
 import type { View, ViewPlayer } from './scene.js';
 
 function el(id: string): HTMLElement {
@@ -34,6 +34,9 @@ export interface HudInfo {
   aiming: boolean;
   /** Your offhand, and seconds until it's ready (0 = ready). */
   offhand: number;
+  /** Holding the knife, and whether recoil mode is on. */
+  knife: boolean;
+  recoil: boolean;
   offLeft: number;
 }
 
@@ -125,22 +128,34 @@ export class Hud {
       }
       const fx = me.fx & (FX_SHIELD | FX_RAPID | FX_TRIPLE | FX_MEGA);
       const offLeft = Math.ceil(info.offLeft);
-      const chipKey = `${fx}|${info.weapon}|${info.offhand}|${offLeft}`;
+      const isKnife = info.offhand === C.OFFHAND_KNIFE;
+      // The knife never cools down (a swing is quick), so only the grenade shows a countdown.
+      const offWait = isKnife ? 0 : offLeft;
+      const chipKey = `${fx}|${info.weapon}|${info.offhand}|${offWait}|${info.knife}|${info.recoil}`;
       if (chipKey !== this.lastChips) {
         this.lastChips = chipKey;
         this.chips.textContent = '';
-        const gun = document.createElement('div');
-        gun.className = 'chip';
-        gun.style.setProperty('--c', def.accent);
-        gun.textContent = def.name.toUpperCase();
-        this.chips.append(gun);
-        // Offhand: its name when ready, a countdown while it recharges.
         const off = OFFHANDS[info.offhand] ?? OFFHANDS[0];
+        // What's in your hand first, then what E does.
+        const held = document.createElement('div');
+        held.className = 'chip';
+        held.style.setProperty('--c', info.knife ? off.accent : def.accent);
+        held.textContent = info.knife ? 'KNIFE' : def.name.toUpperCase();
+        this.chips.append(held);
         const offChip = document.createElement('div');
-        offChip.className = offLeft > 0 ? 'chip cooling' : 'chip';
-        offChip.style.setProperty('--c', off.accent);
-        offChip.textContent = offLeft > 0 ? `E  ${off.name.toUpperCase()}  ${offLeft}s` : `E  ${off.name.toUpperCase()}`;
+        offChip.className = offWait > 0 ? 'chip cooling' : 'chip';
+        offChip.style.setProperty('--c', isKnife ? def.accent : off.accent);
+        offChip.textContent = isKnife
+          ? `E  ${info.knife ? def.name.toUpperCase() : 'KNIFE'}`
+          : offWait > 0
+            ? `E  ${off.name.toUpperCase()}  ${offWait}s`
+            : `E  ${off.name.toUpperCase()}`;
         this.chips.append(offChip);
+        const recoil = document.createElement('div');
+        recoil.className = info.recoil ? 'chip' : 'chip cooling';
+        recoil.style.setProperty('--c', '#ffd93d');
+        recoil.textContent = info.recoil ? 'R  RECOIL ON' : 'R  RECOIL OFF';
+        this.chips.append(recoil);
         const add = (bit: number, kind: keyof typeof POWERUP_STYLE): void => {
           if (!(fx & bit)) return;
           const chip = document.createElement('div');
@@ -200,14 +215,6 @@ export class Hud {
     let small = false;
     let sub = '';
     switch (view.phase) {
-      case 'mapPick': {
-        const { pos, done } = carouselPosition(view.phaseTime, view.mapIndex);
-        const n = MAPS.length;
-        center = MAPS[(((Math.round(pos) % n) + n) % n)]?.name.toUpperCase() ?? '';
-        small = true;
-        sub = done ? MAPS[view.mapIndex]?.blurb ?? '' : 'Spinning for a map…';
-        break;
-      }
       case 'countdown':
         center = String(Math.max(1, Math.ceil(C.COUNTDOWN_TIME - view.phaseTime)));
         sub = `${MAPS[view.mapIndex]?.name ?? ''} · ${MAPS[view.mapIndex]?.blurb ?? ''}`;

@@ -13,7 +13,7 @@ import { clamp } from '../shared/sim.js';
 import { FX_SHIELD, type GameEvent, type PlayerId, type PowerupKind, type RosterEntry } from '../shared/types.js';
 import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
 import { FONT, INK, POWERUP_STYLE, arenaOutline, makeSurfaceCanvas } from './art.js';
-import { makeArms, makeGun, type Gun } from './guns.js';
+import { makeArms, makeGun, makeKnife, type Gun } from './guns.js';
 import { Inker } from './ink.js';
 import { buildBlocks, buildPads, type Pads, buildRamps } from './props.js';
 import { GLOW, TOON, disposeTree, glowSprite, outlined, toon } from './toon.js';
@@ -36,6 +36,8 @@ export interface ViewPlayer {
   fx: number;
   weapon: number;
   sliding: boolean;
+  /** Holding the knife instead of the gun. */
+  knife: boolean;
 }
 
 export interface ViewBullet {
@@ -60,7 +62,7 @@ export interface ViewPowerup {
 }
 
 export interface View {
-  phase: 'lobby' | 'mapPick' | 'countdown' | 'playing' | 'roundEnd' | 'matchEnd';
+  phase: 'lobby' | 'countdown' | 'playing' | 'roundEnd' | 'matchEnd';
   phaseTime: number;
   arenaRadius: number;
   mapIndex: number;
@@ -92,6 +94,8 @@ export type CameraView =
       sliding: boolean;
       /** Aiming down sights. */
       aiming: boolean;
+      /** Holding the knife instead of the gun. */
+      knife: boolean;
     }
   | { kind: 'orbit' };
 
@@ -262,9 +266,24 @@ interface Rig {
   labelText: string;
   flash: number;
   lean: number;
+  /** 1 at the start of a knife slash, easing to 0. */
+  slash: number;
 }
 
-function makeRig(color: string, weapon: number): Rig {
+/** What a player's model depends on: rebuilt when it changes. */
+function rigKey(color: string, weapon: number, knife: boolean): string {
+  return `${color}|${knife ? 'knife' : weapon}`;
+}
+
+/** The arm's sweep through a slash, from +1 (wound up) through 0 to -1 (follow-through). t runs 1 -> 0. */
+function slashCurve(t: number): number {
+  if (t <= 0) return 0;
+  const u = 1 - t;
+  // Fast swing, then a gentle return.
+  return u < 0.35 ? 1 - (u / 0.35) * 2 : -1 + ((u - 0.35) / 0.65);
+}
+
+function makeRig(color: string, weapon: number, knife: boolean): Rig {
   const group = new THREE.Group();
   const body = new THREE.Group();
   group.add(body);
@@ -282,14 +301,22 @@ function makeRig(color: string, weapon: number): Rig {
   visor.position.set(0, C.EYE_HEIGHT, -0.3);
   body.add(visor);
 
-  // Gun held in front of the chest in both hands, pitched with the aim.
+  // Gun held in front of the chest in both hands (or a knife in the right),
+  // pitched with the aim.
   const gunPivot = new THREE.Group();
   gunPivot.position.set(0, 1.22, 0);
-  const gun = makeGun(weapon, color);
-  gun.group.position.set(0.16, -0.06, -0.46);
+  const gun = knife ? makeKnife(color) : makeGun(weapon, color);
+  if (knife) {
+    gun.group.position.set(0.3, -0.12, -0.42);
+    gun.group.rotation.x = 0.5;
+  } else {
+    gun.group.position.set(0.16, -0.06, -0.46);
+  }
   gunPivot.add(gun.group);
   const shoulders: [THREE.Vector3, THREE.Vector3] = [new THREE.Vector3(0.36, 0.04, -0.05), new THREE.Vector3(-0.36, 0.04, -0.05)];
-  const hands: [THREE.Vector3, THREE.Vector3] = [gun.grip.clone().add(gun.group.position), gun.fore.clone().add(gun.group.position)];
+  const hands: [THREE.Vector3, THREE.Vector3] = knife
+    ? [gun.grip.clone().add(gun.group.position), new THREE.Vector3(-0.34, -0.42, -0.2)]
+    : [gun.grip.clone().add(gun.group.position), gun.fore.clone().add(gun.group.position)];
   gunPivot.add(makeArms(color, shoulders, hands, 1.25));
   body.add(gunPivot);
 
@@ -309,7 +336,7 @@ function makeRig(color: string, weapon: number): Rig {
   label.position.y = C.PLAYER_HEIGHT + 0.55;
   group.add(label);
 
-  return { key: `${color}|${weapon}`, group, body, bodyMat, gunPivot, gun, shield, label, labelCtx, labelTex, labelText: '', flash: 0, lean: 0 };
+  return { key: rigKey(color, weapon, knife), group, body, bodyMat, gunPivot, gun, shield, label, labelCtx, labelTex, labelText: '', flash: 0, lean: 0, slash: 0 };
 }
 
 function drawLabel(rig: Rig, name: string, damage: number, talking: boolean): void {
@@ -508,6 +535,10 @@ export class Scene3D {
   private readonly viewmodel = new THREE.Group();
   private vmGun: Gun | null = null;
   private vmArms: THREE.Group | null = null;
+  /** 1 right after a weapon is drawn, easing to 0. */
+  private drawT = 0;
+  /** 1 at the start of your knife slash, easing to 0. */
+  private slashT = 0;
   private aimT = 0;
   private vmKey = '';
   private kick = 0;
@@ -837,13 +868,13 @@ export class Scene3D {
       seen.add(p.id);
       const color = this.colorOf(view, p.id);
       let rig = this.rigs.get(p.id);
-      if (rig && rig.key !== `${color}|${p.weapon}`) {
+      if (rig && rig.key !== rigKey(color, p.weapon, p.knife)) {
         this.scene.remove(rig.group);
         disposeTree(rig.group);
         rig = undefined;
       }
       if (!rig) {
-        rig = makeRig(color, p.weapon);
+        rig = makeRig(color, p.weapon, p.knife);
         this.rigs.set(p.id, rig);
         this.scene.add(rig.group);
       }
@@ -861,6 +892,9 @@ export class Scene3D {
         rig.group.rotation.z = p.fallTime * 2;
       }
       rig.gunPivot.rotation.x = p.pitch - rig.lean * 0.9;
+      // A knife slash sweeps the arm across from right to left.
+      rig.slash = Math.max(0, rig.slash - dt / (C.KNIFE_SWING * 0.7));
+      rig.gunPivot.rotation.y = p.knife ? slashCurve(rig.slash) * 1.1 : 0;
       rig.shield.visible = (p.fx & FX_SHIELD) !== 0;
       rig.flash = Math.max(0, rig.flash - dt);
       rig.bodyMat.emissiveIntensity = rig.flash > 0 ? 0.8 : 0;
@@ -1036,6 +1070,12 @@ export class Scene3D {
     this.trauma = Math.min(1, this.trauma + amount);
   }
 
+  /** Your own knife slash, shown the moment you swing. */
+  localSlash(): void {
+    this.slashT = 1;
+    this.addTrauma(0.05);
+  }
+
   /** Your own shot, shown the moment you fire (before the server confirms it). */
   localFire(weapon: number, charge: number, color: string): void {
     const heavy = weapon === 1 || weapon === 3 ? 1 : weapon === 4 ? 0.15 : charge;
@@ -1100,6 +1140,8 @@ export class Scene3D {
         return false;
       }
       case 'melee': {
+        const swinger = this.rigs.get(ev.p);
+        if (swinger) swinger.slash = 1;
         // A slash of sparks sweeping across in front of the swinger.
         const at = toThree(ev.x, ev.y, ev.z);
         const d = toThree(Math.cos(ev.a), Math.sin(ev.a), 0, tmpV2);
@@ -1180,7 +1222,7 @@ export class Scene3D {
   // -------------------------------------------------------------------------
 
   private updateViewmodel(cam: Extract<CameraView, { kind: 'first' }>, myColor: string, dt: number): void {
-    const key = `${myColor}|${cam.weapon}`;
+    const key = rigKey(myColor, cam.weapon, cam.knife);
     if (key !== this.vmKey) {
       this.vmKey = key;
       for (const old of [this.vmGun?.group, this.vmArms]) {
@@ -1188,7 +1230,12 @@ export class Scene3D {
         this.viewmodel.remove(old);
         disposeTree(old);
       }
-      this.vmGun = makeGun(cam.weapon, myColor);
+      this.vmGun = cam.knife ? makeKnife(myColor) : makeGun(cam.weapon, myColor);
+      // The knife is held up and angled in, blade forward.
+      if (cam.knife) {
+        this.vmGun.group.rotation.set(0.55, 0.25, -0.2);
+        this.vmGun.group.scale.setScalar(1.4);
+      }
       this.viewmodel.add(this.vmGun.group);
       // Your arms come up from below the screen to the grip and the front of the gun.
       this.vmArms = makeArms(
@@ -1197,26 +1244,33 @@ export class Scene3D {
         [this.vmGun.grip.clone(), this.vmGun.fore.clone()],
       );
       this.viewmodel.add(this.vmArms);
+      // Pulling a weapon out brings it up from below.
+      this.drawT = 1;
     }
+    this.drawT = Math.max(0, this.drawT - dt * 5);
+    this.slashT = Math.max(0, this.slashT - dt / (C.KNIFE_SWING * 0.7));
     // Aiming down sights slides the gun to the middle; a scope hides it.
     this.aimT += ((cam.aiming ? 1 : 0) - this.aimT) * Math.min(1, dt * 14);
     const a = this.aimT;
-    this.viewmodel.visible = !(weaponDef(cam.weapon).scope && a > 0.7);
+    this.viewmodel.visible = !(!cam.knife && weaponDef(cam.weapon).scope && a > 0.7);
     // Bob while running, kick after a shot, lower while sliding, glow while charging.
     if (cam.grounded) this.bob += dt * cam.speed * (cam.sprinting ? 1.1 : 1.4);
     const bobAmt = (cam.grounded && !cam.sliding ? Math.min(1.4, cam.speed / C.MOVE_SPEED) : 0) * (1 - a * 0.8);
     this.kick = Math.max(0, this.kick - dt * 6);
     const sprintTuck = cam.sprinting ? 1 - a : 0;
     const hip = 1 - a;
+    // Knife slash: a quick sweep from upper right to lower left.
+    const sw = slashCurve(this.slashT);
+    const draw = this.drawT * this.drawT;
     this.viewmodel.position.set(
-      0.19 * hip + Math.cos(this.bob) * 0.01 * bobAmt - sprintTuck * 0.03,
-      -0.2 * hip - 0.062 * a + Math.abs(Math.sin(this.bob)) * 0.012 * bobAmt - cam.charge * 0.012 * hip - (cam.sliding ? 0.03 : 0),
-      -0.5 * hip - 0.4 * a + this.kick * 0.06,
+      0.19 * hip + Math.cos(this.bob) * 0.01 * bobAmt - sprintTuck * 0.03 - sw * 0.12,
+      -0.2 * hip - 0.062 * a + Math.abs(Math.sin(this.bob)) * 0.012 * bobAmt - cam.charge * 0.012 * hip - (cam.sliding ? 0.03 : 0) - draw * 0.25 + sw * 0.04,
+      -0.5 * hip - 0.4 * a + this.kick * 0.06 - Math.abs(sw) * 0.08,
     );
     this.viewmodel.rotation.set(
-      this.kick * 0.18 * (1 - a * 0.6) - sprintTuck * 0.25,
-      sprintTuck * 0.35,
-      (cam.charge * 0.05 + (cam.sliding ? 0.25 : 0)) * hip,
+      this.kick * 0.18 * (1 - a * 0.6) - sprintTuck * 0.25 - draw * 0.6 - Math.abs(sw) * 0.3,
+      sprintTuck * 0.35 + sw * 0.9,
+      (cam.charge * 0.05 + (cam.sliding ? 0.25 : 0)) * hip + sw * 0.8,
     );
     if (this.vmGun) {
       this.flashTime = Math.max(0, this.flashTime - dt);

@@ -45,7 +45,7 @@ export interface LobbyInfo {
   spectators: number;
   myId: PlayerId | -1;
   pub: boolean;
-  /** Map index, or -1 for random with the spinner. */
+  /** Map index, or -1 for a random map each round. */
   mapChoice: number;
   /** Public rooms: seconds until the match starts, or -1. */
   startsIn: number;
@@ -68,6 +68,7 @@ export class UI {
     slide: el('t-slide'),
     aim: el('t-aim'),
     offhand: el('t-off'),
+    recoil: el('t-recoil'),
   };
 
   private readonly menu = el('menu');
@@ -389,7 +390,7 @@ export class UI {
       dot.addEventListener('click', () => this.showCard(index, true));
       this.carouselDots.appendChild(dot);
     };
-    addCard(randomThumb(180), 'Random', 'A spinner picks a new map every round.', 'Random map', 'random');
+    addCard(randomThumb(180), 'Random', 'A different map every round.', 'Random map', 'random');
     MAPS.forEach((map, i) => addCard(makeMapThumb(i, 180), map.name, map.blurb, map.name, ''));
 
     el('carousel-prev').addEventListener('click', () => this.showCard(this.carouselIndex - 1, true));
@@ -656,26 +657,24 @@ export class UI {
   }
 }
 
-/** Thumbnail for the "Random" card: four little maps and a big question mark. */
+/** Thumbnail for the "Random" card: a plain coloured card with a big question mark. */
 function randomThumb(px: number): HTMLCanvasElement {
   const cv = document.createElement('canvas');
   cv.width = px;
   cv.height = px;
   const ctx = cv.getContext('2d');
   if (!ctx) return cv;
-  ctx.fillStyle = '#261c66';
+  const g = ctx.createLinearGradient(0, 0, px, px);
+  g.addColorStop(0, '#5b3a8c');
+  g.addColorStop(1, '#ff6f91');
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, px, px);
-  const half = px / 2;
-  [0, 2, 4, 5].forEach((mapIndex, k) => {
-    ctx.drawImage(makeMapThumb(mapIndex, half), (k % 2) * half, Math.floor(k / 2) * half, half, half);
-  });
-  // Dim the previews and put a plain question mark on top.
-  ctx.fillStyle = 'rgba(13,9,24,0.55)';
-  ctx.fillRect(0, 0, px, px);
-  ctx.font = `800 ${px * 0.5}px ${FONT}`;
+  ctx.font = `800 ${px * 0.55}px ${FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#f4f1fb';
-  ctx.fillText('?', half, half + px * 0.02);
+  ctx.fillStyle = 'rgba(27,16,48,0.35)';
+  ctx.fillText('?', px / 2 + px * 0.02, px / 2 + px * 0.04);
+  ctx.fillStyle = '#fff6e0';
+  ctx.fillText('?', px / 2, px / 2 + px * 0.02);
   return cv;
 }

@@ -112,6 +112,56 @@ export function makeGun(weapon: number, color: string): Gun {
   return { group, muzzle, tinted, grip, fore };
 }
 
+/**
+ * A combat knife: a grip wrapped in the player's colour, a small guard and a
+ * steel blade, pointing down -z like the guns. The "fore" point is where the
+ * free hand rests (low and to the side, since a knife is held in one hand).
+ */
+export function makeKnife(color: string): Gun {
+  const group = new THREE.Group();
+  const tinted = toon(color);
+  const steel = toon('#e4e8f4');
+  const dark = toon(DARK);
+
+  // Grip: a short tube with two wraps of the player's colour.
+  group.add(tube(0.032, 0.15, dark, 0, 0, 0.02));
+  for (const z of [-0.02, 0.06]) {
+    const wrap = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.012, 6, 16), tinted);
+    wrap.position.z = z;
+    group.add(wrap);
+  }
+  // Guard.
+  group.add(box(0.13, 0.028, 0.028, dark, 0, 0, -0.065));
+
+  // Blade: a flat, pointed shape with a spine, extruded thin.
+  const shape = new THREE.Shape();
+  shape.moveTo(-0.022, 0);
+  shape.lineTo(-0.022, 0.24);
+  shape.lineTo(0, 0.33);
+  shape.lineTo(0.03, 0.22);
+  shape.lineTo(0.03, 0);
+  shape.closePath();
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.012, bevelEnabled: false });
+  geo.translate(0, 0, -0.006);
+  geo.rotateX(-Math.PI / 2);
+  // Lay the blade flat side-on, so its edge faces down.
+  geo.rotateZ(Math.PI / 2);
+  const blade = outlined(new THREE.Mesh(geo, steel), 1.06);
+  blade.position.z = -0.08;
+  group.add(blade);
+  // A bright line along the edge, like a highlight flick of the pen.
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.006, 0.2), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
+  edge.position.set(0, -0.026, -0.18);
+  group.add(edge);
+
+  // No muzzle to flash, but keep the sprite so callers can treat it like a gun.
+  const muzzle = glowSprite('#ffffff', 0.001);
+  muzzle.visible = false;
+  muzzle.position.set(0, 0, -0.4);
+  group.add(muzzle);
+  return { group, muzzle, tinted, grip: new THREE.Vector3(0, -0.01, 0.02), fore: new THREE.Vector3(-0.7, -0.75, 0.35) };
+}
+
 // ---------------------------------------------------------------------------
 // Arms: a sleeve in the player's colour and a round cartoon glove.
 // ---------------------------------------------------------------------------

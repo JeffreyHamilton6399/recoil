@@ -15,7 +15,9 @@ import {
   FX_SLIDE_LOCK,
   FX_GROUNDED,
   FX_MEGA,
+  FX_KNIFE,
   FX_OFF_HELD,
+  FX_RECOIL,
   FX_RAPID,
   FX_SHIELD,
   FX_TRIPLE,
@@ -40,6 +42,8 @@ export const NO_INPUT: InputState = Object.freeze({
   crouch: false,
   aim: false,
   offhand: false,
+  knife: false,
+  recoil: false,
   yaw: 0,
   pitch: 0,
 });
@@ -120,12 +124,21 @@ export function phaseRules(phase: GameState['phase']): { canMove: boolean; canFi
   return { canMove: canFire || phase === 'roundEnd' || phase === 'matchEnd', canFire };
 }
 
+/**
+ * Recoil mode's kick: big for charged shots (scaled by the charge) and slow
+ * guns, and split across the shots of fast ones, so every gun can fly.
+ */
+export function recoilModeKick(w: WeaponDef, charge: number): number {
+  if (w.mode === 'charge') return C.RECOIL_MODE_KICK * lerp(C.RECOIL_MODE_MIN, 1, clamp(charge, 0, 1));
+  return C.RECOIL_MODE_KICK * clamp(w.cooldown / C.RECOIL_MODE_REF_COOLDOWN, 0.1, 1);
+}
+
 /** Running speed for a player right now. */
 export function runSpeed(p: PlayerState, input: InputState): number {
-  const w = weaponDef(p.weapon);
-  if (input.aim) return C.MOVE_SPEED * w.moveMult * C.AIM_MOVE_MULT;
+  const move = p.knifeOut ? C.KNIFE_MOVE_MULT : weaponDef(p.weapon).moveMult;
+  if (p.aiming) return C.MOVE_SPEED * move * C.AIM_MOVE_MULT;
   const sprint = input.sprint && input.forward > 0 && !p.charging ? C.SPRINT_MULT : 1;
-  return C.MOVE_SPEED * w.moveMult * sprint * (p.charging ? C.CHARGE_MOVE_MULT : 1);
+  return C.MOVE_SPEED * move * sprint * (p.charging ? C.CHARGE_MOVE_MULT : 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +182,8 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
     offhand: C.OFFHAND_KNIFE,
     offCd: 0,
     offHeld: false,
+    knifeOut: false,
+    recoilMode: false,
     offUse: false,
   };
 }
@@ -300,8 +315,8 @@ export function setMapChoice(s: GameState, choice: number): void {
 }
 
 /**
- * Starts a round. With a picked map it goes straight to the countdown;
- * on random it picks a map (never the same one twice in a row) and runs the spinner.
+ * Starts a round on the picked map, or on random a new map (never the same
+ * one twice in a row), and goes straight to the countdown.
  */
 export function startRound(s: GameState): void {
   const n = MAPS.length;
@@ -320,7 +335,7 @@ export function startRound(s: GameState): void {
   s.powerupTimer = C.POWERUP_FIRST_DELAY;
   s.roundWinner = null;
   placeAll(s);
-  s.phase = isRandom ? 'mapPick' : 'countdown';
+  s.phase = 'countdown';
   s.phaseTime = 0;
 }
 
@@ -350,9 +365,30 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
   p.pitch = clamp(Number.isFinite(input.pitch) ? input.pitch : p.pitch, -C.PITCH_LIMIT, C.PITCH_LIMIT);
   p.cooldown = Math.max(0, p.cooldown - dt);
 
-  // Shooting.
+  // The knife is in your hand instead of the gun (knife players only).
+  const knifeWas = p.knifeOut;
+  p.knifeOut = input.knife && p.offhand === C.OFFHAND_KNIFE;
+  p.recoilMode = input.recoil;
+  // No aiming down sights with a knife.
+  if (p.knifeOut) p.aiming = false;
+  if (p.knifeOut !== knifeWas) events?.push({ k: 'draw', p: p.id, knife: p.knifeOut });
+
+  // Shooting (or slashing, with the knife out).
   let fired = -1;
-  if (!canFire) {
+  p.offCd = Math.max(0, p.offCd - dt);
+  p.offUse = false;
+  if (p.knifeOut) {
+    p.charging = false;
+    p.charge = 0;
+    if (canFire && input.firing && p.offCd <= 0) {
+      // A slash whenever you like, one swing at a time. It lunges you forward
+      // here (so your own prediction feels it at once); the tick resolves the hit.
+      p.offUse = true;
+      p.vx += Math.cos(p.yaw) * C.KNIFE_LUNGE;
+      p.vy += Math.sin(p.yaw) * C.KNIFE_LUNGE;
+      p.offCd = C.KNIFE_SWING;
+    }
+  } else if (!canFire) {
     p.charging = false;
     p.charge = 0;
   } else if (w.mode === 'auto') {
@@ -377,29 +413,20 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
     p.cooldown = p.rapid > 0 ? C.RAPID_COOLDOWN : w.cooldown;
   }
   if (fired >= 0) {
-    // A kick opposite where you aim. Small for most guns.
+    // A kick opposite where you aim: small normally, huge in recoil mode.
     const d = aimDir(p.yaw, p.pitch);
-    const kick = shotStats(w, fired).recoil;
+    const kick = p.recoilMode ? recoilModeKick(w, fired) : shotStats(w, fired).recoil;
     p.vx -= d.x * kick;
     p.vy -= d.y * kick;
     p.vz -= d.z * kick;
     if (p.vz > 0) p.grounded = false;
   }
 
-  // Offhand: a fresh press uses it when ready. The knife lunges you forward
-  // here (so your own prediction feels it at once); the tick resolves the hit
-  // or spawns the grenade.
-  p.offCd = Math.max(0, p.offCd - dt);
-  p.offUse = false;
-  if (canFire && input.offhand && !p.offHeld && p.offCd <= 0) {
+  // The shock grenade: a fresh press of the offhand throws one when ready.
+  // (Knife players use the offhand button to pull the knife out instead.)
+  if (canFire && p.offhand === C.OFFHAND_SHOCK && input.offhand && !p.offHeld && p.offCd <= 0) {
     p.offUse = true;
-    if (p.offhand === C.OFFHAND_KNIFE) {
-      p.vx += Math.cos(p.yaw) * C.KNIFE_LUNGE;
-      p.vy += Math.sin(p.yaw) * C.KNIFE_LUNGE;
-      p.offCd = C.KNIFE_COOLDOWN;
-    } else {
-      p.offCd = C.SHOCK_COOLDOWN;
-    }
+    p.offCd = C.SHOCK_COOLDOWN;
   }
   p.offHeld = input.offhand;
 
@@ -1158,9 +1185,6 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
       s.phaseTime = 0;
       events.push({ k: 'ko', w: winner });
     }
-  } else if (s.phase === 'mapPick' && s.phaseTime >= C.MAP_PICK_TIME) {
-    s.phase = 'countdown';
-    s.phaseTime = 0;
   } else if (s.phase === 'countdown' && s.phaseTime >= C.COUNTDOWN_TIME) {
     s.phase = 'playing';
     s.phaseTime = 0;
@@ -1198,7 +1222,9 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     (p.charging ? FX_CHARGING : 0) |
     (p.slideLock ? FX_SLIDE_LOCK : 0) |
     (p.aiming ? FX_AIM : 0) |
-    (p.offHeld ? FX_OFF_HELD : 0);
+    (p.offHeld ? FX_OFF_HELD : 0) |
+    (p.knifeOut ? FX_KNIFE : 0) |
+    (p.recoilMode ? FX_RECOIL : 0);
   return [
     p.id,
     round3(p.x),
@@ -1254,6 +1280,8 @@ export function playerFromSnap(s: PlayerSnap): PlayerState {
   p.offhand = s[18];
   p.offCd = s[19];
   p.offHeld = (fx & FX_OFF_HELD) !== 0;
+  p.knifeOut = (fx & FX_KNIFE) !== 0;
+  p.recoilMode = (fx & FX_RECOIL) !== 0;
   p.inRound = true;
   return p;
 }

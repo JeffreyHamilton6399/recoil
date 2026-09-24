@@ -6,10 +6,9 @@
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import { angleDiff, clamp, controlPlayer, lerp, movePlayer, phaseRules, playerFromSnap } from '../shared/sim.js';
-import { POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
+import { FX_KNIFE, POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
 import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
 import type { GameEvent, InputState, PlayerId, PlayerSnap, PlayerState, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
-import { carouselPosition } from './art.js';
 import { Sfx } from './audio.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
@@ -73,6 +72,36 @@ let tickAcc = 0;
 let lookReset = true; // face where the server puts you on the next snapshot
 let chargeDinged = false;
 let lastInput: InputState | null = null;
+/** Knife in hand (knife players), and recoil mode (remembered between visits). */
+let holdKnife = false;
+let recoilMode = loadRecoilMode();
+
+function loadRecoilMode(): boolean {
+  try {
+    return localStorage.getItem('recoil-mode') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setRecoilMode(on: boolean): void {
+  recoilMode = on;
+  sfx.recoilToggle(on);
+  ui.touchElements.recoil.classList.toggle('pressed', on);
+  try {
+    localStorage.setItem('recoil-mode', on ? '1' : '0');
+  } catch {
+    // Not remembered, but it still works this session.
+  }
+}
+
+/** Knife players swap between the gun and the knife (E, the mouse wheel, or 1 and 2). */
+function setKnife(on: boolean): void {
+  if (pred?.offhand !== C.OFFHAND_KNIFE || on === holdKnife) return;
+  holdKnife = on;
+  if (on) sfx.knifeDraw();
+  else sfx.gunDraw();
+}
 let eyeHeight: number = C.EYE_HEIGHT;
 
 // Feed: who last hit whom, to credit knock-offs.
@@ -81,8 +110,6 @@ const lastHitBy = new Map<PlayerId, { by: PlayerId; time: number }>();
 let pingMs: number | null = null;
 let lastCountdown = -1;
 let lastShrinkSecond = -1;
-let lastCarouselCard = -1;
-let carouselLanded = false;
 let lastPhaseSeen: Snapshot['ph'] | null = null;
 
 const nowSec = (): number => performance.now() / 1000;
@@ -152,6 +179,9 @@ input.onTouchDetected = () => {
   refreshRoomUi();
 };
 input.onLockChange = (locked) => ui.setLocked(locked);
+input.onOffhandPress = () => setKnife(!holdKnife);
+input.onWheel = () => setKnife(!holdKnife);
+input.onRecoilPress = () => setRecoilMode(!recoilMode);
 
 // Click the city to play (mouse players).
 canvas.addEventListener('click', () => {
@@ -163,8 +193,12 @@ window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyM') ui.setMuted(sfx.toggleMute());
   // Number keys pick a weapon while the lobby is up.
+  if (e.code === 'KeyR' && !e.repeat && roomCode && myId !== -1) setRecoilMode(!recoilMode);
   const digit = /^Digit([1-9])$/.exec(e.code);
-  if (digit && ui.inLobby && myId !== -1) ui.setWeapon(Number(digit[1]) - 1);
+  if (digit && input.locked) {
+    if (digit[1] === '1') setKnife(false);
+    if (digit[1] === '2') setKnife(true);
+  } else if (digit && ui.inLobby && myId !== -1) ui.setWeapon(Number(digit[1]) - 1);
 });
 // Crisp UI sounds for every button in the menus and lobby.
 document.addEventListener('click', (e) => {
@@ -231,7 +265,6 @@ function resetRoomState(): void {
   clockOffset = null;
   lastPhaseSeen = null;
   lastCountdown = -1;
-  lastCarouselCard = -1;
   myId = -1;
   roster = [];
   spectators = 0;
@@ -336,7 +369,7 @@ function onSnapshot(s: Snapshot): void {
   for (const ev of s.e) pendingEvents.push({ time: serverTime, ev });
 
   // The server moved everyone to their spawn: face where it says.
-  const resetPhase = prev && prev.ph !== s.ph && (s.ph === 'mapPick' || s.ph === 'lobby' || (s.ph === 'countdown' && prev.ph !== 'mapPick'));
+  const resetPhase = prev && prev.ph !== s.ph && (s.ph === 'lobby' || s.ph === 'countdown');
   if (resetPhase || s.e.some((e) => e.k === 'respawn' && e.p === myId)) lookReset = true;
 
   reconcile(s);
@@ -409,7 +442,24 @@ function clientTick(): void {
     inp.aim = false;
   }
   seq++;
-  net.send({ t: 'input', s: seq, f: inp.forward, r: inp.strafe, j: inp.jump, x: inp.firing, k: inp.sprint, c: inp.crouch, z: inp.aim, o: inp.offhand, a: inp.yaw, b: inp.pitch });
+  inp.knife = holdKnife && pred?.offhand === C.OFFHAND_KNIFE;
+  inp.recoil = recoilMode;
+  net.send({
+    t: 'input',
+    s: seq,
+    f: inp.forward,
+    r: inp.strafe,
+    j: inp.jump,
+    x: inp.firing,
+    k: inp.sprint,
+    c: inp.crouch,
+    z: inp.aim,
+    o: inp.offhand,
+    h: inp.knife,
+    m: inp.recoil,
+    a: inp.yaw,
+    b: inp.pitch,
+  });
   history.push({ seq, input: inp });
   lastInput = inp;
   if (history.length > 90) history.shift();
@@ -426,8 +476,10 @@ function clientTick(): void {
   }
   // Your own offhand sounds right away (the server's copy is skipped).
   if (pred.offUse) {
-    if (pred.offhand === C.OFFHAND_KNIFE) sfx.knife(false, 0);
-    else sfx.throwGrenade(0);
+    if (pred.offhand === C.OFFHAND_KNIFE) {
+      sfx.knife(false, 0);
+      scene.localSlash();
+    } else sfx.throwGrenade(0);
   }
   // Your own moves sound right away; the server's copies of these events are skipped.
   for (const ev of events) {
@@ -469,6 +521,7 @@ function toViewPlayer(p: PlayerSnap): ViewPlayer {
     fx: p[12],
     weapon: p[15],
     sliding: p[16] > 0,
+    knife: (p[12] & FX_KNIFE) !== 0,
   };
 }
 
@@ -490,6 +543,7 @@ function lerpPlayer(a: PlayerSnap, b: PlayerSnap, t: number): ViewPlayer {
     fx: b[12],
     weapon: b[15],
     sliding: b[16] > 0,
+    knife: (b[12] & FX_KNIFE) !== 0,
   };
 }
 
@@ -514,7 +568,7 @@ function viewAt(time: number): View | null {
     }
   }
   // Don't slide players across the roof when a new round or the lobby resets them.
-  if (a.ph !== b.ph && (b.ph === 'mapPick' || b.ph === 'lobby')) a = b;
+  if (a.ph !== b.ph && (b.ph === 'countdown' || b.ph === 'lobby')) a = b;
 
   const playersA = new Map(a.p.map((p) => [p[0], p]));
   const players = b.p.map((pb) => {
@@ -616,6 +670,7 @@ function attractView(time: number): View {
       fx: 0,
       weapon: i % 5,
       sliding: false,
+      knife: false,
     };
   });
   return {
@@ -653,6 +708,14 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
     case 'boom':
       if (ev.w === SHOCK_WEAPON) sfx.shockwave(scene.panFor(ev.x, ev.y, ev.z));
       else sfx.boom(ev.r, scene.panFor(ev.x, ev.y, ev.z));
+      break;
+    case 'draw':
+      if (ev.p !== myId) {
+        const p = view.players.find((q) => q.id === ev.p);
+        const pan = p ? scene.panFor(p.x, p.y, p.z) : 0;
+        if (ev.knife) sfx.knifeDraw(pan, 0.5);
+        else sfx.gunDraw(pan, 0.5);
+      }
       break;
     case 'melee':
       if (ev.p !== myId) sfx.knife(ev.hit, scene.panFor(ev.x, ev.y, ev.z));
@@ -729,18 +792,6 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
 }
 
 function soundCues(view: View): void {
-  if (view.phase === 'mapPick') {
-    const { pos, done } = carouselPosition(view.phaseTime, view.mapIndex);
-    const card = Math.round(pos);
-    if (card !== lastCarouselCard && lastCarouselCard !== -1 && !done) sfx.carouselTick(false);
-    if (done && !carouselLanded) sfx.carouselTick(true);
-    lastCarouselCard = card;
-    carouselLanded = done;
-  } else {
-    lastCarouselCard = -1;
-    carouselLanded = false;
-  }
-
   if (view.phase === 'countdown') {
     const n = Math.max(1, Math.ceil(C.COUNTDOWN_TIME - view.phaseTime));
     if (n !== lastCountdown) sfx.countdown(n);
@@ -830,6 +881,7 @@ function frame(): void {
         fx: serverMe?.fx ?? 0,
         weapon: pred.weapon,
         sliding: pred.slide > 0,
+        knife: pred.knifeOut,
       };
       view.players = view.players.map((p) => (p.id === myId && me ? me : p));
       const out = pred.falling && pred.fallTime > C.FALL_DURATION * 0.7;
@@ -852,6 +904,7 @@ function frame(): void {
           sprinting: (lastInput?.sprint ?? false) && pred.grounded && speed > C.MOVE_SPEED * 1.1,
           sliding: pred.slide > 0,
           aiming: pred.aiming,
+          knife: pred.knifeOut,
         };
       }
     }
@@ -886,6 +939,8 @@ function frame(): void {
         ready: pred ? 1 - Math.min(1, pred.cooldown / Math.max(0.05, weaponDef(pred.weapon).cooldown)) : 1,
         offhand: pred?.offhand ?? ui.offhand,
         offLeft: pred?.offCd ?? 0,
+        knife: pred?.knifeOut ?? false,
+        recoil: recoilMode,
       },
       dt,
     );

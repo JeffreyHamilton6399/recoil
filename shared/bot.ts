@@ -109,7 +109,7 @@ export class BotBrain {
   /** One tick of controls for bot player `me`. */
   think(s: GameState, me: PlayerState, dt: number = C.TICK_DT): InputState {
     const sk = this.skill;
-    if (!this.started || s.phase === 'mapPick' || (s.phase === 'countdown' && s.phaseTime < 0.1)) {
+    if (!this.started || (s.phase === 'countdown' && s.phaseTime < 0.1)) {
       // New round: start from where the server faced us.
       this.yaw = me.yaw;
       this.pitch = me.pitch;
@@ -385,17 +385,20 @@ export class BotBrain {
     let offhand = false;
     if (this.offPressed) {
       this.offPressed = false; // release, so the next use is a fresh press
-    } else if (canFire && seen && target && me.offCd <= 0 && Math.random() < sk.offhand * 0.25) {
-      if (me.offhand === C.OFFHAND_KNIFE) {
-        offhand = dist < C.KNIFE_RANGE + 0.2 && aimErr < 0.5;
-      } else {
-        // Shock grenade: best on someone near the edge, or on a crowd.
-        const tFromCentre = Math.hypot(target.x, target.y);
-        const crowd = enemies.filter((p) => Math.hypot(p.x - target.x, p.y - target.y) < 5).length;
-        const edgy = tFromCentre > R * 0.55;
-        offhand = dist > 5 && dist < 17 && visible && aimErr < 0.2 && (edgy || crowd >= 2 || sk.offhand < 0.5);
-      }
+    } else if (canFire && seen && target && me.offhand === C.OFFHAND_SHOCK && me.offCd <= 0 && Math.random() < sk.offhand * 0.25) {
+      // Shock grenade: best on someone near the edge, or on a crowd.
+      const tFromCentre = Math.hypot(target.x, target.y);
+      const crowd = enemies.filter((p) => Math.hypot(p.x - target.x, p.y - target.y) < 5).length;
+      const edgy = tFromCentre > R * 0.55;
+      offhand = dist > 5 && dist < 17 && visible && aimErr < 0.2 && (edgy || crowd >= 2 || sk.offhand < 0.5);
       this.offPressed = offhand;
+    }
+
+    // Knife players pull the knife out up close and slash away.
+    const knife = me.offhand === C.OFFHAND_KNIFE && !!seen && !!target && dist < 3 + 3 * sk.offhand;
+    if (knife) {
+      firing = canFire && dist < C.KNIFE_RANGE + 0.3 && aimErr < 0.5;
+      aim = false;
     }
 
     return {
@@ -407,6 +410,8 @@ export class BotBrain {
       crouch,
       aim,
       offhand,
+      knife,
+      recoil: false,
       yaw: this.yaw,
       pitch: this.pitch,
     };

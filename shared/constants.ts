@@ -191,8 +191,6 @@ export const SHIELD_TIME = 8;
 // Round and match flow
 // ---------------------------------------------------------------------------
 
-/** Seconds the map spinner runs before each round. */
-export const MAP_PICK_TIME = 2.6;
 /** Seconds of 3-2-1 countdown before each round. */
 export const COUNTDOWN_TIME = 3;
 /** Seconds the "FIGHT!" banner shows once play starts (visual only). */
@@ -247,17 +245,30 @@ export const FOV = 80;
 /** Offhand ids. */
 export const OFFHAND_KNIFE = 0;
 export const OFFHAND_SHOCK = 1;
-/** Knife: reach (from your centre to theirs, plus body radii)... */
+/** Knife: pull it out with E and slash with fire as often as you like. Reach (from your centre to theirs, plus body radii)... */
 export const KNIFE_RANGE = 2.3;
 /** ...only in front of you (cosine of the half-angle of the swing)... */
 export const KNIFE_CONE = 0.55;
 /** ...a big close-range shove... */
 export const KNIFE_KNOCKBACK = 15;
 export const KNIFE_DAMAGE = 11;
-/** ...with a lunge forward as you swing... */
-export const KNIFE_LUNGE = 7;
-/** ...and this many seconds before the next swing. */
-export const KNIFE_COOLDOWN = 0.9;
+/** ...with a small lunge forward as you swing... */
+export const KNIFE_LUNGE = 4;
+/** ...and one swing takes this long (hold fire to keep slashing). */
+export const KNIFE_SWING = 0.4;
+/** Running speed multiplier with the knife out. */
+export const KNIFE_MOVE_MULT = 1.12;
+
+// ---------------------------------------------------------------------------
+// Recoil mode (R): your own shots throw you backwards
+// ---------------------------------------------------------------------------
+
+/** The kick of a full shot in recoil mode (a charged shot at full charge, or a slow gun's single shot). */
+export const RECOIL_MODE_KICK = 15;
+/** Charge weapons: the kick at no charge, as a fraction of a full one. */
+export const RECOIL_MODE_MIN = 0.45;
+/** Automatic weapons: guns firing faster than this (seconds per shot) get a proportionally smaller kick per shot. */
+export const RECOIL_MODE_REF_COOLDOWN = 0.8;
 /** Shock grenade: seconds before you can throw another. */
 export const SHOCK_COOLDOWN = 7;
 /** Extra upward angle when throwing, so it arcs. */

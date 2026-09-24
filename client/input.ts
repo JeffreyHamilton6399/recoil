@@ -1,13 +1,16 @@
 // Keyboard, mouse and touch input for first-person play.
 // Keyboard: WASD or arrows to move, Space to jump, Shift to sprint, Ctrl or
-// C to slide, E or G for the offhand (knife or shock grenade). Mouse: look
-// (with pointer lock), left button to fire, right button to aim down sights.
+// C to slide, E or G for the offhand (pull out the knife, or throw the
+// shock grenade), R for recoil mode. Mouse: look (with pointer lock), left
+// button to fire or slash, right button to aim down sights, the wheel to
+// swap between gun and knife.
 // Touch: a move stick on the left (push it all the way to sprint), drag
-// anywhere else to look, and FIRE / JUMP / SLIDE / AIM buttons.
+// anywhere else to look, and FIRE / JUMP / SLIDE / AIM / E / RECOIL buttons.
 //
 // Ctrl+W would close the tab mid-slide, so playing with the mouse goes
-// fullscreen with the keyboard locked (Chrome and Edge), where the game
-// gets those keys instead of the browser.
+// fullscreen with the game's keys locked (Chrome and Edge), where the game
+// gets those keys instead of the browser. Escape is left alone, so one press
+// of Esc still lets go of the mouse and leaves fullscreen.
 //
 // The look direction changes every frame; everything else is sampled once
 // per simulation tick with sample(), so short taps are never lost.
@@ -52,6 +55,7 @@ export interface TouchElements {
   jump: HTMLElement;
   slide: HTMLElement;
   aim: HTMLElement;
+  recoil: HTMLElement;
   offhand: HTMLElement;
 }
 
@@ -65,6 +69,12 @@ export class Input {
   /** Called when fire is pressed or released (for instant sound feedback). */
   onFireChange: (down: boolean) => void = () => {};
   onLockChange: (locked: boolean) => void = () => {};
+  /** The offhand button was pressed (keys or touch). */
+  onOffhandPress: () => void = () => {};
+  /** The mouse wheel turned while playing (swap weapons). */
+  onWheel: () => void = () => {};
+  /** The touch RECOIL button was tapped. */
+  onRecoilPress: () => void = () => {};
 
   private readonly keys = new Map<string, Key>();
   private mouseFire = false;
@@ -99,7 +109,10 @@ export class Input {
       if (key === 'jump') this.jumpLatch = true;
       if (key === 'fire') this.fireLatch = true;
       if (key === 'crouch') this.crouchLatch = true;
-      if (key === 'offhand') this.offLatch = true;
+      if (key === 'offhand') {
+        this.offLatch = true;
+        this.onOffhandPress();
+      }
       this.fireChanged();
     });
     window.addEventListener('keyup', (e) => {
@@ -140,9 +153,28 @@ export class Input {
         this.mouseFire = false;
         this.mouseAim = false;
         this.fireChanged();
+        // Letting go of the mouse (Esc) leaves fullscreen too, in one press.
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       }
       this.onLockChange(this.locked);
     });
+    // Leaving fullscreen (Esc, F11) lets go of the mouse too.
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement && this.locked) document.exitPointerLock();
+    });
+    let wheelAt = 0;
+    canvas.addEventListener(
+      'wheel',
+      (e) => {
+        if (!this.locked) return;
+        e.preventDefault();
+        // One swap per flick of the wheel.
+        const now = performance.now();
+        if (now - wheelAt > 250) this.onWheel();
+        wheelAt = now;
+      },
+      { passive: false },
+    );
 
     // Never leave a key "stuck" when the tab loses focus.
     window.addEventListener('blur', () => this.releaseAll());
@@ -165,8 +197,10 @@ export class Input {
       document.documentElement
         .requestFullscreen()
         .then(() => {
+          // Lock only the game's keys; Escape stays with the browser so it can
+          // still let go of the mouse and leave fullscreen with a single press.
           const kb = (navigator as Navigator & { keyboard?: { lock?: (keys?: string[]) => Promise<void> } }).keyboard;
-          return kb?.lock?.();
+          return kb?.lock?.([...Object.keys(KEYS), 'KeyV', 'KeyR', 'KeyM', 'KeyT', 'KeyN', 'Tab', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5']);
         })
         .catch(() => {});
     }
@@ -234,6 +268,9 @@ export class Input {
       sprint,
       crouch: this.held('crouch') || this.touchSlide.size > 0 || this.crouchLatch,
       aim: this.mouseAim || this.touchAim || this.held('aim'),
+      // Set by the game from its own state (knife in hand, recoil mode).
+      knife: false,
+      recoil: false,
       offhand: this.held('offhand') || this.touchOff.size > 0 || this.offLatch,
       yaw: Math.round(this.yaw * 10000) / 10000,
       pitch: Math.round(this.pitch * 10000) / 10000,
@@ -344,7 +381,14 @@ export class Input {
     button(fire, this.touchFire, () => (this.fireLatch = true));
     button(jump, this.touchJump, () => (this.jumpLatch = true));
     button(slide, this.touchSlide, () => (this.crouchLatch = true));
-    button(offhand, this.touchOff, () => (this.offLatch = true));
+    button(offhand, this.touchOff, () => {
+      this.offLatch = true;
+      this.onOffhandPress();
+    });
+    this.touch.recoil.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      this.onRecoilPress();
+    });
   }
 
   private moveStick(e: PointerEvent): void {

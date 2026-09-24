@@ -81,6 +81,8 @@ function randomInput(rand: () => number): InputState {
     crouch: rand() < 0.15,
     aim: rand() < 0.2,
     offhand: rand() < 0.05,
+    knife: rand() < 0.3,
+    recoil: rand() < 0.3,
     yaw: (rand() * 2 - 1) * Math.PI,
     pitch: (rand() * 2 - 1) * 1.2,
   };
@@ -303,13 +305,39 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   a.x = 0; a.y = 0; b.x = 1.4; b.y = 0;
   a.yaw = 0;
   const noop = (p: typeof a): InputState => ({ ...NO_INPUT, yaw: p.yaw, pitch: 0 });
-  let ev = step(s, new Map([[0, { ...noop(a), offhand: true }], [1, noop(b)]]));
+  // Pull the knife out: no swing yet, just the draw.
+  let ev = step(s, new Map([[0, { ...noop(a), knife: true }], [1, noop(b)]]));
+  assert.ok(ev.some((e) => e.k === 'draw' && e.knife) && a.knifeOut, 'knife comes out');
+  assert.ok(!ev.some((e) => e.k === 'melee'), 'drawing the knife does not swing');
+  ev = step(s, new Map([[0, { ...noop(a), knife: true, firing: true }], [1, noop(b)]]));
   assert.ok(ev.some((e) => e.k === 'melee' && e.hit), 'knife connects at point-blank');
   assert.ok(b.vx > 5 && b.damage > 0, `knife shoves (vx=${b.vx.toFixed(1)})`);
-  assert.ok(a.offCd > 0, 'knife goes on cooldown');
-  // Holding the button doesn't swing again.
-  ev = step(s, new Map([[0, { ...noop(a), offhand: true }], [1, noop(b)]]));
-  assert.ok(!ev.some((e) => e.k === 'melee'), 'no swing while held / on cooldown');
+  assert.ok(s.bullets.length === 0, 'slashing does not shoot');
+  // Keep slashing: a new swing as soon as each one finishes, with no limit.
+  let swings = 1;
+  for (let i = 0; i < Math.round(C.TICK_RATE * 2); i++) {
+    b.x = a.x + 1.2;
+    b.y = a.y;
+    swings += step(s, new Map([[0, { ...noop(a), knife: true, firing: true }], [1, noop(b)]])).filter((e) => e.k === 'melee').length;
+  }
+  assert.ok(swings >= Math.floor(2 / C.KNIFE_SWING), `slashes keep coming (${swings} in 2 s)`);
+  ev = step(s, new Map([[0, { ...noop(a) }], [1, noop(b)]]));
+  assert.ok(ev.some((e) => e.k === 'draw' && !e.knife) && !a.knifeOut, 'gun back out');
+
+  // Recoil mode: the same shot throws you far harder than it does normally.
+  const r = createGame(8);
+  addPlayer(r, 0);
+  const rp = r.players[0];
+  const kickWith = (recoil: boolean): number => {
+    Object.assign(rp, { x: -3, y: 0, z: 0, vx: 0, vy: 0, vz: 0, grounded: true, charging: false, charge: 0, cooldown: 0 });
+    const hold = Math.round(WEAPONS[0].chargeTime * C.TICK_RATE) + 1;
+    for (let i = 0; i < hold; i++) step(r, new Map([[0, { ...NO_INPUT, yaw: 0, pitch: 0, firing: true, recoil }]]));
+    step(r, new Map([[0, { ...NO_INPUT, yaw: 0, pitch: 0, recoil }]]));
+    return -rp.vx;
+  };
+  const normal = kickWith(false);
+  const boosted = kickWith(true);
+  assert.ok(boosted > normal * 4 && boosted > 8, `recoil mode kicks hard (${boosted.toFixed(1)} vs ${normal.toFixed(1)} m/s)`);
 
   // Shock grenade thrown at someone 9 m away: it bursts and throws them.
   const g = createGame(6);
@@ -330,7 +358,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   }
   assert.ok(thrown && boom, 'grenade thrown and burst');
   assert.ok(shoved > 3, `shockwave throws the target (speed ${shoved.toFixed(1)})`);
-  console.log(`ok 7 - knife shove ${b.vx.toFixed(1)} m/s, shockwave throw ${shoved.toFixed(1)} m/s`);
+  console.log(`ok 7 - knife: ${swings} slashes in 2 s; recoil mode ${boosted.toFixed(1)} m/s vs ${normal.toFixed(1)}; shockwave throw ${shoved.toFixed(1)} m/s`);
 }
 
 // 8. Bots.

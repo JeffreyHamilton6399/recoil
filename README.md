@@ -7,10 +7,11 @@ the roof keeps shrinking. The last player standing wins the round, and the
 first to 5 round wins takes the match.
 
 - **Quick play:** jump into a public room with anyone online. It starts by
-  itself 20 seconds after a second player arrives, and a spinner picks a
-  random map every round.
+  itself 20 seconds after a second player arrives, on a random map every
+  round.
 - **Private games:** share a 4-letter code or a link. The host picks the map
-  from a carousel (or picks Random for the spinner) and starts the match.
+  from a carousel (or picks Random for a new map every round) and starts the
+  match.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
 - **12 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
@@ -58,7 +59,7 @@ first to 5 round wins takes the match.
   react faster, aim better, and fight smarter. In quick play, bots fill the
   room if you're alone for a few seconds, and they leave as people join.
 - **Offhand (E):** pick one in the lobby.
-  - **Knife:** a lunge and slash that shoves hard at point-blank range.
+  - **Knife:** press E to pull it out, then slash as often as you like; a big shove up close.
   - **Shock grenade:** a thrown grenade that bounces, then bursts into a
     shockwave that throws everyone nearby. You can also grenade-jump with it.
 
@@ -110,6 +111,8 @@ Playing with the mouse goes fullscreen with the keyboard locked (Chrome and
 Edge), so Ctrl+W while sliding forward can't close the tab. Other browsers ask
 before leaving the page instead.
 | Pick a weapon | Click a card in the lobby, or `1` to `5` | Tap a card |
+| Knife | `E`, the mouse wheel, or `1`/`2` to swap gun and knife; fire to slash (as often as you like) | E button |
+| Recoil mode | `R`: your shots throw you backwards hard, to fly back onto the roof | RCL button |
 | Voice chat | Mic button (top right); hold `V` to talk in push-to-talk | Mic button |
 | Mute | `M` | Speaker icon, top right |
 

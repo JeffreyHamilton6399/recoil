@@ -1195,6 +1195,16 @@
         right: calc(max(18px, env(safe-area-inset-right)) + 150px);
         bottom: calc(max(24px, env(safe-area-inset-bottom)) + 214px);
       }
+      #t-recoil {
+        width: 58px;
+        height: 58px;
+        font-size: 12px;
+        right: calc(max(18px, env(safe-area-inset-right)) + 216px);
+        bottom: calc(max(24px, env(safe-area-inset-bottom)) + 170px);
+      }
+      #t-recoil.pressed {
+        background: var(--yellow);
+      }
       .fire {
         right: max(18px, env(safe-area-inset-right));
         bottom: max(24px, env(safe-area-inset-bottom));
@@ -1286,7 +1296,8 @@
           <dt>Jump</dt><dd><kbd>Space</kbd></dd>
           <dt>Sprint · Slide</dt><dd><kbd>Shift</kbd> · <kbd>Ctrl</kbd></dd>
           <dt>Fire · Aim</dt><dd>Left · right mouse</dd>
-          <dt>Offhand</dt><dd><kbd>E</kbd> knife or grenade</dd>
+          <dt>Offhand</dt><dd><kbd>E</kbd> pull out the knife, or throw the grenade</dd>
+          <dt>Recoil mode</dt><dd><kbd>R</kbd> shots throw you backwards</dd>
           <dt>Voice</dt><dd>Hold <kbd>V</kbd></dd>
         </dl>
       </div>
@@ -1346,7 +1357,8 @@
       <div id="t-jump" class="tbtn" role="button" aria-label="Jump">JUMP</div>
       <div id="t-slide" class="tbtn" role="button" aria-label="Slide">SLIDE</div>
       <div id="t-aim" class="tbtn" role="button" aria-label="Aim down sights">AIM</div>
-      <div id="t-off" class="tbtn" role="button" aria-label="Offhand: knife or grenade">E</div>
+      <div id="t-off" class="tbtn" role="button" aria-label="Offhand: pull out the knife, or throw the grenade">E</div>
+      <div id="t-recoil" class="tbtn" role="button" aria-label="Recoil mode: shots throw you backwards">RCL</div>
       <div id="t-fire" class="tbtn fire" role="button" aria-label="Hold to charge, release to fire">FIRE</div>
     </div>
 

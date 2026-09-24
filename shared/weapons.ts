@@ -195,7 +195,7 @@ export function weaponDef(index: number): WeaponDef {
 
 /** Offhands for the lobby picker (index = offhand id). */
 export const OFFHANDS: readonly { name: string; blurb: string; accent: string }[] = [
-  { name: 'Knife', blurb: 'Lunge and slash for a big shove at point-blank range. Short cooldown.', accent: '#e8e4f2' },
+  { name: 'Knife', blurb: 'Press E to pull it out, then slash as often as you like. A big shove up close.', accent: '#e8e4f2' },
   { name: 'Shock grenade', blurb: 'Bounces, then bursts into a shockwave that throws everyone nearby.', accent: '#7fe7ff' },
 ];
 

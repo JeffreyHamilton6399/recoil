@@ -350,7 +350,7 @@ function handleMessage(client: Client, msg: ClientMessage): void {
       if (msg.s <= seat.lastSeq || seat.inputs.some((q) => q.seq >= msg.s)) break;
       seat.inputs.push({
         seq: msg.s,
-        input: { forward: msg.f, strafe: msg.r, jump: msg.j, firing: msg.x, sprint: msg.k, crouch: msg.c, aim: msg.z, offhand: msg.o, yaw: msg.a, pitch: msg.b },
+        input: { forward: msg.f, strafe: msg.r, jump: msg.j, firing: msg.x, sprint: msg.k, crouch: msg.c, aim: msg.z, offhand: msg.o, knife: msg.h, recoil: msg.m, yaw: msg.a, pitch: msg.b },
       });
       // A client far ahead (a burst after a stall): drop the oldest to keep latency down.
       if (seat.inputs.length > C.INPUT_BUFFER_MAX) seat.inputs.splice(0, seat.inputs.length - 2);
@@ -469,7 +469,7 @@ function parseMessage(data: RawData): ClientMessage | null {
       const seq = typeof m.s === 'number' && Number.isInteger(m.s) && m.s > 0 ? m.s : null;
       if (f === null || r === null || a === null || b === null || seq === null) return null;
       if (typeof m.j !== 'boolean' || typeof m.x !== 'boolean' || typeof m.k !== 'boolean' || typeof m.c !== 'boolean') return null;
-      return { t: 'input', s: seq, f, r, j: m.j, x: m.x, k: m.k, c: m.c, z: m.z === true, o: m.o === true, a, b };
+      return { t: 'input', s: seq, f, r, j: m.j, x: m.x, k: m.k, c: m.c, z: m.z === true, o: m.o === true, h: m.h === true, m: m.m === true, a, b };
     }
     case 'ping':
       return typeof m.c === 'number' && Number.isFinite(m.c) ? { t: 'ping', c: m.c } : null;

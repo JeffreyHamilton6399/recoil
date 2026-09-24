@@ -1,10 +1,9 @@
 // 2D art shared by the menus and the 3D scene: fonts and colours, arena
 // outlines, map thumbnails for the lobby carousel, the rooftop surface
-// texture, and the map spinner timing.
+// texture, and weapon icons.
 
 import * as C from '../shared/constants.js';
 import { MAPS, MAP_DESIGN_RADIUS, polygonPoints, scaledBumpers, type MapDef } from '../shared/maps.js';
-import { clamp } from '../shared/sim.js';
 import type { PowerupKind } from '../shared/types.js';
 import { WEAPONS } from '../shared/weapons.js';
 import { paintSurface } from './surfaces.js';
@@ -212,11 +211,3 @@ export function makeWeaponIcon(index: number, w: number, h: number): HTMLCanvasE
   return cv;
 }
 
-/** Map spinner position (in maps travelled) during the map pick. Integer = a map is showing. */
-export function carouselPosition(phaseTime: number, target: number): { pos: number; done: boolean } {
-  const n = MAPS.length;
-  const u = clamp(phaseTime / (C.MAP_PICK_TIME * 0.72), 0, 1);
-  const e = 1 - Math.pow(1 - u, 3);
-  const loops = Math.max(1, Math.round(24 / n));
-  return { pos: e * (loops * n + target), done: u >= 1 };
-}

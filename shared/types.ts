@@ -4,7 +4,7 @@
 /** Seat number in a room, 0 .. MAX_PLAYERS - 1. */
 export type PlayerId = number;
 
-export type Phase = 'lobby' | 'mapPick' | 'countdown' | 'playing' | 'roundEnd' | 'matchEnd';
+export type Phase = 'lobby' | 'countdown' | 'playing' | 'roundEnd' | 'matchEnd';
 
 export type PowerupKind = 'rapid' | 'triple' | 'mega' | 'shield' | 'heal';
 export const POWERUP_KINDS: readonly PowerupKind[] = ['rapid', 'triple', 'mega', 'shield', 'heal'];
@@ -22,8 +22,12 @@ export interface InputState {
   crouch: boolean;
   /** Aiming down sights (zoomed in). */
   aim: boolean;
-  /** Use the offhand (knife or shock grenade). */
+  /** Throw the offhand grenade (a fresh press). */
   offhand: boolean;
+  /** Holding the knife instead of the gun (knife players only). */
+  knife: boolean;
+  /** Recoil mode: your shots throw you backwards, hard, to fly around or back to the roof. */
+  recoil: boolean;
   /** Look direction in radians. Yaw 0 faces +x, and yaw grows counter-clockwise seen from above. */
   yaw: number;
   /** Radians above the horizon (negative looks down). */
@@ -89,6 +93,10 @@ export interface PlayerState {
   offHeld: boolean;
   /** Set for the tick the offhand is used; the tick resolves the slash or throw. */
   offUse: boolean;
+  /** Holding the knife instead of the gun. */
+  knifeOut: boolean;
+  /** Recoil mode is on: shots throw you backwards hard. */
+  recoilMode: boolean;
 }
 
 export interface Bullet {
@@ -126,6 +134,8 @@ export type GameEvent =
   | { k: 'melee'; p: PlayerId; x: number; y: number; z: number; a: number; hit: boolean }
   /** A shock grenade thrown. */
   | { k: 'throw'; p: PlayerId }
+  /** Switched between the gun and the knife. */
+  | { k: 'draw'; p: PlayerId; knife: boolean }
   | { k: 'pad'; p: PlayerId; x: number; y: number }
   | { k: 'slide'; p: PlayerId }
   | { k: 'mantle'; p: PlayerId }
@@ -153,7 +163,7 @@ export interface GameState {
   playTime: number;
   arenaRadius: number;
   mapIndex: number;
-  /** Host's map pick: a map index, or -1 for a random map (with the spinner) each round. */
+  /** Host's map pick: a map index, or -1 for a random map each round. */
   mapChoice: number;
   players: PlayerState[];
   bullets: Bullet[];
@@ -184,6 +194,8 @@ export const FX_CHARGING = 32;
 export const FX_SLIDE_LOCK = 64;
 export const FX_AIM = 128;
 export const FX_OFF_HELD = 256;
+export const FX_KNIFE = 512;
+export const FX_RECOIL = 1024;
 
 /**
  * [id, x, y, z, vx, vy, vz, yaw, pitch, charge, damage,
@@ -256,7 +268,7 @@ export type ClientMessage =
   | { t: 'addBot'; d: number }
   | { t: 'removeBot'; id: PlayerId }
   /** One tick of input: sequence number, forward, strafe, jump, fire, sprint, crouch, aim, offhand, yaw, pitch. */
-  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; z: boolean; o: boolean; a: number; b: number }
+  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; z: boolean; o: boolean; h: boolean; m: boolean; a: number; b: number }
   | { t: 'ping'; c: number }
   /** Voice chat switched on or off. */
   | { t: 'voice'; on: boolean }
