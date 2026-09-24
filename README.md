@@ -49,6 +49,27 @@ first to 5 round wins takes the match.
   inputs on each server snapshot, so it feels instant even with lag. Other
   players are interpolated.
 
+## Bots and offhands
+
+- **Bots:** in a private room, the host can add **Easy**, **Medium**, or
+  **Hard** bots from the lobby. Bots play by exactly the same rules as
+  people. They pick targets, keep their weapon's range, strafe, lead their
+  shots, dodge, use their offhand, and stay away from the edge. Harder bots
+  react faster, aim better, and fight smarter. In quick play, bots fill the
+  room if you're alone for a few seconds, and they leave as people join.
+- **Offhand (E):** pick one in the lobby.
+  - **Knife:** a lunge and slash that shoves hard at point-blank range.
+  - **Shock grenade:** a thrown grenade that bounces, then bursts into a
+    shockwave that throws everyone nearby. You can also grenade-jump with it.
+
+## Structures
+
+Roofs are bigger (30 m radius) and some have buildings on them. You can run
+through doorways, walk up ramps onto rooftops, cross bridges, and duck
+under carports. Blocks can float (roofs, bridges), and ramps are walkable
+slopes; both are set in `shared/maps.ts` using the `hut`, `pergola`, `slab`,
+and `ramp` helpers.
+
 ## Run locally
 
 ```bash

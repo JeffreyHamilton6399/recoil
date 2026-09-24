@@ -1,16 +1,18 @@
 // Rooftop props: the blocks you climb (crates, AC units, water tanks, brick
-// walls, each with a sketchy hand-drawn texture) and the jump pads.
+// walls, concrete roofs and bridges, each with a sketchy hand-drawn
+// texture), ramps, and the jump pads.
 // Built at full arena size in three.js coordinates; the arena group scales
 // them as the roof shrinks.
 
 import * as THREE from 'three';
-import type { Block, MapDef } from '../shared/maps.js';
+import type { Block, MapDef, Ramp } from '../shared/maps.js';
 import { INK } from './art.js';
 import { glowSprite, outlined, toon } from './toon.js';
 
-type Kind = 'crate' | 'unit' | 'tank' | 'wall';
+type Kind = 'crate' | 'unit' | 'tank' | 'wall' | 'slab' | 'ramp';
 
 function kindOf(b: Block): Kind {
+  if ((b.z ?? 0) > 0) return 'slab';
   if (Math.min(b.w, b.d) / Math.max(b.w, b.d) < 0.4) return 'wall';
   if (b.h <= 1.2) return 'crate';
   if (b.h <= 2.5) return 'unit';
@@ -22,6 +24,8 @@ const KIND_COLOR: Record<Kind, string> = {
   unit: '#a9b4cc',
   tank: '#7d8fb8',
   wall: '#c46a55',
+  slab: '#b8b0cc',
+  ramp: '#9aa3bf',
 };
 
 /** Seeded wobble, so each stroke looks drawn by hand but stays the same every frame. */
@@ -110,6 +114,16 @@ function blockTexture(kind: Kind): THREE.CanvasTexture {
           for (let x = row % 2 ? 32 : 0; x < size; x += 64) penLine(ctx, rand, x, y, x, y + 32, 3);
         }
         break;
+      case 'slab':
+        // Poured concrete: a border and a few form-board seams.
+        penLine(ctx, rand, 8, 8, size - 8, 8, 5);
+        penLine(ctx, rand, 8, size - 8, size - 8, size - 8, 5);
+        for (let x = 64; x < size; x += 64) penLine(ctx, rand, x, 12, x + 2, size - 12, 2);
+        break;
+      case 'ramp':
+        // Anti-slip treads.
+        for (let y = 16; y < size; y += 26) penLine(ctx, rand, 10, y, size - 10, y, 4);
+        break;
     }
   }
   const tex = new THREE.CanvasTexture(cv);
@@ -124,9 +138,42 @@ export function buildBlocks(map: MapDef, S: number): THREE.Group {
   const group = new THREE.Group();
   for (const b of map.blocks) {
     const kind = kindOf(b);
-    const mesh = outlined(new THREE.Mesh(new THREE.BoxGeometry(b.w * S, b.h, b.d * S), toon(KIND_COLOR[kind], blockTexture(kind))), 1.02);
+    const bottom = b.z ?? 0;
+    const tall = b.h - bottom;
+    const mesh = outlined(new THREE.Mesh(new THREE.BoxGeometry(b.w * S, tall, b.d * S), toon(KIND_COLOR[kind], blockTexture(kind))), 1.02);
     // Box outlines scale from the centre; keep them thin on long walls.
-    mesh.position.set(b.x * S, b.h / 2, -b.y * S);
+    mesh.position.set(b.x * S, bottom + tall / 2, -b.y * S);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  return group;
+}
+
+/** A ramp: a box with its top tilted from the roof up to its full height. */
+function rampGeometry(r: Ramp, S: number): THREE.BufferGeometry {
+  const W = r.w * S;
+  const D = r.d * S;
+  const geo = new THREE.BoxGeometry(W, r.h, D).translate(0, r.h / 2, 0);
+  const pos = geo.getAttribute('position');
+  for (let i = 0; i < pos.count; i++) {
+    if (pos.getY(i) < r.h / 2) continue;
+    const x = pos.getX(i);
+    const z = pos.getZ(i); // three.js z is -y in game coordinates
+    const t =
+      r.dir === 0 ? (x + W / 2) / W : r.dir === 2 ? 1 - (x + W / 2) / W : r.dir === 1 ? (-z + D / 2) / D : (z + D / 2) / D;
+    pos.setY(i, Math.max(0.02, r.h * t));
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** All the ramps on a map, at full arena size. */
+export function buildRamps(map: MapDef, S: number): THREE.Group {
+  const group = new THREE.Group();
+  for (const r of map.ramps ?? []) {
+    const mesh = outlined(new THREE.Mesh(rampGeometry(r, S), toon(KIND_COLOR.ramp, blockTexture('ramp'))), 1.02);
+    mesh.position.set(r.x * S, 0, -r.y * S);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);

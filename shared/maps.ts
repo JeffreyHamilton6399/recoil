@@ -46,9 +46,11 @@ export interface MapTheme {
 export type MapShape = 'circle' | 'square' | 'hex' | 'diamond';
 
 /**
- * A solid box standing on the roof: crates, AC units, walls, planters.
- * x, y, w (along x) and d (along y) are design units; h is its height in
- * metres. You can stand on it and climb it if it's low enough.
+ * A solid box: crates, AC units, walls, planters, or (with z) a floating
+ * slab such as a building's roof or a bridge. x, y, w (along x) and d (along
+ * y) are design units; z (its underside, default 0) and h (its top) are
+ * metres above the roof. You can stand on it, climb it if it's low enough,
+ * and walk under it if it's high enough.
  */
 export interface Block {
   x: number;
@@ -56,6 +58,20 @@ export interface Block {
   w: number;
   d: number;
   h: number;
+  z?: number;
+}
+
+/**
+ * A ramp: a wedge you can walk up, rising from 0 to h metres towards `dir`
+ * (0 = +x, 1 = +y, 2 = -x, 3 = -y). Footprint in design units, like a Block.
+ */
+export interface Ramp {
+  x: number;
+  y: number;
+  w: number;
+  d: number;
+  h: number;
+  dir: 0 | 1 | 2 | 3;
 }
 
 export interface MapDef {
@@ -66,8 +82,10 @@ export interface MapDef {
   holes: Circle[];
   /** Bouncy posts that knock players (and bullets) away. */
   bumpers: Circle[];
-  /** Obstacles to climb, hide behind and stand on. */
+  /** Obstacles to climb, hide behind and stand on (and buildings to run through). */
   blocks: Block[];
+  /** Ramps up onto buildings and bridges. */
+  ramps?: Ramp[];
   /** Jump pads: step on one to be launched into the air. */
   pads: Circle[];
   theme: MapTheme;
@@ -93,6 +111,65 @@ const wall = (r: number, deg: number, len: number, thick: number, h: number): Bl
 
 const pad = (r: number, deg: number): Circle => polar(r, deg, 0.55);
 
+// ---------------------------------------------------------------------------
+// Buildings: walls with doorways, roofs you can stand on, bridges, ramps
+// ---------------------------------------------------------------------------
+
+/** Wall height, and the roof slab that sits on top of the walls (metres). */
+const WALL_H = 2.6;
+const ROOF_TOP = 2.95;
+/** Doorway: design-unit width and headroom in metres (players are 1.8 m). */
+const DOOR_W = 0.55;
+const DOOR_H = 2.1;
+/** Wall thickness (design units). */
+const WALL_T = 0.09;
+
+/**
+ * A small building: four walls with doorways on the listed sides ('n' +y,
+ * 's' -y, 'e' +x, 'w' -x) and a flat roof you can stand on.
+ */
+function hut(x: number, y: number, w: number, d: number, doors: string): Block[] {
+  const out: Block[] = [];
+  const side = (cx: number, cy: number, len: number, alongX: boolean, door: boolean): void => {
+    const box = (ox: number, l: number, z = 0, h = WALL_H): Block =>
+      alongX ? { x: cx + ox, y: cy, w: l, d: WALL_T, h, z } : { x: cx, y: cy + ox, w: WALL_T, d: l, h, z };
+    if (!door) {
+      out.push(box(0, len));
+      return;
+    }
+    const seg = (len - DOOR_W) / 2;
+    out.push(box(-(DOOR_W + seg) / 2, seg), box((DOOR_W + seg) / 2, seg));
+    out.push(box(0, DOOR_W, DOOR_H)); // lintel over the doorway
+  };
+  side(x, y + d / 2, w, true, doors.includes('n'));
+  side(x, y - d / 2, w, true, doors.includes('s'));
+  side(x + w / 2, y, d - WALL_T, false, doors.includes('e'));
+  side(x - w / 2, y, d - WALL_T, false, doors.includes('w'));
+  out.push({ x, y, w: w + WALL_T, d: d + WALL_T, z: WALL_H, h: ROOF_TOP });
+  return out;
+}
+
+/** A roof on four posts: open underneath, somewhere to stand on top. */
+function pergola(x: number, y: number, w: number, d: number): Block[] {
+  const post = 0.14;
+  const out: Block[] = [];
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) out.push({ x: x + sx * (w / 2 - post / 2), y: y + sy * (d / 2 - post / 2), w: post, d: post, h: WALL_H });
+  }
+  out.push({ x, y, w, d, z: WALL_H, h: ROOF_TOP });
+  return out;
+}
+
+/** A raised walkway slab (a bridge or a carport roof). */
+function slab(x: number, y: number, w: number, d: number, top = ROOF_TOP): Block {
+  return { x, y, w, d, z: top - (ROOF_TOP - WALL_H), h: top };
+}
+
+/** A ramp rising to a roof or bridge. */
+function ramp(x: number, y: number, w: number, d: number, dir: 0 | 1 | 2 | 3, h = ROOF_TOP): Ramp {
+  return { x, y, w, d, h, dir };
+}
+
 export const MAPS: readonly MapDef[] = [
   {
     name: 'Helipad',
@@ -100,7 +177,8 @@ export const MAPS: readonly MapDef[] = [
     shape: 'circle',
     holes: [],
     bumpers: [],
-    blocks: [0, 1, 2, 3].map((k) => crate(6.5, 45 + k * 90, 0.8, 1.1)),
+    blocks: [...[0, 1, 2, 3].map((k) => crate(6.5, 45 + k * 90, 0.8, 1.1)), ...hut(6.3, 0, 1.4, 2.4, 'ns'), ...hut(-6.3, 0, 1.4, 2.4, 'ns')],
+    ramps: [ramp(4.9, 0, 1.4, 0.55, 0), ramp(-4.9, 0, 1.4, 0.55, 2)],
     pads: [pad(2.3, 90), pad(2.3, 270)],
     theme: { top: '#b9c3d6', shade: '#8d98b3', side: '#5b5f86', sideShade: '#3f4166', surface: 'helipad', bumper: '#ff3d8b' },
   },
@@ -131,12 +209,13 @@ export const MAPS: readonly MapDef[] = [
     holes: [],
     bumpers: [],
     blocks: [
-      { x: 0, y: 0, w: 1.5, d: 1.5, h: 3.4 },
+      ...hut(0, 0, 2.6, 2.6, 'nsw'),
       { x: -3.2, y: -3.2, w: 1.2, d: 1.2, h: 1.6 },
       { x: 3.2, y: -3.2, w: 1.2, d: 1.2, h: 1.6 },
       { x: -3.2, y: 3.2, w: 1.2, d: 1.2, h: 1.6 },
       { x: 3.2, y: 3.2, w: 1.2, d: 1.2, h: 1.6 },
     ],
+    ramps: [ramp(2.0, 0, 1.4, 0.55, 2)],
     pads: [pad(6.3, 90), pad(6.3, 270)],
     theme: { top: '#55566d', shade: '#3e3f55', side: '#6b4a5a', sideShade: '#4d3342', surface: 'tar', bumper: '#ff3d8b' },
   },
@@ -166,7 +245,7 @@ export const MAPS: readonly MapDef[] = [
     shape: 'hex',
     holes: [],
     bumpers: [],
-    blocks: [...[0, 1, 2, 3, 4, 5].map((k) => crate(2.5, 30 + k * 60, 0.8, 1)), crate(0, 0, 1.2, 2.4)],
+    blocks: [...[0, 1, 2, 3, 4, 5].map((k) => crate(2.5, 30 + k * 60, 0.8, 1)), ...hut(0, 0, 1.8, 1.8, 'nsew')],
     pads: [],
     theme: { top: '#e3d8c4', shade: '#c2b39b', side: '#7d6a8a', sideShade: '#5d4c6b', surface: 'paving', bumper: '#ff3d8b' },
   },
@@ -192,6 +271,7 @@ export const MAPS: readonly MapDef[] = [
     blocks: [
       ...[0, 90, 180, 270].map((deg) => wall(2.4, deg, 1.8, 0.5, 1.2)),
       ...[45, 135, 225, 315].map((deg) => crate(6.2, deg, 0.7, 3.6)),
+      ...pergola(0, 0, 4.2, 4.2),
     ],
     pads: [],
     theme: { top: '#74d27e', shade: '#4fa85c', side: '#5a6a8a', sideShade: '#3f4d6b', surface: 'garden', bumper: '#ff3d8b' },
@@ -203,9 +283,11 @@ export const MAPS: readonly MapDef[] = [
     holes: [-5.8, -3.5, -1.2, 1.2, 3.5, 5.8].map((y) => ({ x: 0, y, r: 1.05 })),
     bumpers: [],
     blocks: [
-      { x: -4.4, y: 0, w: 1.7, d: 1.7, h: 1.4 },
-      { x: 4.4, y: 0, w: 1.7, d: 1.7, h: 1.4 },
+      slab(0, 0, 6, 0.7),
+      { x: 1.9, y: 0, w: 0.15, d: 0.15, h: 2.6 },
+      { x: -1.9, y: 0, w: 0.15, d: 0.15, h: 2.6 },
     ],
+    ramps: [ramp(4.2, 0, 2.4, 0.7, 2), ramp(-4.2, 0, 2.4, 0.7, 0)],
     pads: [pad(2.3, 45), pad(2.3, 135), pad(2.3, 225), pad(2.3, 315)],
     theme: { top: '#e6bb7e', shade: '#c4955a', side: '#6a5a7a', sideShade: '#4c3f5c', surface: 'plywood', bumper: '#ff3d8b' },
   },
@@ -227,7 +309,10 @@ export const MAPS: readonly MapDef[] = [
       { x: 5.6, y: -2.4, w: 1, d: 2, h: 1.2 },
       { x: -5.6, y: 2.4, w: 1, d: 2, h: 1.2 },
       { x: 5.6, y: 2.4, w: 1, d: 2, h: 1.2 },
+      ...pergola(0, 7.1, 4.4, 1.6),
+      ...pergola(0, -7.1, 4.4, 1.6),
     ],
+    ramps: [ramp(3.1, 7.1, 1.8, 0.6, 2), ramp(3.1, -7.1, 1.8, 0.6, 2)],
     pads: [],
     theme: { top: '#5c5f74', shade: '#46485c', side: '#8a8fa3', sideShade: '#666a80', surface: 'parking', bumper: '#ff7a1a' },
   },
@@ -302,6 +387,8 @@ export interface Box {
   maxY: number;
   /** Height of the top face above the roof. */
   top: number;
+  /** Height of the underside (0 for things standing on the roof). */
+  bottom: number;
 }
 
 /** Blocks at the current arena size, as boxes in world units. */
@@ -313,7 +400,42 @@ export function scaledBlocks(map: MapDef, arenaRadius: number): Box[] {
     minY: (b.y - b.d / 2) * s,
     maxY: (b.y + b.d / 2) * s,
     top: b.h,
+    bottom: b.z ?? 0,
   }));
+}
+
+export interface RampBox {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  h: number;
+  dir: 0 | 1 | 2 | 3;
+}
+
+/** Ramps at the current arena size, in world units. */
+export function scaledRamps(map: MapDef, arenaRadius: number): RampBox[] {
+  const s = mapScale(arenaRadius);
+  return (map.ramps ?? []).map((r) => ({
+    minX: (r.x - r.w / 2) * s,
+    maxX: (r.x + r.w / 2) * s,
+    minY: (r.y - r.d / 2) * s,
+    maxY: (r.y + r.d / 2) * s,
+    h: r.h,
+    dir: r.dir,
+  }));
+}
+
+/** Height of a ramp's surface at (x, y) (clamped to its footprint). */
+export function rampHeight(r: RampBox, x: number, y: number): number {
+  const tx = clamp01((x - r.minX) / (r.maxX - r.minX));
+  const ty = clamp01((y - r.minY) / (r.maxY - r.minY));
+  const t = r.dir === 0 ? tx : r.dir === 1 ? ty : r.dir === 2 ? 1 - tx : 1 - ty;
+  return r.h * t;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 /** Jump pads at the current arena size. */
@@ -334,13 +456,21 @@ export function floorAt(map: MapDef, arenaRadius: number, x: number, y: number, 
     // A little give at the edges, so you don't slip off a crate you're standing on.
     if (x >= b.minX - 0.15 && x <= b.maxX + 0.15 && y >= b.minY - 0.15 && y <= b.maxY + 0.15) floor = b.top;
   }
+  for (const r of scaledRamps(map, arenaRadius)) {
+    if (x < r.minX || x > r.maxX || y < r.minY || y > r.maxY) continue;
+    const h = rampHeight(r, x, y);
+    if (h <= maxTop && h > floor) floor = h;
+  }
   return floor;
 }
 
-/** True if a point is inside a block (below its top). */
+/** True if a point is inside a block or a ramp. */
 export function inBlock(map: MapDef, arenaRadius: number, x: number, y: number, z: number, margin = 0): boolean {
   for (const b of scaledBlocks(map, arenaRadius)) {
-    if (z < b.top + margin && x > b.minX - margin && x < b.maxX + margin && y > b.minY - margin && y < b.maxY + margin) return true;
+    if (z < b.top + margin && z > b.bottom - margin && x > b.minX - margin && x < b.maxX + margin && y > b.minY - margin && y < b.maxY + margin) return true;
+  }
+  for (const r of scaledRamps(map, arenaRadius)) {
+    if (x > r.minX - margin && x < r.maxX + margin && y > r.minY - margin && y < r.maxY + margin && z < rampHeight(r, x, y) + margin) return true;
   }
   return false;
 }

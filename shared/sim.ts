@@ -8,7 +8,7 @@
 // The world is 3D: x and y are horizontal, z is up, and the roof is at z = 0.
 
 import * as C from './constants.js';
-import { MAPS, floorAt, inBlock, isOffMap, scaledBlocks, scaledBumpers, scaledPads, spawnPoint, type MapDef } from './maps.js';
+import { MAPS, floorAt, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, spawnPoint, type MapDef } from './maps.js';
 import {
   FX_AIM,
   FX_CHARGING,
@@ -559,11 +559,34 @@ export function movePlayer(p: PlayerState, h: number, map: MapDef, arenaRadius: 
   p.y += p.vy * h;
   p.z += p.vz * h;
 
-  // Block sides: push out, and remember the ledge for climbing.
+  // Bump your head on a roof or bridge you jump up into.
   const blocks = scaledBlocks(map, arenaRadius);
+  if (p.vz > 0) {
+    for (const b of blocks) {
+      if (b.bottom <= 0) continue;
+      const inside = p.x > b.minX && p.x < b.maxX && p.y > b.minY && p.y < b.maxY;
+      if (inside && p.z + C.PLAYER_HEIGHT > b.bottom && pz + C.PLAYER_HEIGHT <= b.bottom + 0.05) {
+        p.z = b.bottom - C.PLAYER_HEIGHT;
+        p.vz = 0;
+      }
+    }
+  }
+
+  // Block sides: push out, and remember the ledge for climbing. A slab only
+  // gets in the way if it overlaps you top to bottom (you walk under roofs).
   let touched = false;
+  const sides: { minX: number; maxX: number; minY: number; maxY: number; top: number; low: boolean }[] = [];
   for (const b of blocks) {
-    if (p.z >= b.top - C.STEP_HEIGHT || p.z + C.PLAYER_HEIGHT <= 0) continue;
+    if (p.z >= b.top - C.STEP_HEIGHT || p.z + C.PLAYER_HEIGHT <= b.bottom) continue;
+    sides.push({ ...b, low: false });
+  }
+  // Ramps are walls from the side and the tall end, and a slope from the low end.
+  for (const r of scaledRamps(map, arenaRadius)) {
+    const top = rampHeight(r, clamp(p.x, r.minX, r.maxX), clamp(p.y, r.minY, r.maxY));
+    if (p.z >= top - C.STEP_HEIGHT) continue;
+    sides.push({ minX: r.minX, maxX: r.maxX, minY: r.minY, maxY: r.maxY, top: r.h, low: true });
+  }
+  for (const b of sides) {
     const cx = clamp(p.x, b.minX, b.maxX);
     const cy = clamp(p.y, b.minY, b.maxY);
     let nx = p.x - cx;
@@ -593,7 +616,7 @@ export function movePlayer(p: PlayerState, h: number, map: MapDef, arenaRadius: 
       p.vx -= vn * nx;
       p.vy -= vn * ny;
     }
-    if (!touched || b.top > p.wallTop) {
+    if (!b.low && (!touched || b.top > p.wallTop)) {
       p.wallTop = b.top;
       p.wallNx = nx;
       p.wallNy = ny;

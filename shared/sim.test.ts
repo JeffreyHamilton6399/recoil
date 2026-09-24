@@ -9,10 +9,12 @@
 // 7. Offhands: the knife shoves someone in front of you; the shock grenade
 //    bounces and its shockwave throws people.
 // 8. Bots: full bot matches finish, and hard bots beat easy ones.
+// 9. Structures: run up a ramp onto a roof, through a doorway, under a
+//    bridge, and bump your head jumping into a slab.
 
 import assert from 'node:assert/strict';
 import * as C from './constants.js';
-import { MAPS, inBlock, isOffMap, mapScale, scaledBumpers, spawnPoint } from './maps.js';
+import { MAPS, inBlock, isOffMap, mapScale, rampHeight, scaledBumpers, scaledRamps, spawnPoint } from './maps.js';
 import {
   NO_INPUT,
   addPlayer,
@@ -33,7 +35,7 @@ import {
 } from './sim.js';
 import { BotBrain } from './bot.js';
 import { SHOCK_WEAPON, WEAPONS } from './weapons.js';
-import type { GameState, InputState, PlayerId } from './types.js';
+import type { GameState, InputState, PlayerId, PlayerState } from './types.js';
 
 /** Small seeded PRNG for test inputs, so failures are reproducible. */
 function mulberry32(seed: number): () => number {
@@ -62,7 +64,8 @@ function assertSane(s: GameState): void {
     assert.ok(p.charge >= 0 && p.charge <= 1);
     if (p.grounded && !p.falling) {
       const onBlock = currentMap(s).blocks.some((b) => Math.abs(b.h - p.z) < 1e-9);
-      assert.ok(p.z === 0 || onBlock, `grounded players stand on the roof or a block (z=${p.z})`);
+      const onRamp = scaledRamps(currentMap(s), s.arenaRadius).some((r) => Math.abs(rampHeight(r, p.x, p.y) - p.z) < 0.35);
+      assert.ok(p.z === 0 || onBlock || onRamp, `grounded players stand on the roof, a block or a ramp (z=${p.z})`);
     }
   }
   for (const sc of s.scores) assert.ok(sc <= C.WIN_SCORE);
@@ -248,7 +251,8 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   // Climb onto The Block's corner AC unit (1.6m: too tall to jump, low enough to climb).
   setMapChoice(s, 3);
   const T = mapScale(s.arenaRadius);
-  const ac = MAPS[3].blocks[1];
+  const ac = MAPS[3].blocks.find((b) => b.h === 1.6 && !b.z);
+  assert.ok(ac, "The Block has its corner AC units");
   place((ac.x - ac.w / 2) * T - 1.2, ac.y * T);
   hold({ yaw: 0, forward: 1 }, 8);
   hold({ yaw: 0, forward: 1, jump: true }, 1);
@@ -367,6 +371,56 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   }
   assert.equal(s.phase, 'matchEnd', 'a 6-bot match finishes');
   console.log(`ok 8 - hard beat easy ${hardWins}-${easyWins} in rounds; 6-bot match done in ${(ticks / 30 / 60).toFixed(1)} min`);
+}
+
+// 9. Structures.
+{
+  const mapNamed = (name: string): number => MAPS.findIndex((m) => m.name === name);
+  const walk = (mapName: string, x: number, y: number, yaw: number, ticks: number, extra: Partial<InputState> = {}): PlayerState => {
+    const s = createGame(9);
+    setMapChoice(s, mapNamed(mapName));
+    addPlayer(s, 0);
+    const p = s.players[0];
+    p.x = x;
+    p.y = y;
+    p.z = 0;
+    p.yaw = yaw;
+    for (let i = 0; i < ticks; i++) step(s, new Map([[0, { ...NO_INPUT, forward: 1, yaw, pitch: 0, ...extra }]]));
+    return p;
+  };
+  const S = mapScale(C.ARENA_START_RADIUS);
+
+  // Helipad: walk from the middle up the ramp onto the east hut's roof.
+  const up = walk('Helipad', 3.6 * S, 0, 0, 45);
+  assert.ok(up.z > 2.8 && up.grounded, `ramp leads onto the hut roof (z=${up.z.toFixed(2)})`);
+
+  // Helipad: run north through the hut's doorways (under the roof).
+  const through = walk('Helipad', 6.3 * S, -2.2 * S, Math.PI / 2, 80);
+  assert.ok(through.y > 1.4 * S && through.z < 0.01, `ran through the hut (y=${(through.y / S).toFixed(2)}, z=${through.z.toFixed(2)})`);
+
+  // The Block: the building's east side has no door, so you can't walk in.
+  const blocked = walk('The Block', 3.2 * S, 1.0 * S, Math.PI, 40);
+  assert.ok(blocked.x > 1.3 * S, `a wall without a door stops you (x=${(blocked.x / S).toFixed(2)})`);
+
+  // Split Level: walk under the bridge from one side to the other.
+  const under = walk('Split Level', 2.4 * S, -0.9 * S, Math.PI / 2, 25);
+  assert.ok(under.y > 0.5 * S && under.z < 0.01, `walked under the bridge (y=${(under.y / S).toFixed(2)})`);
+
+  // Jumping into the bridge from below bumps your head.
+  const s = createGame(10);
+  setMapChoice(s, mapNamed('Split Level'));
+  addPlayer(s, 0);
+  const p = s.players[0];
+  p.x = 2.4 * S;
+  p.y = 0;
+  p.z = 0;
+  let peak = 0;
+  for (let i = 0; i < 30; i++) {
+    step(s, new Map([[0, { ...NO_INPUT, jump: i === 0, yaw: 0, pitch: 0 }]]));
+    peak = Math.max(peak, p.z);
+  }
+  assert.ok(peak + C.PLAYER_HEIGHT <= 2.6 + 1e-6, `head bumps the bridge (peak feet ${peak.toFixed(2)})`);
+  console.log(`ok 9 - ramp to roof (${up.z.toFixed(2)} m), through a doorway, blocked by a wall, under a bridge, head bump`);
 }
 
 console.log('all simulation tests passed');

@@ -15,7 +15,7 @@ import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
 import { FONT, INK, POWERUP_STYLE, arenaOutline, makeSurfaceCanvas } from './art.js';
 import { makeArms, makeGun, type Gun } from './guns.js';
 import { Inker } from './ink.js';
-import { buildBlocks, buildPads, type Pads } from './props.js';
+import { buildBlocks, buildPads, type Pads, buildRamps } from './props.js';
 import { GLOW, TOON, disposeTree, glowSprite, outlined, toon } from './toon.js';
 
 // ---------------------------------------------------------------------------
@@ -586,10 +586,10 @@ export class Scene3D {
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     const sc = this.sun.shadow.camera;
-    sc.left = -30;
-    sc.right = 30;
-    sc.top = 30;
-    sc.bottom = -30;
+    sc.left = -44;
+    sc.right = 44;
+    sc.top = 44;
+    sc.bottom = -44;
     sc.near = 1;
     sc.far = 220;
     this.sun.shadow.bias = -0.0006;
@@ -709,7 +709,8 @@ export class Scene3D {
         const x = gx + (rand() - 0.5) * 6;
         const z = gz + (rand() - 0.5) * 6;
         const dist = Math.hypot(x, z);
-        if (dist < 44 || rand() < 0.08) continue;
+        // Leave room around the (bigger) arena tower.
+        if (dist < C.ARENA_START_RADIUS + 26 || rand() < 0.08) continue;
         const w = 12 + rand() * 12;
         const d = 12 + rand() * 12;
         // Near the tower, buildings stay below the roof so you can see out.
@@ -792,6 +793,7 @@ export class Scene3D {
 
     // Obstacles and jump pads.
     this.arena.add(buildBlocks(map, S));
+    this.arena.add(buildRamps(map, S));
     this.pads = buildPads(map, S);
     this.arena.add(this.pads.group);
 

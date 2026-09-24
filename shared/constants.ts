@@ -47,11 +47,11 @@ export const PLAYER_COLOR_NAMES: readonly string[] = ['Red', 'Blue', 'Green', 'Y
 // ---------------------------------------------------------------------------
 
 /** Arena radius at the start of every round. */
-export const ARENA_START_RADIUS = 20;
+export const ARENA_START_RADIUS = 30;
 /** Smallest the arena ever gets. */
-export const ARENA_END_RADIUS = 6;
+export const ARENA_END_RADIUS = 8;
 /** Seconds of active play it takes to shrink from start to end radius. */
-export const ARENA_SHRINK_TIME = 60;
+export const ARENA_SHRINK_TIME = 80;
 /** Square maps have a half-width of radius * this. */
 export const SQUARE_HALF_SCALE = 0.9;
 /** Bumpers bounce players away with this restitution (>1 adds energy, like pinball). */
@@ -72,7 +72,7 @@ export const PLAYER_HEIGHT = 1.8;
 /** Camera and gun height above the feet. */
 export const EYE_HEIGHT = 1.55;
 /** Players spawn evenly spaced on a ring of this radius. */
-export const SPAWN_DISTANCE = 10;
+export const SPAWN_DISTANCE = 15;
 /** Running speed on the roof. */
 export const MOVE_SPEED = 7.5;
 /** How fast you reach running speed (units per second squared). */
