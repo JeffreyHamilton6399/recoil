@@ -139,11 +139,14 @@ export const PAD_BOOST = 1.35;
 // ---------------------------------------------------------------------------
 
 /** Knockback also lifts you off your feet by this fraction of its strength. */
-export const KNOCKBACK_LIFT = 0.4;
+export const KNOCKBACK_LIFT = 0.5;
 /** Knockback is multiplied by (1 + damage / DAMAGE_SCALE). */
-export const DAMAGE_SCALE = 100;
-/** Explosions push the shooter too (for bomb jumps), by this fraction and without damage. */
-export const SELF_SPLASH = 0.85;
+export const DAMAGE_SCALE = 80;
+/** Explosions push the shooter too, by this fraction and without damage. */
+export const SELF_SPLASH = 0.5;
+/** Aiming down sights: running speed multiplier and how much tighter the spread gets. */
+export const AIM_MOVE_MULT = 0.7;
+export const AIM_SPREAD_MULT = 0.35;
 /** Gap between the player's edge and a freshly spawned bullet. */
 export const MUZZLE_GAP = 0.05;
 /** Bullets are removed once this far outside the current arena edge. */
@@ -219,7 +222,7 @@ export const INPUT_BUFFER_MAX = 6;
 // ---------------------------------------------------------------------------
 
 /** Knockback impulse above which a hit counts as heavy (bigger shake and a comic word). */
-export const HEAVY_HIT_IMPULSE = 12;
+export const HEAVY_HIT_IMPULSE = 18;
 /** Max camera shake in radians at full trauma. */
 export const SHAKE_MAX_ANGLE = 0.035;
 /** How fast camera shake trauma decays per second. */

@@ -2,7 +2,7 @@
 
 A first-person online party brawler for 2 to 8 players, played in the
 browser. Sprint, slide, climb and jump around a rooftop, and knock everyone
-else off it. Hits knock people back harder the more damage they've taken, and
+else off it. Every hit sends people flying, and hits knock them back harder the more damage they've taken, and
 the roof keeps shrinking. The last player standing wins the round, and the
 first to 5 round wins takes the match.
 
@@ -17,14 +17,14 @@ first to 5 round wins takes the match.
   Vent Farm, Chimneys, Hex Plaza, Billboard, Sky Garden, Split Level, Parking
   Deck, and Solar Farm. Arenas can be circles, squares, hexagons, or diamonds,
   with open vents to fall through, bouncy pillars, obstacles and jump pads.
-- **Movement:** run, sprint, slide (tap crouch while moving; jump out of a
-  slide to keep the speed), and climb any ledge up to 2.7 m by jumping into it.
+- **Movement:** run, sprint, slide (tap Ctrl while moving; jump out of a
+  slide to keep the speed), aim down sights (the Longshot has a scope), and climb any ledge up to 2.7 m by jumping into it.
   Jump pads launch you into the air.
 - **Five weapons**, picked in the lobby (click a card or press 1 to 5):
   - **Blaster:** hold to charge a big shove. The all-rounder.
   - **Scatter:** a fistful of pellets. Brutal up close.
   - **Longshot:** charge a lightning-fast bolt that hits like a train.
-  - **Boomer:** lobs bombs that burst on impact. Shoot your feet to bomb-jump.
+  - **Boomer:** lobs bombs that burst on impact and blast everyone nearby.
   - **Pepper:** hold the trigger for a stream of little pokes.
 - **Obstacles on every map:** crates, AC units, water tanks and brick walls to
   climb, stand on and hide behind.
@@ -71,10 +71,15 @@ that Vite prints, for example `http://192.168.1.20:5173`.
 | --- | --- | --- |
 | Move | `W` `A` `S` `D` or arrow keys | Stick, bottom left |
 | Sprint | Hold `Shift` | Push the stick all the way forward |
-| Slide | `C` while moving | SLIDE button |
-| Look | Mouse (click the game to capture it, `Esc` to let go) | Drag anywhere |
+| Slide | `Ctrl` or `C` while moving | SLIDE button |
+| Aim down sights | Hold the right mouse button (or `Q`) | AIM button (toggles) |
+| Look | Mouse (click the game to play: it goes fullscreen and captures the mouse; hold `Esc` to let go) | Drag anywhere |
 | Jump / climb | `Space` (into a ledge to climb it) | JUMP button |
 | Fire | Left mouse button (or `F`); charge weapons fire on release | FIRE button |
+
+Playing with the mouse goes fullscreen with the keyboard locked (Chrome and
+Edge), so Ctrl+W while sliding forward can't close the tab. Other browsers ask
+before leaving the page instead.
 | Pick a weapon | Click a card in the lobby, or `1` to `5` | Tap a card |
 | Mute | `M` | Speaker icon, top right |
 

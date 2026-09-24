@@ -2,7 +2,7 @@
   "name": "recoil",
   "version": "1.0.0",
   "private": true,
-  "description": "RECOIL: a first-person online rooftop brawler for up to 8 players, where every shot kicks you backwards.",
+  "description": "RECOIL: a first-person online rooftop brawler for up to 8 players, where every hit sends people flying.",
   "type": "module",
   "engines": {
     "node": ">=20"

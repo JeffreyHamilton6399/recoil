@@ -31,6 +31,7 @@ export interface HudInfo {
   /** Your weapon, and how ready it is to fire again (0..1). */
   weapon: number;
   ready: number;
+  aiming: boolean;
 }
 
 export class Hud {
@@ -47,6 +48,7 @@ export class Hud {
   private readonly chips = el('chips');
   private readonly lockHint = el('lock-hint');
   private readonly vignette = el('vignette');
+  private readonly scope = el('scope');
 
   private hurtLevel = 0;
   private hitTimer = 0;
@@ -104,6 +106,8 @@ export class Hud {
     const fill = def.mode === 'charge' ? (me?.charge ?? 0) : info.ready;
     this.ring.setAttribute('stroke-dashoffset', (RING * (1 - fill)).toFixed(1));
     this.crosshair.classList.toggle('full', def.mode === 'charge' && fill >= 1);
+    this.root.classList.toggle('aiming', info.aiming);
+    this.scope.classList.toggle('hidden', !(info.aiming && def.scope));
 
     // Damage and power-ups.
     const alive = me !== undefined && me.fallTime < 0;

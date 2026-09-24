@@ -10,6 +10,7 @@
 import * as C from './constants.js';
 import { MAPS, floorAt, inBlock, isOffMap, scaledBlocks, scaledBumpers, scaledPads, spawnPoint, type MapDef } from './maps.js';
 import {
+  FX_AIM,
   FX_CHARGING,
   FX_CROUCH,
   FX_GROUNDED,
@@ -36,6 +37,7 @@ export const NO_INPUT: InputState = Object.freeze({
   firing: false,
   sprint: false,
   crouch: false,
+  aim: false,
   yaw: 0,
   pitch: 0,
 });
@@ -119,6 +121,7 @@ export function phaseRules(phase: GameState['phase']): { canMove: boolean; canFi
 /** Running speed for a player right now. */
 export function runSpeed(p: PlayerState, input: InputState): number {
   const w = weaponDef(p.weapon);
+  if (input.aim) return C.MOVE_SPEED * w.moveMult * C.AIM_MOVE_MULT;
   const sprint = input.sprint && input.forward > 0 && !p.charging ? C.SPRINT_MULT : 1;
   return C.MOVE_SPEED * w.moveMult * sprint * (p.charging ? C.CHARGE_MOVE_MULT : 1);
 }
@@ -144,6 +147,7 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
     slide: 0,
     slideCd: 0,
     crouchHeld: false,
+    aiming: false,
     wallTop: -1,
     wallNx: 0,
     wallNy: 0,
@@ -325,6 +329,7 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
   if (p.falling) return -1;
   const w = weaponDef(p.weapon);
 
+  p.aiming = input.aim && canMove;
   p.yaw = wrapAngle(Number.isFinite(input.yaw) ? input.yaw : p.yaw);
   p.pitch = clamp(Number.isFinite(input.pitch) ? input.pitch : p.pitch, -C.PITCH_LIMIT, C.PITCH_LIMIT);
   p.cooldown = Math.max(0, p.cooldown - dt);
@@ -649,8 +654,9 @@ function spawnBullets(s: GameState, p: PlayerState, charge: number, events: Game
   for (const volley of volleys) {
     for (let i = 0; i < w.pellets; i++) {
       // Pellets scatter in a cone; single-shot guns only wobble by their spread.
-      const u = w.spread > 0 ? (random(s) * 2 - 1) * w.spread : 0;
-      const v = w.spread > 0 ? (random(s) * 2 - 1) * w.spread * 0.7 : 0;
+      const spread = w.spread * (p.aiming ? C.AIM_SPREAD_MULT : 1);
+      const u = spread > 0 ? (random(s) * 2 - 1) * spread : 0;
+      const v = spread > 0 ? (random(s) * 2 - 1) * spread * 0.7 : 0;
       const d = aimDir(p.yaw + volley + u, p.pitch + v);
       s.bullets.push({
         id: s.nextId++,
@@ -1051,7 +1057,8 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     (p.mega > 0 ? FX_MEGA : 0) |
     (p.grounded ? FX_GROUNDED : 0) |
     (p.charging ? FX_CHARGING : 0) |
-    (p.crouchHeld ? FX_CROUCH : 0);
+    (p.crouchHeld ? FX_CROUCH : 0) |
+    (p.aiming ? FX_AIM : 0);
   return [
     p.id,
     round3(p.x),
@@ -1097,6 +1104,7 @@ export function playerFromSnap(s: PlayerSnap): PlayerState {
   p.grounded = (fx & FX_GROUNDED) !== 0;
   p.charging = (fx & FX_CHARGING) !== 0;
   p.crouchHeld = (fx & FX_CROUCH) !== 0;
+  p.aiming = (fx & FX_AIM) !== 0;
   p.cooldown = s[13];
   p.ack = s[14];
   p.slide = s[16];

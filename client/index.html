@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#140e38" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="description" content="RECOIL: a first-person online rooftop brawler for up to 8 players. Every shot kicks you backwards." />
+    <meta name="description" content="RECOIL: a first-person online rooftop brawler for up to 8 players. Every hit sends people flying." />
     <title>RECOIL</title>
     <link
       rel="icon"
@@ -744,7 +744,8 @@
         pointer-events: none;
       }
       #t-jump,
-      #t-slide {
+      #t-slide,
+      #t-aim {
         width: 74px;
         height: 74px;
         font-size: 14px;
@@ -756,6 +757,36 @@
       #t-slide {
         right: calc(max(18px, env(safe-area-inset-right)) + 30px);
         bottom: calc(max(24px, env(safe-area-inset-bottom)) + 150px);
+      }
+      #t-aim {
+        right: calc(max(18px, env(safe-area-inset-right)) + 120px);
+        bottom: calc(max(24px, env(safe-area-inset-bottom)) + 120px);
+      }
+      /* Longshot scope: a black mask with a round window and crosshairs. */
+      #scope {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at center, transparent 0 min(34vh, 34vw), var(--ink) calc(min(34vh, 34vw) + 2px));
+      }
+      #scope::before,
+      #scope::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        background: var(--ink);
+        transform: translate(-50%, -50%);
+      }
+      #scope::before {
+        width: min(68vh, 68vw);
+        height: 2px;
+      }
+      #scope::after {
+        width: 2px;
+        height: min(68vh, 68vw);
+      }
+      #fps.aiming #crosshair {
+        transform: translate(-50%, -50%) scale(0.6);
       }
 
       /* Weapon picker ---------------------------------------------------- */
@@ -1129,6 +1160,7 @@
         <div id="dmg">0<small>%</small></div>
         <div id="chips"></div>
       </div>
+      <div id="scope" class="hidden"></div>
       <div id="lock-hint" class="hidden">Click to play</div>
       <div id="vignette"></div>
     </div>
@@ -1138,7 +1170,7 @@
     <section id="menu" class="overlay scroll">
       <div class="panel">
         <h1 class="logo">RECOIL</h1>
-        <p class="tag">A first-person rooftop brawl. Every shot kicks you backwards.<br />Last one on the roof wins. Up to 8 players.</p>
+        <p class="tag">A first-person rooftop brawl. Every hit sends people flying.<br />Last one on the roof wins. Up to 8 players.</p>
 
         <div class="field-label">Your name</div>
         <input id="name-input" class="text-input" autocomplete="off" spellcheck="false" placeholder="Player" aria-label="Your name" />
@@ -1156,9 +1188,9 @@
         </form>
         <p id="menu-error" class="error" role="alert"></p>
         <div class="help">
-          Move <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> · Jump <kbd>Space</kbd> · Sprint <kbd>Shift</kbd> · Slide <kbd>C</kbd><br />
-          Look with the mouse · Fire with the left button<br />
-          Jump into a ledge to climb it. Knock everyone off. First to 5 wins.
+          Move <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> · Jump <kbd>Space</kbd> · Sprint <kbd>Shift</kbd> · Slide <kbd>Ctrl</kbd><br />
+          Fire with the left mouse button · Aim with the right<br />
+          Every hit sends people flying. Knock everyone off. First to 5 wins.
         </div>
       </div>
     </section>
@@ -1206,6 +1238,7 @@
       <div id="t-stick" role="button" aria-label="Move"><div id="t-knob"></div></div>
       <div id="t-jump" class="tbtn" role="button" aria-label="Jump">JUMP</div>
       <div id="t-slide" class="tbtn" role="button" aria-label="Slide">SLIDE</div>
+      <div id="t-aim" class="tbtn" role="button" aria-label="Aim down sights">AIM</div>
       <div id="t-fire" class="tbtn fire" role="button" aria-label="Hold to charge, release to fire">FIRE</div>
     </div>
 

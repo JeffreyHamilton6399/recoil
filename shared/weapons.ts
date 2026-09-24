@@ -21,7 +21,7 @@ export interface WeaponDef {
   knockback: readonly [number, number];
   /** Damage percentage per bullet. */
   damage: readonly [number, number];
-  /** Kick back on the shooter. */
+  /** Kick back on the shooter (kept small: getting hit is what sends you flying). */
   recoil: readonly [number, number];
   /** Explosion radius when the bullet lands (0 = no explosion). */
   splash: number;
@@ -31,6 +31,10 @@ export interface WeaponDef {
   lifetime: number;
   /** Running speed multiplier. */
   moveMult: number;
+  /** Field of view (degrees) while aiming down sights. */
+  adsFov: number;
+  /** Aiming shows a scope overlay instead of the gun. */
+  scope: boolean;
   /** 1..5 bars for the weapon picker. */
   stats: { power: number; rate: number; range: number; mobility: number };
   /** Accent colour for the picker and the gun. */
@@ -48,13 +52,15 @@ export const WEAPONS: readonly WeaponDef[] = [
     spread: 0,
     speed: [34, 52],
     radius: [0.2, 0.42],
-    knockback: [4.5, 11],
+    knockback: [8, 19],
     damage: [6, 20],
-    recoil: [1, 3],
+    recoil: [0.3, 0.8],
     splash: 0,
     gravity: 0,
     lifetime: 2,
     moveMult: 1,
+    adsFov: 58,
+    scope: false,
     stats: { power: 3, rate: 3, range: 4, mobility: 3 },
     accent: '#00e1ff',
   },
@@ -68,13 +74,15 @@ export const WEAPONS: readonly WeaponDef[] = [
     spread: 0.1,
     speed: [36, 36],
     radius: [0.13, 0.13],
-    knockback: [2.4, 2.4],
+    knockback: [4.2, 4.2],
     damage: [3, 3],
-    recoil: [4.5, 4.5],
+    recoil: [1.2, 1.2],
     splash: 0,
     gravity: 0,
     lifetime: 0.42,
     moveMult: 1.05,
+    adsFov: 66,
+    scope: false,
     stats: { power: 5, rate: 2, range: 1, mobility: 4 },
     accent: '#ff8a3d',
   },
@@ -88,19 +96,21 @@ export const WEAPONS: readonly WeaponDef[] = [
     spread: 0,
     speed: [90, 150],
     radius: [0.14, 0.22],
-    knockback: [3, 15],
+    knockback: [5, 26],
     damage: [8, 30],
-    recoil: [0.5, 2],
+    recoil: [0.2, 0.6],
     splash: 0,
     gravity: 0,
     lifetime: 1.2,
     moveMult: 0.92,
+    adsFov: 26,
+    scope: true,
     stats: { power: 5, rate: 1, range: 5, mobility: 2 },
     accent: '#a45cff',
   },
   {
     name: 'Boomer',
-    blurb: 'Lobs a bomb that bursts on impact. Shoot your feet to fly.',
+    blurb: 'Lobs a bomb that bursts on impact and blasts everyone nearby.',
     mode: 'auto',
     chargeTime: 0,
     cooldown: 0.85,
@@ -108,14 +118,16 @@ export const WEAPONS: readonly WeaponDef[] = [
     spread: 0,
     speed: [26, 26],
     radius: [0.32, 0.32],
-    knockback: [12, 12],
+    knockback: [20, 20],
     damage: [15, 15],
-    recoil: [1.5, 1.5],
+    recoil: [0.5, 0.5],
     splash: 3.4,
     gravity: 7,
     lifetime: 3,
     moveMult: 0.95,
-    stats: { power: 4, rate: 2, range: 3, mobility: 5 },
+    adsFov: 60,
+    scope: false,
+    stats: { power: 4, rate: 2, range: 3, mobility: 3 },
     accent: '#ff3d8b',
   },
   {
@@ -128,13 +140,15 @@ export const WEAPONS: readonly WeaponDef[] = [
     spread: 0.03,
     speed: [44, 44],
     radius: [0.12, 0.12],
-    knockback: [1.5, 1.5],
+    knockback: [2.6, 2.6],
     damage: [2.2, 2.2],
-    recoil: [0.25, 0.25],
+    recoil: [0.1, 0.1],
     splash: 0,
     gravity: 0,
     lifetime: 1.1,
     moveMult: 1.1,
+    adsFov: 58,
+    scope: false,
     stats: { power: 1, rate: 5, range: 3, mobility: 4 },
     accent: '#3ccf6e',
   },

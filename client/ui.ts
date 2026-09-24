@@ -54,6 +54,7 @@ export class UI {
     fire: el('t-fire'),
     jump: el('t-jump'),
     slide: el('t-slide'),
+    aim: el('t-aim'),
   };
 
   private readonly menu = el('menu');

@@ -1,8 +1,13 @@
 // Keyboard, mouse and touch input for first-person play.
-// Keyboard: WASD or arrows to move, Space to jump, Shift to sprint, C to
-// slide. Mouse: look (with pointer lock) and hold the left button to fire.
+// Keyboard: WASD or arrows to move, Space to jump, Shift to sprint, Ctrl or
+// C to slide. Mouse: look (with pointer lock), left button to fire, right
+// button to aim down sights.
 // Touch: a move stick on the left (push it all the way to sprint), drag
-// anywhere else to look, and FIRE / JUMP / SLIDE buttons.
+// anywhere else to look, and FIRE / JUMP / SLIDE / AIM buttons.
+//
+// Ctrl+W would close the tab mid-slide, so playing with the mouse goes
+// fullscreen with the keyboard locked (Chrome and Edge), where the game
+// gets those keys instead of the browser.
 //
 // The look direction changes every frame; everything else is sampled once
 // per simulation tick with sample(), so short taps are never lost.
@@ -11,7 +16,7 @@ import * as C from '../shared/constants.js';
 import { clamp, wrapAngle } from '../shared/sim.js';
 import type { InputState } from '../shared/types.js';
 
-type Key = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'fire' | 'sprint' | 'crouch';
+type Key = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'fire' | 'sprint' | 'crouch' | 'aim';
 
 const KEYS: Record<string, Key> = {
   KeyW: 'forward',
@@ -27,6 +32,9 @@ const KEYS: Record<string, Key> = {
   ShiftLeft: 'sprint',
   ShiftRight: 'sprint',
   KeyC: 'crouch',
+  ControlLeft: 'crouch',
+  ControlRight: 'crouch',
+  KeyQ: 'aim',
 };
 
 /** Radians per pixel of touch drag. */
@@ -41,11 +49,14 @@ export interface TouchElements {
   fire: HTMLElement;
   jump: HTMLElement;
   slide: HTMLElement;
+  aim: HTMLElement;
 }
 
 export class Input {
   yaw = 0;
   pitch = 0;
+  /** Look sensitivity multiplier (lower while zoomed in). */
+  sensitivity = 1;
   /** Called on the first touch, so the UI can reveal the touch controls. */
   onTouchDetected: () => void = () => {};
   /** Called when fire is pressed or released (for instant sound feedback). */
@@ -54,6 +65,8 @@ export class Input {
 
   private readonly keys = new Map<string, Key>();
   private mouseFire = false;
+  private mouseAim = false;
+  private touchAim = false;
   private touchFire = new Set<number>();
   private touchJump = new Set<number>();
   private touchSlide = new Set<number>();
@@ -88,23 +101,32 @@ export class Input {
     });
 
     canvas.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || !this.locked) return;
+      if (!this.locked) return;
+      if (e.button === 2) {
+        this.mouseAim = true;
+        return;
+      }
+      if (e.button !== 0) return;
       this.mouseFire = true;
       this.fireLatch = true;
       this.fireChanged();
     });
     window.addEventListener('mouseup', (e) => {
+      if (e.button === 2) this.mouseAim = false;
       if (e.button !== 0 || !this.mouseFire) return;
       this.mouseFire = false;
       this.fireChanged();
     });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
-      this.turn(-e.movementX * C.MOUSE_SENSITIVITY, -e.movementY * C.MOUSE_SENSITIVITY);
+      const k = C.MOUSE_SENSITIVITY * this.sensitivity;
+      this.turn(-e.movementX * k, -e.movementY * k);
     });
     document.addEventListener('pointerlockchange', () => {
       if (!this.locked) {
         this.mouseFire = false;
+        this.mouseAim = false;
         this.fireChanged();
       }
       this.onLockChange(this.locked);
@@ -126,6 +148,16 @@ export class Input {
 
   requestLock(): void {
     if (this.locked) return;
+    // Fullscreen with the keyboard locked, so Ctrl+W (slide + forward) can't close the tab.
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+      document.documentElement
+        .requestFullscreen()
+        .then(() => {
+          const kb = (navigator as Navigator & { keyboard?: { lock?: (keys?: string[]) => Promise<void> } }).keyboard;
+          return kb?.lock?.();
+        })
+        .catch(() => {});
+    }
     try {
       const r = this.canvas.requestPointerLock() as unknown;
       if (r instanceof Promise) r.catch(() => {});
@@ -136,6 +168,7 @@ export class Input {
 
   exitLock(): void {
     if (this.locked) document.exitPointerLock();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   }
 
   /** Points the view somewhere (on spawn, the server faces you at the centre). */
@@ -188,6 +221,7 @@ export class Input {
       firing: this.firing || this.fireLatch,
       sprint,
       crouch: this.held('crouch') || this.touchSlide.size > 0 || this.crouchLatch,
+      aim: this.mouseAim || this.touchAim || this.held('aim'),
       yaw: Math.round(this.yaw * 10000) / 10000,
       pitch: Math.round(this.pitch * 10000) / 10000,
     };
@@ -200,6 +234,7 @@ export class Input {
   releaseAll(): void {
     this.keys.clear();
     this.mouseFire = false;
+    this.mouseAim = false;
     this.touchFire.clear();
     this.touchJump.clear();
     this.touchSlide.clear();
@@ -216,7 +251,13 @@ export class Input {
   // -------------------------------------------------------------------------
 
   private bindTouch(): void {
-    const { stick, knob, look, fire, jump, slide } = this.touch;
+    const { stick, knob, look, fire, jump, slide, aim } = this.touch;
+    // AIM toggles on touch: tap to zoom in, tap again to zoom out.
+    aim.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      this.touchAim = !this.touchAim;
+      aim.classList.toggle('pressed', this.touchAim);
+    });
 
     const capture = (el: HTMLElement, e: PointerEvent): void => {
       e.preventDefault();

@@ -71,6 +71,7 @@ function randomInput(rand: () => number): InputState {
     firing: rand() < 0.5,
     sprint: rand() < 0.5,
     crouch: rand() < 0.15,
+    aim: rand() < 0.2,
     yaw: (rand() * 2 - 1) * Math.PI,
     pitch: (rand() * 2 - 1) * 1.2,
   };

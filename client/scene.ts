@@ -13,7 +13,7 @@ import { clamp } from '../shared/sim.js';
 import { FX_SHIELD, type GameEvent, type PlayerId, type PowerupKind, type RosterEntry } from '../shared/types.js';
 import { weaponDef } from '../shared/weapons.js';
 import { FONT, INK, POWERUP_STYLE, arenaOutline, makeSurfaceCanvas } from './art.js';
-import { makeGun, type Gun } from './guns.js';
+import { makeArms, makeGun, type Gun } from './guns.js';
 import { Inker } from './ink.js';
 import { buildBlocks, buildPads, type Pads } from './props.js';
 import { GLOW, TOON, disposeTree, glowSprite, outlined, toon } from './toon.js';
@@ -88,6 +88,8 @@ export type CameraView =
       weapon: number;
       sprinting: boolean;
       sliding: boolean;
+      /** Aiming down sights. */
+      aiming: boolean;
     }
   | { kind: 'orbit' };
 
@@ -278,11 +280,15 @@ function makeRig(color: string, weapon: number): Rig {
   visor.position.set(0, C.EYE_HEIGHT, -0.3);
   body.add(visor);
 
-  // Gun on the right shoulder, pitched with the aim.
+  // Gun held in front of the chest in both hands, pitched with the aim.
   const gunPivot = new THREE.Group();
-  gunPivot.position.set(0.42, 1.2, -0.05);
+  gunPivot.position.set(0, 1.22, 0);
   const gun = makeGun(weapon, color);
+  gun.group.position.set(0.16, -0.06, -0.46);
   gunPivot.add(gun.group);
+  const shoulders: [THREE.Vector3, THREE.Vector3] = [new THREE.Vector3(0.36, 0.04, -0.05), new THREE.Vector3(-0.36, 0.04, -0.05)];
+  const hands: [THREE.Vector3, THREE.Vector3] = [gun.grip.clone().add(gun.group.position), gun.fore.clone().add(gun.group.position)];
+  gunPivot.add(makeArms(color, shoulders, hands, 1.25));
   body.add(gunPivot);
 
   const shield = new THREE.Mesh(
@@ -473,6 +479,8 @@ export class Scene3D {
 
   private readonly viewmodel = new THREE.Group();
   private vmGun: Gun | null = null;
+  private vmArms: THREE.Group | null = null;
+  private aimT = 0;
   private vmKey = '';
   private kick = 0;
   private flashTime = 0;
@@ -565,6 +573,11 @@ export class Scene3D {
     this.scene.add(this.camera);
 
     this.resize();
+  }
+
+  /** How zoomed in the camera is right now (1 = normal), for scaling mouse look. */
+  get zoom(): number {
+    return this.fov / C.FOV;
   }
 
   resize(): void {
@@ -1035,24 +1048,41 @@ export class Scene3D {
     const key = `${myColor}|${cam.weapon}`;
     if (key !== this.vmKey) {
       this.vmKey = key;
-      if (this.vmGun) {
-        this.viewmodel.remove(this.vmGun.group);
-        disposeTree(this.vmGun.group);
+      for (const old of [this.vmGun?.group, this.vmArms]) {
+        if (!old) continue;
+        this.viewmodel.remove(old);
+        disposeTree(old);
       }
       this.vmGun = makeGun(cam.weapon, myColor);
       this.viewmodel.add(this.vmGun.group);
+      // Your arms come up from below the screen to the grip and the front of the gun.
+      this.vmArms = makeArms(
+        myColor,
+        [new THREE.Vector3(0.3, -0.62, 0.8), new THREE.Vector3(-0.55, -0.66, 0.42)],
+        [this.vmGun.grip.clone(), this.vmGun.fore.clone()],
+      );
+      this.viewmodel.add(this.vmArms);
     }
+    // Aiming down sights slides the gun to the middle; a scope hides it.
+    this.aimT += ((cam.aiming ? 1 : 0) - this.aimT) * Math.min(1, dt * 14);
+    const a = this.aimT;
+    this.viewmodel.visible = !(weaponDef(cam.weapon).scope && a > 0.7);
     // Bob while running, kick after a shot, lower while sliding, glow while charging.
     if (cam.grounded) this.bob += dt * cam.speed * (cam.sprinting ? 1.1 : 1.4);
-    const bobAmt = cam.grounded && !cam.sliding ? Math.min(1.4, cam.speed / C.MOVE_SPEED) : 0;
+    const bobAmt = (cam.grounded && !cam.sliding ? Math.min(1.4, cam.speed / C.MOVE_SPEED) : 0) * (1 - a * 0.8);
     this.kick = Math.max(0, this.kick - dt * 6);
-    const sprintTuck = cam.sprinting ? 1 : 0;
+    const sprintTuck = cam.sprinting ? 1 - a : 0;
+    const hip = 1 - a;
     this.viewmodel.position.set(
-      0.19 + Math.cos(this.bob) * 0.01 * bobAmt - sprintTuck * 0.03,
-      -0.2 + Math.abs(Math.sin(this.bob)) * 0.012 * bobAmt - cam.charge * 0.012 - (cam.sliding ? 0.03 : 0),
-      -0.5 + this.kick * 0.06,
+      0.19 * hip + Math.cos(this.bob) * 0.01 * bobAmt - sprintTuck * 0.03,
+      -0.2 * hip - 0.062 * a + Math.abs(Math.sin(this.bob)) * 0.012 * bobAmt - cam.charge * 0.012 * hip - (cam.sliding ? 0.03 : 0),
+      -0.5 * hip - 0.4 * a + this.kick * 0.06,
     );
-    this.viewmodel.rotation.set(this.kick * 0.18 - sprintTuck * 0.25, sprintTuck * 0.35, cam.charge * 0.05 + (cam.sliding ? 0.25 : 0));
+    this.viewmodel.rotation.set(
+      this.kick * 0.18 * (1 - a * 0.6) - sprintTuck * 0.25,
+      sprintTuck * 0.35,
+      (cam.charge * 0.05 + (cam.sliding ? 0.25 : 0)) * hip,
+    );
     if (this.vmGun) {
       this.flashTime = Math.max(0, this.flashTime - dt);
       const pulse = cam.charge >= 1 ? 1 + Math.sin(this.time * 30) * 0.15 : 1;
@@ -1090,12 +1120,11 @@ export class Scene3D {
     const n = (k: number): number => Math.sin(this.time * (37 + k * 11) + k * 3) * shake;
     let fov = C.FOV;
     if (cam.kind === 'first') {
-      // Wider view at speed; a lean into slides.
-      fov = C.FOV + (cam.sliding ? 12 : cam.sprinting ? 7 : 0);
+      // Wider view at speed, zoomed in while aiming, and a lean into slides.
+      fov = cam.aiming ? weaponDef(cam.weapon).adsFov : C.FOV + (cam.sliding ? 12 : cam.sprinting ? 7 : 0);
       this.roll += ((cam.sliding ? 0.08 : 0) - this.roll) * Math.min(1, dt * 10);
       toThree(cam.x, cam.y, cam.z, this.camera.position);
       this.camera.rotation.set(cam.pitch + n(1), cam.yaw - Math.PI / 2 + n(2), this.roll + n(3), 'YXZ');
-      this.viewmodel.visible = true;
       this.updateViewmodel(cam, myColor, dt);
     } else {
       const t = this.time * 0.07;
@@ -1105,7 +1134,7 @@ export class Scene3D {
       this.camera.rotation.z += n(3);
       this.viewmodel.visible = false;
     }
-    this.fov += (fov - this.fov) * Math.min(1, dt * 8);
+    this.fov += (fov - this.fov) * Math.min(1, dt * 12);
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();

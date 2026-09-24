@@ -20,6 +20,8 @@ export interface InputState {
   sprint: boolean;
   /** Crouch: starts a slide when you're moving. */
   crouch: boolean;
+  /** Aiming down sights (zoomed in). */
+  aim: boolean;
   /** Look direction in radians. Yaw 0 faces +x, and yaw grows counter-clockwise seen from above. */
   yaw: number;
   /** Radians above the horizon (negative looks down). */
@@ -47,6 +49,8 @@ export interface PlayerState {
   slideCd: number;
   /** Crouch was held last tick (a slide needs a fresh press). */
   crouchHeld: boolean;
+  /** Aiming down sights. */
+  aiming: boolean;
   /** Top of the block you're pressing against (-1 if none), and its outward normal. Set by movePlayer. */
   wallTop: number;
   wallNx: number;
@@ -164,6 +168,7 @@ export const FX_MEGA = 8;
 export const FX_GROUNDED = 16;
 export const FX_CHARGING = 32;
 export const FX_CROUCH = 64;
+export const FX_AIM = 128;
 
 /**
  * [id, x, y, z, vx, vy, vz, yaw, pitch, charge, damage,
@@ -223,8 +228,8 @@ export type ClientMessage =
   | { t: 'start' }
   /** Pick a weapon (index into WEAPONS). */
   | { t: 'weapon'; w: number }
-  /** One tick of input: sequence number, forward, strafe, jump, fire, sprint, crouch, yaw, pitch. */
-  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; a: number; b: number }
+  /** One tick of input: sequence number, forward, strafe, jump, fire, sprint, crouch, aim, yaw, pitch. */
+  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; z: boolean; a: number; b: number }
   | { t: 'ping'; c: number }
   | { t: 'leave' };
 

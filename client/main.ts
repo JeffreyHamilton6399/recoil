@@ -374,10 +374,13 @@ function clientTick(): void {
   const latest = snaps[snaps.length - 1];
   if (!roomCode || myId === -1 || !net.isOpen || !latest) return;
   const inp = input.sample();
-  // Without the mouse captured, don't charge or fire by accident.
-  if (!input.locked && !ui.isTouch) inp.firing = false;
+  // Without the mouse captured, don't charge, fire or aim by accident.
+  if (!input.locked && !ui.isTouch) {
+    inp.firing = false;
+    inp.aim = false;
+  }
   seq++;
-  net.send({ t: 'input', s: seq, f: inp.forward, r: inp.strafe, j: inp.jump, x: inp.firing, k: inp.sprint, c: inp.crouch, a: inp.yaw, b: inp.pitch });
+  net.send({ t: 'input', s: seq, f: inp.forward, r: inp.strafe, j: inp.jump, x: inp.firing, k: inp.sprint, c: inp.crouch, z: inp.aim, a: inp.yaw, b: inp.pitch });
   history.push({ seq, input: inp });
   lastInput = inp;
   if (history.length > 90) history.shift();
@@ -800,6 +803,7 @@ function frame(): void {
           weapon: pred.weapon,
           sprinting: (lastInput?.sprint ?? false) && pred.grounded && speed > C.MOVE_SPEED * 1.1,
           sliding: pred.slide > 0,
+          aiming: pred.aiming,
         };
       }
     }
@@ -812,6 +816,8 @@ function frame(): void {
   }
 
   scene.render(view, cam, dt, myColor());
+  // Slower look while zoomed in, so aiming stays steady.
+  input.sensitivity = scene.zoom;
   if (roomCode) {
     hud.update(
       {
@@ -823,6 +829,7 @@ function frame(): void {
         roundWinner,
         matchWinner,
         weapon: pred?.weapon ?? 0,
+        aiming: cam.kind === 'first' && cam.aiming,
         ready: pred ? 1 - Math.min(1, pred.cooldown / Math.max(0.05, weaponDef(pred.weapon).cooldown)) : 1,
       },
       dt,
@@ -836,6 +843,12 @@ function frame(): void {
 // ---------------------------------------------------------------------------
 
 window.addEventListener('resize', () => scene.resize());
+// Ask before leaving mid-game (a stray Ctrl+W while sliding, say).
+window.addEventListener('beforeunload', (e) => {
+  if (!roomCode || myId === -1) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
 window.setInterval(() => net.send({ t: 'ping', c: performance.now() }), C.PING_INTERVAL_MS);
 
 const params = new URLSearchParams(location.search);
