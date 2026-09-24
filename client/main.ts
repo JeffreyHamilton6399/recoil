@@ -16,6 +16,7 @@ import { Input } from './input.js';
 import { Net } from './net.js';
 import { Scene3D, type CameraView, type View, type ViewBullet, type ViewPlayer, type ViewPowerup } from './scene.js';
 import { UI } from './ui.js';
+import { Voice } from './voice.js';
 
 // ---------------------------------------------------------------------------
 // Identity: one id per browser tab, kept across reloads so you can rejoin.
@@ -94,6 +95,11 @@ const canvas = document.getElementById('game') as HTMLCanvasElement;
 const scene = new Scene3D(canvas);
 const sfx = new Sfx();
 const hud = new Hud();
+const voice = new Voice((msg) => net.send(msg));
+voice.onChange = () => {
+  ui.setVoice(voice.mode, voice.transmitting);
+  refreshRoomUi();
+};
 
 function requestRoom(kind: 'create' | 'quick'): void {
   sfx.unlock();
@@ -121,12 +127,18 @@ const ui = new UI({
     sfx.uiPop();
     if (roomCode && myId !== -1) net.send({ t: 'weapon', w });
   },
+  onVoice: () => {
+    sfx.unlock();
+    void voice.cycleMode().then((err) => err && hud.addFeed([err]));
+  },
+  onMutePlayer: (id) => voice.toggleMute(id),
   onToggleMute: () => {
     sfx.unlock();
     ui.setMuted(sfx.toggleMute());
   },
 });
 ui.setMuted(sfx.isMuted);
+ui.setVoice(voice.mode, false);
 
 const input = new Input(canvas, ui.touchElements);
 input.onTouchDetected = () => {
@@ -231,6 +243,7 @@ function leaveToMenu(error: string): void {
   wantRoom = null;
   lostAt = 0;
   resetRoomState();
+  void voice.setSeat(-1);
   input.exitLock();
   window.history.replaceState(null, '', '/');
   ui.setLobby(null);
@@ -250,6 +263,7 @@ function handleMessage(msg: ServerMessage): void {
       myId = msg.you;
       window.history.replaceState(null, '', `/?room=${msg.code}`);
       ui.setBanner(null);
+      void voice.setSeat(myId).then((err) => err && hud.addFeed([err]));
       refreshRoomUi();
       break;
     case 'roster':
@@ -257,6 +271,7 @@ function handleMessage(msg: ServerMessage): void {
       if (roster.length > 0 && msg.players.length > roster.length) sfx.playerJoined();
       if (roster.length > 0 && msg.players.length < roster.length) sfx.playerLeft();
       roster = msg.players;
+      voice.sync(roster);
       spectators = msg.spectators;
       roomPub = msg.pub;
       mapChoice = msg.mapChoice;
@@ -275,6 +290,9 @@ function handleMessage(msg: ServerMessage): void {
     case 'snap':
       onSnapshot(msg);
       break;
+    case 'rtc':
+      void voice.handleSignal(msg.from, msg.d);
+      break;
   }
 }
 
@@ -284,7 +302,11 @@ function refreshRoomUi(): void {
   const phase = latest?.ph ?? 'lobby';
   ui.showRoom(roomCode, myId !== -1);
   hud.setVisible(true);
-  ui.setLobby(phase === 'lobby' ? { code: roomCode, roster, spectators, myId, pub: roomPub, mapChoice, startsIn } : null);
+  ui.setLobby(
+    phase === 'lobby'
+      ? { code: roomCode, roster, spectators, myId, pub: roomPub, mapChoice, startsIn, muted: [...voice.muted], speaking: [...voice.speaking] }
+      : null,
+  );
 }
 
 function onSnapshot(s: Snapshot): void {
@@ -558,6 +580,7 @@ const attractRoster: RosterEntry[] = [0, 1, 2, 3].map((i) => ({
   name: ['Zip', 'Boom', 'Kick', 'Pow'][i],
   color: (i * 2 + 1) % C.PLAYER_PALETTE.length,
   weapon: i % 5,
+  voice: false,
   score: 0,
   online: true,
   host: false,
@@ -815,7 +838,12 @@ function frame(): void {
     sfx.silenceChargesExcept(new Set());
   }
 
+  view.speaking = voice.speaking;
   scene.render(view, cam, dt, myColor());
+  if (voice.active) {
+    const heads = new Map(view.players.filter((p) => p.fallTime < 0).map((p) => [p.id, Scene3D.head(p.x, p.y, p.z)] as const));
+    voice.update(scene.listener(), heads);
+  }
   // Slower look while zoomed in, so aiming stays steady.
   input.sensitivity = scene.zoom;
   if (roomCode) {

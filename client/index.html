@@ -659,6 +659,61 @@
       #ping[data-q='bad'] {
         background: #ffb0b5;
       }
+      #btn-voice {
+        position: relative;
+      }
+      #btn-voice svg {
+        width: 18px;
+        height: 18px;
+      }
+      #btn-voice[data-mode='off'] {
+        opacity: 0.75;
+      }
+      #btn-voice:not([data-mode='off']) .x {
+        display: none;
+      }
+      #btn-voice[data-mode='open'],
+      #btn-voice[data-mode='ptt'] {
+        background: #9ff0b8;
+      }
+      #btn-voice.live {
+        background: var(--yellow);
+        box-shadow: 0 0 0 3px var(--magenta), 3px 3px 0 var(--ink);
+      }
+      #btn-voice .vtag {
+        position: absolute;
+        right: -6px;
+        bottom: -8px;
+        padding: 0 4px;
+        border: 2px solid var(--ink);
+        border-radius: 6px;
+        background: var(--paper);
+        font-size: 9px;
+        line-height: 13px;
+      }
+      #btn-voice .vtag:empty {
+        display: none;
+      }
+      #player-list .vicon {
+        margin-left: auto;
+        font-size: 13px;
+        opacity: 0.5;
+      }
+      #player-list .vicon.talking {
+        opacity: 1;
+      }
+      #player-list .pmute {
+        padding: 1px 6px;
+        border: 2px solid var(--ink);
+        border-radius: 7px;
+        background: #fff;
+        font-size: 10px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      #player-list .pmute.on {
+        background: #ffb0b5;
+      }
       #btn-mute svg {
         width: 18px;
         height: 18px;
@@ -1133,6 +1188,14 @@
       <div id="hud-right">
         <span id="room-tag"></span>
         <span id="ping" data-q="bad">– ms</span>
+        <button id="btn-voice" class="hud-btn" data-mode="off" aria-label="Voice chat: off" title="Voice chat: off (click to turn on)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor" />
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+            <path class="x" d="m4 4 16 16" />
+          </svg>
+          <span class="vtag"></span>
+        </button>
         <button id="btn-mute" class="hud-btn" aria-label="Mute" title="Mute (M)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor" />
@@ -1189,7 +1252,7 @@
         <p id="menu-error" class="error" role="alert"></p>
         <div class="help">
           Move <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> · Jump <kbd>Space</kbd> · Sprint <kbd>Shift</kbd> · Slide <kbd>Ctrl</kbd><br />
-          Fire with the left mouse button · Aim with the right<br />
+          Fire with the left mouse button · Aim with the right · Talk: hold <kbd>V</kbd><br />
           Every hit sends people flying. Knock everyone off. First to 5 wins.
         </div>
       </div>

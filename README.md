@@ -35,6 +35,12 @@ first to 5 round wins takes the match.
   hatching in the shadows and paper grain. Cel-shaded players, sketchy props,
   a painted dusk sky over a lit-up city, and comic "POW!" words on big hits.
   There are no asset files.
+- **Voice chat:** click the mic button (top right) to switch between off,
+  push-to-talk (hold `V`) and open mic. You hear everyone from where they
+  stand on the roof, a speaker badge shows who's talking, and anyone can be
+  muted from the lobby. Audio goes peer to peer over WebRTC; the game server
+  only relays the connection setup. It uses Google's public STUN servers, so
+  a few very strict networks (some offices and schools) may not connect.
 - **Crisp WebAudio sound, all synthesized:** UI clicks, shots, hits, jumps,
   bumper boings, and a jingle for each power-up.
 - **Netcode:** a server-authoritative 30 Hz simulation over WebSockets
@@ -81,6 +87,7 @@ Playing with the mouse goes fullscreen with the keyboard locked (Chrome and
 Edge), so Ctrl+W while sliding forward can't close the tab. Other browsers ask
 before leaving the page instead.
 | Pick a weapon | Click a card in the lobby, or `1` to `5` | Tap a card |
+| Voice chat | Mic button (top right); hold `V` to talk in push-to-talk | Mic button |
 | Mute | `M` | Speaker icon, top right |
 
 ## Project layout
@@ -91,6 +98,7 @@ shared/   constants.ts (all tuning values), maps.ts (map layouts, obstacles,
 server/   index.ts: HTTP static server, rooms, 30 Hz fixed-step loop
 client/   main.ts (network, prediction, interpolation), scene.ts (three.js),
           ink.ts (the hand-drawn pass), guns.ts, props.ts, toon.ts, hud.ts,
+          voice.ts (WebRTC voice chat),
           art.ts, surfaces.ts, input.ts, audio.ts, ui.ts, net.ts, index.html
 ```
 

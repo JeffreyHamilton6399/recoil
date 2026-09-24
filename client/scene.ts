@@ -70,6 +70,8 @@ export interface View {
   powerups: ViewPowerup[];
   roster: RosterEntry[];
   myId: PlayerId | -1;
+  /** Players talking on voice chat right now. */
+  speaking?: ReadonlySet<PlayerId>;
 }
 
 /** Where the camera is: your own eyes, or circling the roof. */
@@ -310,8 +312,8 @@ function makeRig(color: string, weapon: number): Rig {
   return { key: `${color}|${weapon}`, group, body, bodyMat, gunPivot, gun, shield, label, labelCtx, labelTex, labelText: '', flash: 0, lean: 0 };
 }
 
-function drawLabel(rig: Rig, name: string, damage: number): void {
-  const text = `${name}|${Math.round(damage)}`;
+function drawLabel(rig: Rig, name: string, damage: number, talking: boolean): void {
+  const text = `${name}|${Math.round(damage)}|${talking}`;
   if (text === rig.labelText || !rig.labelCtx) return;
   rig.labelText = text;
   const ctx = rig.labelCtx;
@@ -325,6 +327,32 @@ function drawLabel(rig: Rig, name: string, damage: number): void {
   ctx.fillStyle = '#fff6e0';
   ctx.strokeText(name, 128, 26);
   ctx.fillText(name, 128, 26);
+  if (talking) {
+    // A little speaker badge next to the name while they talk on voice chat.
+    const w = ctx.measureText(name).width;
+    const x = 128 + w / 2 + 22;
+    ctx.fillStyle = '#9ff0b8';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(x, 26, 15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = INK;
+    ctx.beginPath();
+    ctx.moveTo(x - 8, 21);
+    ctx.lineTo(x - 3, 21);
+    ctx.lineTo(x + 3, 15);
+    ctx.lineTo(x + 3, 37);
+    ctx.lineTo(x - 3, 31);
+    ctx.lineTo(x - 8, 31);
+    ctx.closePath();
+    ctx.fill();
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(x + 4, 26, 6, -0.9, 0.9);
+    ctx.stroke();
+  }
   // Damage: white at 0%, through yellow, to red as knockback gets scary.
   const t = clamp(damage / 150, 0, 1);
   const col = new THREE.Color('#ffffff').lerp(new THREE.Color('#ffd93d'), clamp(t * 2, 0, 1)).lerp(new THREE.Color('#ff3b4e'), clamp(t * 2 - 1, 0, 1));
@@ -783,7 +811,7 @@ export class Scene3D {
       rig.flash = Math.max(0, rig.flash - dt);
       rig.bodyMat.emissiveIntensity = rig.flash > 0 ? 0.8 : 0;
       rig.gun.muzzle.scale.setScalar(0.1 + p.charge * 0.4);
-      drawLabel(rig, this.nameOf(view, p.id), p.damage);
+      drawLabel(rig, this.nameOf(view, p.id), p.damage, view.speaking?.has(p.id) ?? false);
     }
     for (const [id, rig] of this.rigs) {
       if (seen.has(id)) continue;
@@ -1031,6 +1059,20 @@ export class Scene3D {
       default:
         return false;
     }
+  }
+
+  /** Where the camera is and which way it faces (three.js coordinates), for voice chat's 3D audio. */
+  listener(): { pos: THREE.Vector3; forward: THREE.Vector3; up: THREE.Vector3 } {
+    return {
+      pos: this.camera.getWorldPosition(new THREE.Vector3()),
+      forward: this.camera.getWorldDirection(new THREE.Vector3()),
+      up: new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion),
+    };
+  }
+
+  /** A player's head position in three.js coordinates. */
+  static head(x: number, y: number, z: number): THREE.Vector3 {
+    return toThree(x, y, z + C.EYE_HEIGHT);
   }
 
   /** Stereo pan (-1..1) for a sound at a sim position, relative to the camera. */

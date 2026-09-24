@@ -27,6 +27,10 @@ export interface UiHandlers {
   onProfile(): void;
   /** Picked a weapon. */
   onWeapon(weapon: number): void;
+  /** Voice button: cycle off / push-to-talk / open mic. */
+  onVoice(): void;
+  /** Mute or unmute one player's voice. */
+  onMutePlayer(id: PlayerId): void;
   onToggleMute(): void;
 }
 
@@ -40,6 +44,9 @@ export interface LobbyInfo {
   mapChoice: number;
   /** Public rooms: seconds until the match starts, or -1. */
   startsIn: number;
+  /** Players you've muted, and who is talking right now. */
+  muted: PlayerId[];
+  speaking: PlayerId[];
 }
 
 type LobbyMode = 'public' | 'host' | 'guest';
@@ -83,6 +90,7 @@ export class UI {
   private readonly ping = el('ping');
   private readonly roomTag = el('room-tag');
   private readonly muteBtn = el<HTMLButtonElement>('btn-mute');
+  private readonly voiceBtn = el<HTMLButtonElement>('btn-voice');
   private readonly touch = el('touch');
 
   private touchEnabled = false;
@@ -131,6 +139,7 @@ export class UI {
       this.lobby.classList.toggle('collapsed');
     });
     this.muteBtn.addEventListener('click', () => handlers.onToggleMute());
+    this.voiceBtn.addEventListener('click', () => handlers.onVoice());
 
     this.buildSwatches(this.menuColors);
     this.buildSwatches(this.lobbyColors);
@@ -452,6 +461,24 @@ export class UI {
         host.textContent = 'HOST';
         li.appendChild(host);
       }
+      if (r.voice) {
+        const mic = document.createElement('span');
+        mic.className = 'vicon';
+        mic.classList.toggle('talking', info.speaking.includes(r.id));
+        mic.textContent = info.speaking.includes(r.id) ? '🔊' : '🎙';
+        mic.title = 'Voice chat on';
+        li.appendChild(mic);
+        if (r.id !== info.myId) {
+          const mute = document.createElement('button');
+          mute.type = 'button';
+          const isMuted = info.muted.includes(r.id);
+          mute.className = 'pmute';
+          mute.classList.toggle('on', isMuted);
+          mute.textContent = isMuted ? 'Unmute' : 'Mute';
+          mute.addEventListener('click', () => this.handlers.onMutePlayer(r.id));
+          li.appendChild(mute);
+        }
+      }
       if (!r.online) {
         const off = document.createElement('span');
         off.className = 'ptag';
@@ -514,6 +541,18 @@ export class UI {
     }
     this.ping.textContent = `${Math.round(ms)} ms`;
     this.ping.dataset.q = ms < 80 ? 'good' : ms < 160 ? 'ok' : 'bad';
+  }
+
+  /** Shows the voice chat mode on the mic button, glowing while you're talking. */
+  setVoice(mode: 'off' | 'ptt' | 'open', live: boolean): void {
+    const b = this.voiceBtn;
+    b.dataset.mode = mode;
+    b.classList.toggle('live', live);
+    const tag = b.querySelector('.vtag');
+    if (tag) tag.textContent = mode === 'ptt' ? 'V' : mode === 'open' ? 'ON' : '';
+    const label = mode === 'off' ? 'Voice chat: off (click to turn on)' : mode === 'ptt' ? 'Voice chat: hold V to talk (click for open mic)' : 'Voice chat: open mic (click to turn off)';
+    b.title = label;
+    b.setAttribute('aria-label', label);
   }
 
   setMuted(muted: boolean): void {

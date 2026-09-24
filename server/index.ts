@@ -21,6 +21,7 @@ import {
   type PlayerId,
   type PowerupSnap,
   type RosterEntry,
+  type RtcSignal,
   type ServerMessage,
   type Snapshot,
 } from '../shared/types.js';
@@ -49,6 +50,7 @@ interface Seat {
   name: string;
   color: number;
   weapon: number;
+  voice: boolean;
   /** Inputs received but not yet simulated, one per tick, oldest first. */
   inputs: { seq: number; input: InputState }[];
   /** The last input simulated, repeated when the queue runs dry. */
@@ -181,6 +183,7 @@ function joinRoom(client: Client, room: Room, name: string, color: number, weapo
       name: cleanName(name, seat),
       color: freeColor(room, color, seat),
       weapon,
+      voice: false,
       inputs: [],
       lastInput: { ...NO_INPUT },
       lastSeq: 0,
@@ -286,6 +289,19 @@ function handleMessage(client: Client, msg: ClientMessage): void {
     case 'ping':
       send(client, { t: 'pong', c: msg.c });
       break;
+    case 'voice': {
+      const seat = client.room && client.seat !== -1 ? client.room.seats[client.seat] : null;
+      if (seat && seat.client === client) seat.voice = msg.on;
+      break;
+    }
+    case 'rtc': {
+      // Voice chat signalling: only between seated, connected players in the same room.
+      const room = client.room;
+      if (!room || client.seat === -1 || msg.to === client.seat) break;
+      const target = room.seats[msg.to]?.client;
+      if (target) send(target, { t: 'rtc', from: client.seat, d: msg.d });
+      break;
+    }
     case 'leave':
       leaveRoom(client);
       break;
@@ -312,6 +328,26 @@ function asName(v: unknown): string {
 
 function asWeapon(v: unknown): number {
   return isWeapon(v) ? v : 0;
+}
+
+/** A well-formed WebRTC signal, or null. Only the fields the browser needs are passed on. */
+function asRtcSignal(v: unknown): RtcSignal | null {
+  if (typeof v !== 'object' || v === null) return null;
+  const o = v as Record<string, unknown>;
+  const sdp = o.sdp as Record<string, unknown> | undefined;
+  if (sdp && typeof sdp === 'object') {
+    if ((sdp.type === 'offer' || sdp.type === 'answer') && typeof sdp.sdp === 'string' && sdp.sdp.length < 12000) {
+      return { sdp: { type: sdp.type, sdp: sdp.sdp } };
+    }
+    return null;
+  }
+  const ice = o.ice as Record<string, unknown> | undefined;
+  if (ice && typeof ice === 'object' && typeof ice.candidate === 'string' && ice.candidate.length < 1000) {
+    const mid = typeof ice.sdpMid === 'string' ? ice.sdpMid.slice(0, 64) : null;
+    const line = typeof ice.sdpMLineIndex === 'number' && Number.isInteger(ice.sdpMLineIndex) ? ice.sdpMLineIndex : null;
+    return { ice: { candidate: ice.candidate, sdpMid: mid, sdpMLineIndex: line } };
+  }
+  return null;
 }
 
 function asColor(v: unknown): number {
@@ -361,6 +397,13 @@ function parseMessage(data: RawData): ClientMessage | null {
     }
     case 'ping':
       return typeof m.c === 'number' && Number.isFinite(m.c) ? { t: 'ping', c: m.c } : null;
+    case 'voice':
+      return typeof m.on === 'boolean' ? { t: 'voice', on: m.on } : null;
+    case 'rtc': {
+      const d = asRtcSignal(m.d);
+      const to = m.to;
+      return d && typeof to === 'number' && Number.isInteger(to) && to >= 0 && to < C.MAX_PLAYERS ? { t: 'rtc', to, d } : null;
+    }
     case 'leave':
       return { t: 'leave' };
     default:
@@ -444,7 +487,7 @@ function tickRoom(room: Room, now: number): void {
   const host = hostId(room);
   const roster: RosterEntry[] = [];
   seats.forEach((s, id) => {
-    if (s) roster.push({ id, name: s.name, color: s.color, score: state.scores[id] ?? 0, weapon: s.weapon, online: s.client !== null, host: id === host });
+    if (s) roster.push({ id, name: s.name, color: s.color, score: state.scores[id] ?? 0, weapon: s.weapon, voice: s.voice && s.client !== null, online: s.client !== null, host: id === host });
   });
   const startsIn = room.autoStartAt === null ? -1 : Math.max(0, Math.ceil((room.autoStartAt - now) / 1000));
   const rosterMsg = JSON.stringify({
@@ -554,7 +597,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16384 });
 const socketClients = new WeakMap<WebSocket, Client>();
 
 wss.on('connection', (ws) => {

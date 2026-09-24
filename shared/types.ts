@@ -213,6 +213,8 @@ export interface RosterEntry {
   score: number;
   /** Chosen weapon (index into WEAPONS). */
   weapon: number;
+  /** Has voice chat switched on. */
+  voice: boolean;
   online: boolean;
   host: boolean;
 }
@@ -231,7 +233,14 @@ export type ClientMessage =
   /** One tick of input: sequence number, forward, strafe, jump, fire, sprint, crouch, aim, yaw, pitch. */
   | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; z: boolean; a: number; b: number }
   | { t: 'ping'; c: number }
+  /** Voice chat switched on or off. */
+  | { t: 'voice'; on: boolean }
+  /** A WebRTC signalling message for another seat in the room (relayed as-is). */
+  | { t: 'rtc'; to: PlayerId; d: RtcSignal }
   | { t: 'leave' };
+
+/** WebRTC signalling: a session description or an ICE candidate. */
+export type RtcSignal = { sdp: { type: 'offer' | 'answer'; sdp: string } } | { ice: { candidate: string; sdpMid: string | null; sdpMLineIndex: number | null } };
 
 export type ServerMessage =
   | { t: 'joined'; code: string; you: PlayerId | -1 }
@@ -247,6 +256,7 @@ export type ServerMessage =
     }
   | { t: 'error'; msg: string }
   | { t: 'pong'; c: number }
+  | { t: 'rtc'; from: PlayerId; d: RtcSignal }
   | Snapshot;
 
 export const ROOM_CODE_PATTERN = /^[A-Z]{4}$/;
