@@ -291,6 +291,12 @@ function handleMessage(client: Client, msg: ClientMessage): void {
       if (room && !room.pub && room.state.phase === 'lobby' && hostId(room) === client.seat) setMapChoice(room.state, msg.choice);
       break;
     }
+    case 'rules': {
+      // The host of a private room can switch the no-jump rule between matches.
+      const room = client.room;
+      if (room && !room.pub && room.state.phase === 'lobby' && hostId(room) === client.seat) room.state.noJump = msg.noJump;
+      break;
+    }
     case 'join': {
       client.id = msg.id;
       const room = rooms.get(msg.code);
@@ -454,6 +460,8 @@ function parseMessage(data: RawData): ClientMessage | null {
       return typeof m.choice === 'number' && Number.isInteger(m.choice) && m.choice >= -1 && m.choice < MAPS.length
         ? { t: 'map', choice: m.choice }
         : null;
+    case 'rules':
+      return typeof m.noJump === 'boolean' ? { t: 'rules', noJump: m.noJump } : null;
     case 'profile':
       return { t: 'profile', name: asName(m.name), color: asColor(m.color) };
     case 'start':
@@ -611,6 +619,7 @@ function tickRoom(room: Room, now: number): void {
     spectators: room.spectators.size,
     pub: room.pub,
     mapChoice: state.mapChoice,
+    noJump: state.noJump,
     startsIn,
   } satisfies ServerMessage);
   if (rosterMsg !== room.lastRoster) {

@@ -52,7 +52,7 @@ function mulberry32(seed: number): () => number {
 function assertSane(s: GameState): void {
   const nums: number[] = [s.arenaRadius, s.phaseTime, s.playTime, s.powerupTimer];
   for (const p of s.players) {
-    nums.push(p.x, p.y, p.z, p.vx, p.vy, p.vz, p.yaw, p.pitch, p.charge, p.damage, p.fallTime, p.rapid, p.triple, p.shield, p.mega);
+    nums.push(p.x, p.y, p.z, p.vx, p.vy, p.vz, p.yaw, p.pitch, p.damage, p.fallTime, p.rapid, p.triple, p.shield, p.mega);
   }
   for (const b of s.bullets) nums.push(b.x, b.y, b.z, b.vx, b.vy, b.vz, b.radius);
   for (const u of s.powerups) nums.push(u.x, u.y, u.age);
@@ -61,7 +61,6 @@ function assertSane(s: GameState): void {
   assert.ok(s.mapIndex >= 0 && s.mapIndex < MAPS.length);
   assert.ok(s.powerups.length <= C.POWERUP_MAX);
   for (const p of s.players) {
-    assert.ok(p.charge >= 0 && p.charge <= 1);
     if (p.grounded && !p.falling) {
       const onBlock = currentMap(s).blocks.some((b) => Math.abs(b.h - p.z) < 1e-9);
       const onRamp = scaledRamps(currentMap(s), s.arenaRadius).some((r) => Math.abs(rampHeight(r, p.x, p.y) - p.z) < 0.35);
@@ -115,7 +114,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   console.log(`ok 1 - 1000 lobby ticks, ${shots} shots, ${respawns} respawns, ${s.powerups.length} power-ups on the roof`);
 }
 
-// 2. Scripted duel: player 0 aims at player 1's chest and fires full-charge shots.
+// 2. Scripted duel: player 0 aims at player 1's chest and clicks away with the revolver.
 {
   const s = createGame(7);
   addPlayer(s, 0);
@@ -131,8 +130,8 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
     const dz = them.z + 1.1 - (me.z + C.EYE_HEIGHT);
     const yaw = Math.atan2(dy, dx);
     const pitch = Math.atan2(dz, Math.hypot(dx, dy));
-    const firing = chargeTicks < WEAPONS[0].chargeTime * C.TICK_RATE + 1;
-    chargeTicks = firing ? chargeTicks + 1 : 0;
+    // A click every other tick: the revolver fires once per fresh press.
+    const firing = chargeTicks++ % 2 === 0;
     const inputs = new Map<PlayerId, InputState>([[0, { ...NO_INPUT, yaw, pitch, firing }]]);
     hits += step(s, inputs).filter((e) => e.k === 'hit' || e.k === 'block').length;
     assertSane(s);
@@ -282,12 +281,11 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   setMapChoice(s, 3); // The Block: blocks to climb and walk into
   const local = playerFromSnap(playerSnap(server));
   const map = currentMap(s);
-  const { canMove, canFire } = phaseRules(s.phase);
   let maxErr = 0;
   for (let i = 0; i < 300 && !server.falling; i++) {
     const input = { ...randomInput(rand), firing: false };
     step(s, new Map([[0, input]]));
-    controlPlayer(local, input, C.TICK_DT, canMove, canFire);
+    controlPlayer(local, input, C.TICK_DT, phaseRules(s.phase));
     for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) movePlayer(local, C.TICK_DT / C.PHYSICS_SUBSTEPS, map, s.arenaRadius);
     maxErr = Math.max(maxErr, Math.hypot(local.x - server.x, local.y - server.y, local.z - server.z));
   }
@@ -329,10 +327,8 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   addPlayer(r, 0);
   const rp = r.players[0];
   const kickWith = (recoil: boolean): number => {
-    Object.assign(rp, { x: -3, y: 0, z: 0, vx: 0, vy: 0, vz: 0, grounded: true, charging: false, charge: 0, cooldown: 0 });
-    const hold = Math.round(WEAPONS[0].chargeTime * C.TICK_RATE) + 1;
-    for (let i = 0; i < hold; i++) step(r, new Map([[0, { ...NO_INPUT, yaw: 0, pitch: 0, firing: true, recoil }]]));
-    step(r, new Map([[0, { ...NO_INPUT, yaw: 0, pitch: 0, recoil }]]));
+    Object.assign(rp, { x: -3, y: 0, z: 0, vx: 0, vy: 0, vz: 0, grounded: true, fireHeld: false, cooldown: 0 });
+    step(r, new Map([[0, { ...NO_INPUT, yaw: 0, pitch: 0, firing: true, recoil }]]));
     return -rp.vx;
   };
   const normal = kickWith(false);
@@ -487,6 +483,50 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   assert.ok(sniperUp >= 2, `hard sniper bots climb onto a roof (${sniperUp}/4)`);
   assert.ok(chaserUp >= 2, `hard bots chase players onto roofs (${chaserUp}/4)`);
   console.log(`ok 10 - bots take the high ground (sniper ${sniperUp}/4, chaser ${chaserUp}/4)`);
+}
+
+// 11. Guns without charging: semi-automatics fire once per click, the sniper
+//     hits hardest, and the no-jump rule leaves recoil as the way up.
+{
+  const g = createGame(12);
+  addPlayer(g, 0);
+  const p = g.players[0];
+  p.x = -4;
+  p.y = 0;
+  // Holding the trigger on the revolver fires once; clicking again fires again.
+  let shots = 0;
+  for (let i = 0; i < 30; i++) shots += step(g, new Map([[0, { ...NO_INPUT, yaw: 0, firing: true }]])).filter((e) => e.k === 'fire').length;
+  assert.equal(shots, 1, 'holding a semi-automatic fires once');
+  step(g, new Map([[0, { ...NO_INPUT, yaw: 0 }]]));
+  shots += step(g, new Map([[0, { ...NO_INPUT, yaw: 0, firing: true }]])).filter((e) => e.k === 'fire').length;
+  assert.equal(shots, 2, 'a fresh click fires again');
+  // Holding the Pepper keeps firing.
+  setWeapon(g, 0, 4);
+  let auto = 0;
+  for (let i = 0; i < 30; i++) auto += step(g, new Map([[0, { ...NO_INPUT, yaw: 0, firing: true }]])).filter((e) => e.k === 'fire').length;
+  assert.ok(auto >= 8, `an automatic keeps firing while held (${auto} shots in 1 s)`);
+  // The sniper outhits the revolver.
+  assert.ok(WEAPONS[2].knockback > WEAPONS[0].knockback * 1.8 && WEAPONS[2].damage > WEAPONS[0].damage * 2, 'the sniper hits much harder');
+
+  // No-jump rule: the jump button does nothing, but recoil still gets you airborne.
+  const n = createGame(13);
+  n.noJump = true;
+  addPlayer(n, 0);
+  const q = n.players[0];
+  Object.assign(q, { x: -4, y: 0 });
+  let top = 0;
+  for (let i = 0; i < 20; i++) {
+    step(n, new Map([[0, { ...NO_INPUT, jump: true }]]));
+    top = Math.max(top, q.z);
+  }
+  assert.equal(top, 0, 'no jumping under the no-jump rule');
+  step(n, new Map([[0, { ...NO_INPUT, pitch: -C.PITCH_LIMIT, firing: true, recoil: true }]]));
+  for (let i = 0; i < 20; i++) {
+    step(n, new Map([[0, { ...NO_INPUT, pitch: -C.PITCH_LIMIT, recoil: true }]]));
+    top = Math.max(top, q.z);
+  }
+  assert.ok(top > 1, `recoil still lifts you (${top.toFixed(2)} m)`);
+  console.log(`ok 11 - semi-auto once per click, auto ${auto}/s held, sniper hits hardest, no-jump rule (recoil lift ${top.toFixed(2)} m)`);
 }
 
 console.log('all simulation tests passed');

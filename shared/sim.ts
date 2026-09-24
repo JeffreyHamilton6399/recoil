@@ -11,7 +11,7 @@ import * as C from './constants.js';
 import { MAPS, floorAt, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, spawnPoint, type MapDef } from './maps.js';
 import {
   FX_AIM,
-  FX_CHARGING,
+  FX_FIRE_HELD,
   FX_SLIDE_LOCK,
   FX_GROUNDED,
   FX_MEGA,
@@ -31,7 +31,7 @@ import {
   type PlayerState,
   type PowerupKind,
 } from './types.js';
-import { OFFHANDS, SHOCK_WEAPON, WEAPONS, weaponDef, type WeaponDef } from './weapons.js';
+import { OFFHANDS, SHOCK_WEAPON, WEAPONS, weaponDef } from './weapons.js';
 
 export const NO_INPUT: InputState = Object.freeze({
   forward: 0,
@@ -88,26 +88,6 @@ export function aimDir(yaw: number, pitch: number): Vec3 {
   return { x: Math.cos(yaw) * cp, y: Math.sin(yaw) * cp, z: Math.sin(pitch) };
 }
 
-export interface ShotStats {
-  radius: number;
-  speed: number;
-  knockback: number;
-  damage: number;
-  recoil: number;
-}
-
-/** Bullet properties for a weapon at a given charge (0..1). */
-export function shotStats(w: WeaponDef, charge: number): ShotStats {
-  const c = clamp(charge, 0, 1);
-  return {
-    radius: lerp(w.radius[0], w.radius[1], c),
-    speed: lerp(w.speed[0], w.speed[1], c),
-    knockback: lerp(w.knockback[0], w.knockback[1], c),
-    damage: lerp(w.damage[0], w.damage[1], c),
-    recoil: lerp(w.recoil[0], w.recoil[1], c),
-  };
-}
-
 /** Arena radius after a given number of seconds of active play. */
 export function arenaRadiusAt(playTime: number): number {
   const t = clamp(playTime / C.ARENA_SHRINK_TIME, 0, 1);
@@ -118,27 +98,26 @@ export function currentMap(s: GameState): MapDef {
   return MAPS[s.mapIndex] ?? MAPS[0];
 }
 
-/** What a player may do in each phase. */
-export function phaseRules(phase: GameState['phase']): { canMove: boolean; canFire: boolean } {
-  const canFire = phase === 'lobby' || phase === 'playing';
-  return { canMove: canFire || phase === 'roundEnd' || phase === 'matchEnd', canFire };
+/** What a player may do right now. */
+export interface Rules {
+  canMove: boolean;
+  canFire: boolean;
+  /** The room's no-jump rule: the only way up is recoil (and jump pads). */
+  noJump: boolean;
 }
 
-/**
- * Recoil mode's kick: big for charged shots (scaled by the charge) and slow
- * guns, and split across the shots of fast ones, so every gun can fly.
- */
-export function recoilModeKick(w: WeaponDef, charge: number): number {
-  if (w.mode === 'charge') return C.RECOIL_MODE_KICK * lerp(C.RECOIL_MODE_MIN, 1, clamp(charge, 0, 1));
-  return C.RECOIL_MODE_KICK * clamp(w.cooldown / C.RECOIL_MODE_REF_COOLDOWN, 0.1, 1);
+/** What a player may do in each phase. */
+export function phaseRules(phase: GameState['phase'], noJump = false): Rules {
+  const canFire = phase === 'lobby' || phase === 'playing';
+  return { canMove: canFire || phase === 'roundEnd' || phase === 'matchEnd', canFire, noJump };
 }
 
 /** Running speed for a player right now. */
 export function runSpeed(p: PlayerState, input: InputState): number {
   const move = p.knifeOut ? C.KNIFE_MOVE_MULT : weaponDef(p.weapon).moveMult;
   if (p.aiming) return C.MOVE_SPEED * move * C.AIM_MOVE_MULT;
-  const sprint = input.sprint && input.forward > 0 && !p.charging ? C.SPRINT_MULT : 1;
-  return C.MOVE_SPEED * move * sprint * (p.charging ? C.CHARGE_MOVE_MULT : 1);
+  const sprint = input.sprint && input.forward > 0 ? C.SPRINT_MULT : 1;
+  return C.MOVE_SPEED * move * sprint;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,8 +145,7 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
     wallTop: -1,
     wallNx: 0,
     wallNy: 0,
-    charge: 0,
-    charging: false,
+    fireHeld: false,
     cooldown: 0,
     damage: 0,
     falling: false,
@@ -203,8 +181,7 @@ function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number
   p.slide = 0;
   p.slideCd = 0;
   p.wallTop = -1;
-  p.charge = 0;
-  p.charging = false;
+  p.fireHeld = false;
   p.cooldown = 0;
   p.damage = 0;
   p.falling = false;
@@ -245,6 +222,7 @@ export function createGame(seed: number): GameState {
     matchWinner: null,
     powerupTimer: C.POWERUP_FIRST_DELAY,
     rng: seed >>> 0 || 1,
+    noJump: false,
   };
 }
 
@@ -274,8 +252,6 @@ export function setWeapon(s: GameState, id: PlayerId, weapon: number): void {
   p.nextWeapon = weapon;
   if (s.phase === 'lobby') {
     p.weapon = weapon;
-    p.charge = 0;
-    p.charging = false;
     p.cooldown = 0;
   }
 }
@@ -351,13 +327,16 @@ export function startMatch(s: GameState): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Applies one tick of input to a player: look, charge and fire, slide,
- * climb, jump and run. Returns the charge of the shot fired this tick, or
- * -1. The shot's recoil is applied here; the caller spawns the bullets.
- * Jumps, slides and climbs are reported in `events` when given.
+ * Applies one tick of input to a player: look, fire, slide, climb, jump and
+ * run. Returns true if a shot was fired this tick. The shot's recoil is
+ * applied here; the caller spawns the bullets. Jumps, slides and climbs are
+ * reported in `events` when given.
  */
-export function controlPlayer(p: PlayerState, input: InputState, dt: number, canMove: boolean, canFire: boolean, events?: GameEvent[]): number {
-  if (p.falling) return -1;
+export function controlPlayer(p: PlayerState, input: InputState, dt: number, rules: Rules, events?: GameEvent[]): boolean {
+  const { canMove, canFire } = rules;
+  // With the no-jump rule, the jump button does nothing: recoil is the way up.
+  const jump = input.jump && !rules.noJump;
+  if (p.falling) return false;
   const w = weaponDef(p.weapon);
 
   p.aiming = input.aim && canMove;
@@ -373,13 +352,14 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
   if (p.knifeOut) p.aiming = false;
   if (p.knifeOut !== knifeWas) events?.push({ k: 'draw', p: p.id, knife: p.knifeOut });
 
-  // Shooting (or slashing, with the knife out).
-  let fired = -1;
+  // Shooting (or slashing, with the knife out). Semi-automatic guns need a
+  // fresh click for each shot; automatic ones keep firing while held.
+  let fired = false;
+  const freshPress = input.firing && !p.fireHeld;
+  p.fireHeld = input.firing;
   p.offCd = Math.max(0, p.offCd - dt);
   p.offUse = false;
   if (p.knifeOut) {
-    p.charging = false;
-    p.charge = 0;
     if (canFire && input.firing && p.offCd <= 0) {
       // A slash whenever you like, one swing at a time. It lunges you forward
       // here (so your own prediction feels it at once); the tick resolves the hit.
@@ -388,34 +368,14 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
       p.vy += Math.sin(p.yaw) * C.KNIFE_LUNGE;
       p.offCd = C.KNIFE_SWING;
     }
-  } else if (!canFire) {
-    p.charging = false;
-    p.charge = 0;
-  } else if (w.mode === 'auto') {
-    p.charging = false;
-    p.charge = 0;
-    if (input.firing && p.cooldown <= 0) {
-      fired = 1;
-      p.cooldown = w.cooldown * (p.rapid > 0 ? 0.5 : 1);
-    }
-  } else if (input.firing) {
-    if (p.charging) {
-      const rate = p.rapid > 0 ? C.RAPID_CHARGE_MULT : 1;
-      p.charge = Math.min(1, p.charge + (dt * rate) / w.chargeTime);
-    } else if (p.cooldown <= 0) {
-      p.charging = true;
-      p.charge = 0;
-    }
-  } else if (p.charging) {
-    fired = p.charge;
-    p.charging = false;
-    p.charge = 0;
-    p.cooldown = p.rapid > 0 ? C.RAPID_COOLDOWN : w.cooldown;
+  } else if (canFire && p.cooldown <= 0 && (w.mode === 'auto' ? input.firing : freshPress)) {
+    fired = true;
+    p.cooldown = w.cooldown * (p.rapid > 0 ? 0.5 : 1);
   }
-  if (fired >= 0) {
+  if (fired) {
     // A kick opposite where you aim: small normally, huge in recoil mode.
     const d = aimDir(p.yaw, p.pitch);
-    const kick = p.recoilMode ? recoilModeKick(w, fired) : shotStats(w, fired).recoil;
+    const kick = p.recoilMode ? w.boost : w.recoil;
     p.vx -= d.x * kick;
     p.vy -= d.y * kick;
     p.vz -= d.z * kick;
@@ -476,7 +436,7 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
   const target = runSpeed(p, input);
 
   // Climb: pushing forward into a ledge you can reach, and jumping (or already in the air).
-  if (p.wallTop >= 0 && f > 0 && (input.jump || !p.grounded) && p.vz < 4) {
+  if (p.wallTop >= 0 && f > 0 && (jump || !p.grounded) && p.vz < 4) {
     const rise = p.wallTop - p.z;
     const facing = -(wx * p.wallNx + wy * p.wallNy);
     if (rise > C.STEP_HEIGHT && rise <= C.MANTLE_MAX && facing > 0.3) {
@@ -526,7 +486,7 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, can
         p.vy += wy * C.SLIDE_ACCEL * dt;
       }
     }
-    if (input.jump && p.vz <= 0) {
+    if (jump && p.vz <= 0) {
       // Jumping out of a slide keeps its speed: slide-hop.
       p.vz = C.JUMP_SPEED;
       p.grounded = false;
@@ -726,10 +686,9 @@ export function hasFallen(p: PlayerState): boolean {
 // Shooting and power-ups
 // ---------------------------------------------------------------------------
 
-function spawnBullets(s: GameState, p: PlayerState, charge: number, events: GameEvent[]): void {
+function spawnBullets(s: GameState, p: PlayerState, events: GameEvent[]): void {
   const w = weaponDef(p.weapon);
-  const st = shotStats(w, charge);
-  let { radius, knockback, damage } = st;
+  let { radius, knockback, damage } = w;
   if (p.mega > 0) {
     radius *= C.MEGA_RADIUS_MULT;
     knockback *= C.MEGA_KNOCKBACK_MULT;
@@ -753,9 +712,9 @@ function spawnBullets(s: GameState, p: PlayerState, charge: number, events: Game
         x: p.x + d.x * offset,
         y: p.y + d.y * offset,
         z: eyeZ + d.z * offset,
-        vx: d.x * st.speed,
-        vy: d.y * st.speed,
-        vz: d.z * st.speed,
+        vx: d.x * w.speed,
+        vy: d.y * w.speed,
+        vz: d.z * w.speed,
         radius,
         knockback,
         damage,
@@ -764,7 +723,7 @@ function spawnBullets(s: GameState, p: PlayerState, charge: number, events: Game
     }
   }
   const d = aimDir(p.yaw, p.pitch);
-  events.push({ k: 'fire', p: p.id, w: p.weapon, c: charge, x: p.x + d.x * offset, y: p.y + d.y * offset, z: eyeZ + d.z * offset, a: p.yaw, b: p.pitch });
+  events.push({ k: 'fire', p: p.id, w: p.weapon, x: p.x + d.x * offset, y: p.y + d.y * offset, z: eyeZ + d.z * offset, a: p.yaw, b: p.pitch });
 }
 
 /** Resolves an offhand use: a knife slash in front of you, or a thrown shock grenade. */
@@ -801,7 +760,7 @@ function useOffhand(s: GameState, p: PlayerState, events: GameEvent[]): void {
   // Shock grenade: lobbed from the eye, carrying some of your own speed.
   const w = weaponDef(SHOCK_WEAPON);
   const d = aimDir(p.yaw, Math.min(C.PITCH_LIMIT, p.pitch + C.SHOCK_LOFT));
-  const offset = C.PLAYER_RADIUS + w.radius[0] + C.MUZZLE_GAP;
+  const offset = C.PLAYER_RADIUS + w.radius + C.MUZZLE_GAP;
   s.bullets.push({
     id: s.nextId++,
     owner: p.id,
@@ -809,12 +768,12 @@ function useOffhand(s: GameState, p: PlayerState, events: GameEvent[]): void {
     x: p.x + d.x * offset,
     y: p.y + d.y * offset,
     z: eyeZ + d.z * offset,
-    vx: d.x * w.speed[0] + p.vx * 0.5,
-    vy: d.y * w.speed[0] + p.vy * 0.5,
-    vz: d.z * w.speed[0] + Math.max(0, p.vz) * 0.5,
-    radius: w.radius[0],
-    knockback: w.knockback[0],
-    damage: w.damage[0],
+    vx: d.x * w.speed + p.vx * 0.5,
+    vy: d.y * w.speed + p.vy * 0.5,
+    vz: d.z * w.speed + Math.max(0, p.vz) * 0.5,
+    radius: w.radius,
+    knockback: w.knockback,
+    damage: w.damage,
     age: 0,
   });
   events.push({ k: 'throw', p: p.id });
@@ -1122,13 +1081,12 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
 
   const lobby = s.phase === 'lobby';
   const playing = s.phase === 'playing';
-  const { canMove, canFire } = phaseRules(s.phase);
+  const rules = phaseRules(s.phase, s.noJump);
 
   for (const p of s.players) {
     if (!p.inRound) continue;
     const input = inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
-    const charge = controlPlayer(p, input, dt, canMove, canFire, events);
-    if (charge >= 0) spawnBullets(s, p, charge, events);
+    if (controlPlayer(p, input, dt, rules, events)) spawnBullets(s, p, events);
     if (p.offUse) useOffhand(s, p, events);
     p.rapid = Math.max(0, p.rapid - dt);
     p.triple = Math.max(0, p.triple - dt);
@@ -1168,8 +1126,6 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
     } else if (hasFallen(p)) {
       p.falling = true;
       p.fallTime = 0;
-      p.charging = false;
-      p.charge = 0;
       p.slide = 0;
       events.push({ k: 'fall', p: p.id, x: p.x, y: p.y });
     }
@@ -1219,7 +1175,7 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     (p.triple > 0 ? FX_TRIPLE : 0) |
     (p.mega > 0 ? FX_MEGA : 0) |
     (p.grounded ? FX_GROUNDED : 0) |
-    (p.charging ? FX_CHARGING : 0) |
+    (p.fireHeld ? FX_FIRE_HELD : 0) |
     (p.slideLock ? FX_SLIDE_LOCK : 0) |
     (p.aiming ? FX_AIM : 0) |
     (p.offHeld ? FX_OFF_HELD : 0) |
@@ -1235,7 +1191,6 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     round3(p.vz),
     round3(p.yaw),
     round3(p.pitch),
-    round3(p.charge),
     Math.round(p.damage * 10) / 10,
     p.falling ? round3(p.fallTime) : -1,
     fx,
@@ -1251,7 +1206,7 @@ export function playerSnap(p: PlayerState): PlayerSnap {
 
 /** Rebuilds the parts of a player that client prediction needs from a snapshot. */
 export function playerFromSnap(s: PlayerSnap): PlayerState {
-  const p = createPlayer(s[0], s[15]);
+  const p = createPlayer(s[0], s[14]);
   p.x = s[1];
   p.y = s[2];
   p.z = s[3];
@@ -1260,25 +1215,24 @@ export function playerFromSnap(s: PlayerSnap): PlayerState {
   p.vz = s[6];
   p.yaw = s[7];
   p.pitch = s[8];
-  p.charge = s[9];
-  p.damage = s[10];
-  p.falling = s[11] >= 0;
-  p.fallTime = Math.max(0, s[11]);
-  const fx = s[12];
+  p.damage = s[9];
+  p.falling = s[10] >= 0;
+  p.fallTime = Math.max(0, s[10]);
+  const fx = s[11];
   p.shield = fx & FX_SHIELD ? 1 : 0;
   p.rapid = fx & FX_RAPID ? 1 : 0;
   p.triple = fx & FX_TRIPLE ? 1 : 0;
   p.mega = fx & FX_MEGA ? 1 : 0;
   p.grounded = (fx & FX_GROUNDED) !== 0;
-  p.charging = (fx & FX_CHARGING) !== 0;
+  p.fireHeld = (fx & FX_FIRE_HELD) !== 0;
   p.slideLock = (fx & FX_SLIDE_LOCK) !== 0;
   p.aiming = (fx & FX_AIM) !== 0;
-  p.cooldown = s[13];
-  p.ack = s[14];
-  p.slide = s[16];
-  p.slideCd = s[17];
-  p.offhand = s[18];
-  p.offCd = s[19];
+  p.cooldown = s[12];
+  p.ack = s[13];
+  p.slide = s[15];
+  p.slideCd = s[16];
+  p.offhand = s[17];
+  p.offCd = s[18];
   p.offHeld = (fx & FX_OFF_HELD) !== 0;
   p.knifeOut = (fx & FX_KNIFE) !== 0;
   p.recoilMode = (fx & FX_RECOIL) !== 0;

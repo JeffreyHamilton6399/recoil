@@ -1,4 +1,5 @@
-// The first-person HUD: crosshair with a charge ring, hit marker, damage
+// The first-person HUD: crosshair (with a ring while your gun readies and
+// ticks that spread as you move and fire), hit and kill markers, damage
 // percentage and power-ups, scoreboard, big comic banners (countdown,
 // FIGHT!, round and match winners), the knock-off feed, the
 // "click to play" hint and a red flash when you get hit.
@@ -32,6 +33,8 @@ export interface HudInfo {
   weapon: number;
   ready: number;
   aiming: boolean;
+  /** How spread out the crosshair is (0 = tight). */
+  spread: number;
   /** Your offhand, and seconds until it's ready (0 = ready). */
   offhand: number;
   /** Holding the knife, and whether recoil mode is on. */
@@ -43,7 +46,8 @@ export interface HudInfo {
 export class Hud {
   private readonly root = el('fps');
   private readonly crosshair = el('crosshair');
-  private readonly ring = el('charge-ring');
+  private readonly ring = el('ready-ring');
+  private readonly ticks = [...document.querySelectorAll<SVGPathElement>('#xh-ticks .tick')];
   private readonly hit = el('hitmarker');
   private readonly scorebar = el('scorebar');
   private readonly center = el('center-text');
@@ -68,9 +72,10 @@ export class Hud {
     this.root.classList.toggle('hidden', !visible);
   }
 
-  hitMarker(): void {
+  hitMarker(kill = false): void {
     this.hit.classList.add('on');
-    this.hitTimer = 0.12;
+    this.hit.classList.toggle('kill', kill);
+    this.hitTimer = kill ? 0.35 : 0.12;
   }
 
   hurt(force: number): void {
@@ -102,16 +107,25 @@ export class Hud {
 
     // Hit marker and hurt flash.
     this.hitTimer -= dt;
-    if (this.hitTimer <= 0) this.hit.classList.remove('on');
+    if (this.hitTimer <= 0) this.hit.classList.remove('on', 'kill');
     this.hurtLevel = Math.max(0, this.hurtLevel - dt * 2.5);
     this.vignette.style.opacity = this.hurtLevel.toFixed(3);
 
-    // Crosshair ring: the charge for charge weapons, the reload for automatic ones.
+    // Crosshair: a ring fills while a slow gun readies its next shot (hidden
+    // once ready), and the ticks spread with movement and firing.
     this.crosshair.classList.toggle('hidden', !info.firstPerson);
     const def = weaponDef(info.weapon);
-    const fill = def.mode === 'charge' ? (me?.charge ?? 0) : info.ready;
+    const fill = info.knife ? 1 : info.ready;
     this.ring.setAttribute('stroke-dashoffset', (RING * (1 - fill)).toFixed(1));
-    this.crosshair.classList.toggle('full', def.mode === 'charge' && fill >= 1);
+    this.crosshair.classList.toggle('ready', fill >= 1 || def.mode === 'auto');
+    const gap = info.spread * 9;
+    const dirs: [number, number][] = [
+      [0, -1],
+      [0, 1],
+      [-1, 0],
+      [1, 0],
+    ];
+    this.ticks.forEach((t, i) => t.setAttribute('transform', `translate(${(dirs[i][0] * gap).toFixed(1)} ${(dirs[i][1] * gap).toFixed(1)})`));
     this.root.classList.toggle('aiming', info.aiming);
     this.scope.classList.toggle('hidden', !(info.aiming && def.scope));
 

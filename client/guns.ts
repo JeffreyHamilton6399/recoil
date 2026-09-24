@@ -9,7 +9,7 @@ import { glowSprite, outlined, toon } from './toon.js';
 
 export interface Gun {
   group: THREE.Group;
-  /** Sits at the barrel's tip; used for muzzle flashes and the charge glow. */
+  /** Sits at the barrel's tip; used for muzzle flashes. */
   muzzle: THREE.Sprite;
   /** Parts tinted with the player's colour. */
   tinted: THREE.MeshToonMaterial;
@@ -97,13 +97,20 @@ export function makeGun(weapon: number, color: string): Gun {
       tip = -0.5;
       break;
     }
-    default: // Blaster: sleek body, barrel, glowing coils.
-      group.add(box(0.13, 0.15, 0.5, body, 0, 0, -0.08));
-      group.add(tube(0.045, 0.34, dark, 0, 0.02, -0.46, 0.055));
-      group.add(box(0.1, 0.17, 0.12, tinted, 0, -0.12, 0.08));
-      for (const z of [-0.2, -0.06, 0.08]) group.add(ring(0.085, 0.016, accent, z));
-      tip = -0.66;
+    default: {
+      // Revolver: frame, fat cylinder, long barrel with a sight, and a grip.
+      group.add(box(0.1, 0.13, 0.28, body, 0, 0.01, -0.02));
+      const cylinder = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.13, 6), dark), 1.1);
+      cylinder.rotation.x = Math.PI / 2;
+      cylinder.position.set(0, 0.0, -0.1);
+      group.add(cylinder);
+      group.add(tube(0.03, 0.32, dark, 0, 0.045, -0.33));
+      group.add(box(0.015, 0.035, 0.03, accent, 0, 0.085, -0.46));
+      group.add(box(0.09, 0.18, 0.1, tinted, 0, -0.12, 0.1));
+      group.add(ring(0.034, 0.01, accent, -0.2));
+      tip = -0.5;
       break;
+    }
   }
 
   const muzzle = glowSprite(color, 0.1);

@@ -8,14 +8,6 @@
 
 import type { PowerupKind } from '../shared/types.js';
 
-interface ChargeVoice {
-  osc: OscillatorNode;
-  osc2: OscillatorNode;
-  filter: BiquadFilterNode;
-  gain: GainNode;
-  pan: StereoPannerNode;
-}
-
 const MUTE_KEY = 'recoil-muted';
 const MASTER = 0.8;
 
@@ -25,7 +17,6 @@ export class Sfx {
   /** Send into the room reverb. */
   private room: GainNode | null = null;
   private noise: AudioBuffer | null = null;
-  private readonly voices = new Map<number, ChargeVoice>();
   private muted = false;
 
   constructor() {
@@ -256,11 +247,6 @@ export class Sfx {
   // Game sounds
   // -------------------------------------------------------------------------
 
-  /** A little ding the moment your shot is fully charged. */
-  chargeFull(): void {
-    this.pluck(1568, 0.25, 0.12);
-  }
-
   bumper(force: number, pan: number): void {
     const k = Math.min(1, force / 12);
     this.boing(240 + 100 * k, 0.34, 0.25 + 0.2 * k, pan);
@@ -273,18 +259,19 @@ export class Sfx {
     this.tone('sine', 300, 560, 0.08, 0.06 * volume, pan, 0, 0.1);
   }
 
-  /** A shot from a specific weapon (0 Blaster, 1 Scatter, 2 Longshot, 3 Boomer, 4 Pepper). */
-  shot(weapon: number, charge: number, pan: number, volume = 1): void {
-    const c = Math.max(0, Math.min(1, charge));
+  /** A shot from a specific weapon (0 Revolver, 1 Scatter, 2 Longshot, 3 Boomer, 4 Pepper). */
+  shot(weapon: number, pan: number, volume = 1): void {
     switch (weapon) {
       case 1: // Scatter: a shotgun boom, then the pump.
         this.gunshot({ crack: 1700, body: 3200, thump: 95, size: 1, tail: 0.45, vol: 0.95 * volume, pan });
         this.action(pan, volume, 0.32);
         this.action(pan, volume * 0.8, 0.42);
         break;
-      case 2: // Longshot: a sharp rifle crack with a long echo; charge makes it bigger.
-        this.gunshot({ crack: 3200, body: 5000, thump: 120, size: 0.4 + c * 0.6, tail: 0.5 + c * 0.4, vol: (0.7 + c * 0.35) * volume, pan });
-        this.noiseBurst('highpass', 5000, 3000, 0.7, 0.3 + c * 0.3, 0.06 * volume, pan, 0.02, 0.06, 1);
+      case 2: // Longshot: a big rifle crack with a long echo, then the bolt.
+        this.gunshot({ crack: 3200, body: 5000, thump: 115, size: 1, tail: 0.9, vol: 1.05 * volume, pan });
+        this.noiseBurst('highpass', 5000, 3000, 0.7, 0.6, 0.06 * volume, pan, 0.02, 0.06, 1);
+        this.action(pan, volume * 0.8, 0.45);
+        this.action(pan, volume * 0.7, 0.6);
         break;
       case 3: // Boomer: a hollow launcher "thoonk".
         this.tone('sine', 190, 70, 0.22, 0.6 * volume, pan, 0, 0.2);
@@ -295,9 +282,9 @@ export class Sfx {
       case 4: // Pepper: a tight little SMG pop.
         this.gunshot({ crack: 2600, body: 3800, thump: 150, size: 0.15, tail: 0.12, vol: 0.45 * volume, pan });
         break;
-      default: // Blaster: a punchy pistol shot that swells with the charge.
-        this.gunshot({ crack: 2400, body: 4200, thump: 110, size: 0.35 + c * 0.55, tail: 0.25 + c * 0.25, vol: (0.7 + c * 0.3) * volume, pan });
-        this.action(pan, volume * 0.6, 0.09);
+      default: // Revolver: a punchy handgun shot and the cylinder turning.
+        this.gunshot({ crack: 2400, body: 4200, thump: 110, size: 0.6, tail: 0.4, vol: 0.85 * volume, pan });
+        this.action(pan, volume * 0.5, 0.12);
     }
   }
 
@@ -393,42 +380,23 @@ export class Sfx {
     this.tone('sine', 110, 55, 0.3, 0.4, 0, 0, 0.1);
   }
 
-  /** A soft rising hum while charging. Call every frame; charge 0 silences it. */
-  setCharge(id: number, charge: number, pan: number, volume: number): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    let v = this.voices.get(id);
-    if (!v) {
-      const dest = this.master;
-      if (!dest) return;
-      const osc = ctx.createOscillator();
-      const osc2 = ctx.createOscillator();
-      const filter = ctx.createBiquadFilter();
-      const gain = ctx.createGain();
-      const p = ctx.createStereoPanner();
-      osc.type = 'triangle';
-      osc2.type = 'sine';
-      osc2.detune.value = 5;
-      filter.type = 'lowpass';
-      filter.Q.value = 2;
-      gain.gain.value = 0;
-      osc.connect(filter);
-      osc2.connect(filter);
-      filter.connect(gain).connect(p).connect(dest);
-      osc.start();
-      osc2.start();
-      v = { osc, osc2, filter, gain, pan: p };
-      this.voices.set(id, v);
-    }
-    const t = ctx.currentTime;
-    const c = Math.max(0, Math.min(1, charge));
-    const wobble = c >= 1 ? 1 + 0.02 * Math.sin(t * 36) : 1;
-    const freq = (180 + 520 * Math.pow(c, 1.3)) * wobble;
-    v.osc.frequency.setTargetAtTime(freq, t, 0.02);
-    v.osc2.frequency.setTargetAtTime(freq * 2, t, 0.02);
-    v.filter.frequency.setTargetAtTime(600 + 2200 * c, t, 0.03);
-    v.gain.gain.setTargetAtTime(c > 0 ? volume * (0.02 + 0.05 * c) : 0, t, c > 0 ? 0.03 : 0.015);
-    v.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), t, 0.05);
+  /** Your shot landed: a crisp tick, meatier for a heavy hit. */
+  hitmarker(heavy: boolean): void {
+    this.tone('sine', heavy ? 1500 : 1900, heavy ? 1300 : 1800, 0.05, heavy ? 0.16 : 0.1, 0, 0, 0.05);
+    this.click(6000, heavy ? 0.2 : 0.12, 0, 0.003);
+  }
+
+  /** Someone you hit went off the roof: a bright two-note confirm. */
+  knockoutConfirm(): void {
+    this.pluck(1175, 0.12, 0.16);
+    this.pluck(1760, 0.2, 0.14, 0, 0.06);
+  }
+
+  /** A footstep on the roof: a soft scuff, a little heavier when sprinting. */
+  step(sprinting: boolean): void {
+    const v = sprinting ? 1 : 0.7;
+    this.noiseBurst('lowpass', 1100 + Math.random() * 300, 250, 0.8, 0.05, 0.07 * v, (Math.random() - 0.5) * 0.2, 0.002, 0, 0.05);
+    this.tone('sine', 110 + Math.random() * 20, 60, 0.05, 0.05 * v, 0, 0, 0.02);
   }
 
   /** Getting hit: a cartoon thwack, heavier the harder the hit. */
@@ -451,11 +419,6 @@ export class Sfx {
     this.click(5000, 0.15, pan, 0.004);
     this.tone('sine', 2400, 1300, 0.14, 0.06, pan, 0, 0.5);
     this.noiseBurst('bandpass', 2500, 1200, 2, 0.05, 0.1, pan);
-  }
-
-  /** Silences every charge voice except the given ids. */
-  silenceChargesExcept(ids: ReadonlySet<number>): void {
-    for (const id of this.voices.keys()) if (!ids.has(id)) this.setCharge(id, 0, 0, 0);
   }
 
   /** A soft tick while the roof shrinks. */

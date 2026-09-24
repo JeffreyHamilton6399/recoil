@@ -5,7 +5,7 @@
 //
 // One brain, three skill levels. Difficulty only changes how quickly a bot
 // reacts, how accurately and how fast it aims, how well it leads moving
-// targets, how smart its charged shots are, how often it dodges, and how
+// targets, how well it judges its shots, how often it dodges, and how
 // cleverly it uses its offhand and the arena's edge.
 
 import * as C from './constants.js';
@@ -41,8 +41,8 @@ interface Skill {
   offhand: number;
   /** 0..1: how carefully it keeps away from the edge. */
   caution: number;
-  /** 0..1: how well it picks the charge for each shot. */
-  chargeSense: number;
+  /** 0..1: how well it judges its shots (when to hold fire, when to scope in). */
+  judgement: number;
   /** 0..1: how much it strafes, hops and slides to be hard to hit. */
   agility: number;
   /** 0..1: how often it takes the high ground (roofs and bridges) or chases people up there. */
@@ -50,12 +50,12 @@ interface Skill {
 }
 
 const SKILLS: Record<BotLevel, Skill> = {
-  1: { reaction: 0.55, aimError: 0.13, turnRate: 3, lead: 0.2, fireCone: 0.18, dodge: 0, offhand: 0.15, caution: 0.55, chargeSense: 0.2, agility: 0.2, highGround: 0.15 },
-  2: { reaction: 0.28, aimError: 0.055, turnRate: 6, lead: 0.7, fireCone: 0.1, dodge: 0.35, offhand: 0.55, caution: 0.85, chargeSense: 0.65, agility: 0.6, highGround: 0.5 },
-  3: { reaction: 0.13, aimError: 0.02, turnRate: 11, lead: 1, fireCone: 0.06, dodge: 0.8, offhand: 1, caution: 1, chargeSense: 1, agility: 1, highGround: 0.85 },
+  1: { reaction: 0.55, aimError: 0.13, turnRate: 3, lead: 0.2, fireCone: 0.18, dodge: 0, offhand: 0.15, caution: 0.55, judgement: 0.2, agility: 0.2, highGround: 0.15 },
+  2: { reaction: 0.28, aimError: 0.055, turnRate: 6, lead: 0.7, fireCone: 0.1, dodge: 0.35, offhand: 0.55, caution: 0.85, judgement: 0.65, agility: 0.6, highGround: 0.5 },
+  3: { reaction: 0.13, aimError: 0.02, turnRate: 11, lead: 1, fireCone: 0.06, dodge: 0.8, offhand: 1, caution: 1, judgement: 1, agility: 1, highGround: 0.85 },
 };
 
-/** Preferred fighting distance per weapon (Blaster, Scatter, Longshot, Boomer, Pepper). */
+/** Preferred fighting distance per weapon (Revolver, Scatter, Longshot, Boomer, Pepper). */
 const RANGE = [11, 5, 20, 12, 10];
 
 interface Seen {
@@ -80,8 +80,8 @@ export class BotBrain {
   private noiseYaw = 0;
   private noisePitch = 0;
   private noiseIn = 0;
-  private wantCharge = 0;
-  private chargeFor = 0;
+  /** Pulled the trigger last tick (semi-automatic guns need a fresh click). */
+  private lastFired = false;
   private offPressed = false;
   private hopIn = 1;
   private lastCrouch = false;
@@ -141,9 +141,7 @@ export class BotBrain {
     let visible = false;
     if (seen) {
       dist = Math.hypot(seen.x - me.x, seen.y - me.y);
-      const charge = w.mode === 'charge' ? Math.max(me.charge, this.wantCharge) : 1;
-      const speed = w.speed[0] + (w.speed[1] - w.speed[0]) * charge;
-      const t = (dist / speed) * sk.lead;
+      const t = (dist / w.speed) * sk.lead;
       const ax = seen.x + seen.vx * t;
       const ay = seen.y + seen.vy * t;
       // Aim at the chest; lead jumps a little too.
@@ -152,7 +150,7 @@ export class BotBrain {
       let wantPitch = Math.atan2(az - eyeZ, flat);
       if (w.gravity > 0) {
         // Lob: raise the aim so the drop over the flight lands on target.
-        const tf = flat / speed;
+        const tf = flat / w.speed;
         wantPitch = Math.atan2(az - eyeZ + 0.5 * w.gravity * tf * tf, flat);
       }
       const wantYaw = Math.atan2(ay - me.y, ax - me.x);
@@ -361,25 +359,20 @@ export class BotBrain {
     // ---- Shoot ----------------------------------------------------------
     let firing = false;
     let aim = false;
-    const range = ((w.speed[0] + w.speed[1]) / 2) * w.lifetime * 0.9;
+    const range = w.speed * w.lifetime * 0.9;
     const canShoot = canFire && seen !== null && visible && dist < range;
     // The Boomer's blast would hurt us too up close.
-    const tooClose = w.splash > 0 && dist < w.splash * 0.9 && sk.chargeSense > 0.5;
-    if (w.mode === 'charge') {
-      if (me.charging) {
-        this.chargeFor += dt;
-        // Release once charged enough and lined up (or if we've held too long).
-        const ready = me.charge >= this.wantCharge && aimErr < sk.fireCone;
-        firing = !(ready || this.chargeFor > 2.5 || !canFire);
-      } else if (canShoot && !tooClose && aimErr < sk.fireCone * 2.5 && me.cooldown <= 0) {
-        this.wantCharge = this.chooseCharge(dist, target, R);
-        this.chargeFor = 0;
-        firing = true;
-      }
-      aim = me.weapon === 2 && me.charging && dist > 14 && sk.chargeSense > 0.5;
+    const tooClose = w.splash > 0 && dist < w.splash * 0.9 && sk.judgement > 0.5;
+    const lined = canShoot && !tooClose && aimErr < sk.fireCone;
+    if (w.mode === 'semi') {
+      // A click per shot: press when lined up and ready, release in between.
+      firing = lined && me.cooldown <= 0 && !this.lastFired;
+      // Smart snipers scope in for long shots.
+      aim = w.scope && dist > 14 && sk.judgement > 0.5 && canShoot;
     } else {
-      firing = canShoot && !tooClose && aimErr < sk.fireCone;
+      firing = lined;
     }
+    this.lastFired = firing;
 
     // ---- Offhand --------------------------------------------------------
     let offhand = false;
@@ -467,7 +460,7 @@ export class BotBrain {
       let score = d;
       if (!this.lineOfSight(map, R, me.x, me.y, me.z + C.EYE_HEIGHT, p.x, p.y, p.z + 1)) score += 12;
       // Smarter bots go after players who are already near the edge or badly hurt.
-      score -= this.skill.chargeSense * ((Math.hypot(p.x, p.y) / R) * 8 + p.damage * 0.04);
+      score -= this.skill.judgement * ((Math.hypot(p.x, p.y) / R) * 8 + p.damage * 0.04);
       if (p.id === this.targetId) score -= 3; // don't flip-flop
       if (score < bestScore) {
         bestScore = score;
@@ -477,14 +470,6 @@ export class BotBrain {
     return best;
   }
 
-  /** Charge for a shot: full for long range or a finishing blow, a quick tap up close. */
-  private chooseCharge(dist: number, target: PlayerState | undefined, R: number): number {
-    const sk = this.skill;
-    if (Math.random() > sk.chargeSense) return 0.15 + Math.random() * 0.7;
-    const nearEdge = target ? Math.hypot(target.x, target.y) > R * 0.6 : false;
-    if (dist > 12 || nearEdge || (target?.damage ?? 0) > 60) return 1;
-    return dist < 5 ? 0.25 : 0.6;
-  }
 
   /** Turns towards a direction no faster than this bot can. */
   private turnTowards(yaw: number, pitch: number, dt: number): void {

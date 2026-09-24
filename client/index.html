@@ -484,6 +484,37 @@
         height: 38px;
         font-size: 14px;
       }
+      .rule {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        padding: 8px 10px;
+        border: 2px solid var(--ink);
+        border-radius: 10px;
+        background: #fff;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .rule input {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--red);
+      }
+      .rule span {
+        display: flex;
+        flex-direction: column;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .rule b {
+        color: var(--ink);
+        font-size: 13px;
+      }
+      .rule.readonly {
+        cursor: default;
+        opacity: 0.85;
+      }
       #btn-start {
         margin-top: 18px;
       }
@@ -881,7 +912,11 @@
         stroke: rgba(0, 0, 0, 0.35);
         stroke-width: 3;
       }
-      #charge-ring {
+      #crosshair .dot {
+        fill: var(--paper);
+        filter: drop-shadow(0 0 1.5px var(--ink));
+      }
+      #ready-ring {
         fill: none;
         stroke: #fff;
         stroke-width: 3;
@@ -889,7 +924,11 @@
         transform: rotate(-90deg);
         transform-origin: 32px 32px;
       }
-      #crosshair.full #charge-ring {
+      #crosshair.ready #ready-ring {
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      #crosshair.full #ready-ring {
         stroke: var(--accent);
       }
       #crosshair .tick {
@@ -906,6 +945,10 @@
         inset: 8px;
         opacity: 0;
         transition: opacity 0.15s;
+      }
+      #hitmarker.kill::before,
+      #hitmarker.kill::after {
+        background: linear-gradient(90deg, #ff3b4e 0 30%, transparent 30% 70%, #ff3b4e 70%);
       }
       #hitmarker.on {
         opacity: 1;
@@ -1250,8 +1293,14 @@
       <div id="crosshair">
         <svg viewBox="0 0 64 64" aria-hidden="true">
           <circle class="ring-bg" cx="32" cy="32" r="20" />
-          <circle id="charge-ring" cx="32" cy="32" r="20" stroke-dasharray="125.66" stroke-dashoffset="125.66" />
-          <path class="tick" d="M32 26v-5M32 38v5M26 32h-5M38 32h5" />
+          <circle id="ready-ring" cx="32" cy="32" r="20" stroke-dasharray="125.66" stroke-dashoffset="0" />
+          <g id="xh-ticks">
+            <path class="tick" d="M32 26v-5" />
+            <path class="tick" d="M32 38v5" />
+            <path class="tick" d="M26 32h-5" />
+            <path class="tick" d="M38 32h5" />
+          </g>
+          <circle class="dot" cx="32" cy="32" r="1.6" />
         </svg>
         <div id="hitmarker"></div>
       </div>
@@ -1344,6 +1393,10 @@
         </div>
         <div id="carousel-dots"></div>
         <button id="btn-pick-map" class="btn hidden">Play this map</button>
+        <label id="rule-nojump" class="rule hidden">
+          <input type="checkbox" id="chk-nojump" />
+          <span><b>No jumping</b> Recoil (R) is the only way up</span>
+        </label>
 
         <button id="btn-start" class="btn primary hidden">Start match</button>
         <p id="lobby-status"></p>
@@ -1359,7 +1412,7 @@
       <div id="t-aim" class="tbtn" role="button" aria-label="Aim down sights">AIM</div>
       <div id="t-off" class="tbtn" role="button" aria-label="Offhand: pull out the knife, or throw the grenade">E</div>
       <div id="t-recoil" class="tbtn" role="button" aria-label="Recoil mode: shots throw you backwards">RCL</div>
-      <div id="t-fire" class="tbtn fire" role="button" aria-label="Hold to charge, release to fire">FIRE</div>
+      <div id="t-fire" class="tbtn fire" role="button" aria-label="Fire">FIRE</div>
     </div>
 
     <script type="module" src="./main.ts"></script>

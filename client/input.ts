@@ -355,7 +355,7 @@ export class Input {
     for (const t of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) look.addEventListener(t, endLook);
 
     const button = (el: HTMLElement, set: Set<number>, onDown: () => void): void => {
-      // Dragging on a button also looks around, so you can aim while charging.
+      // Dragging on a button also looks around, so you can aim while firing.
       let last = { x: 0, y: 0 };
       el.addEventListener('pointerdown', (e) => {
         capture(el, e);

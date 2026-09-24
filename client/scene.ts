@@ -29,7 +29,6 @@ export interface ViewPlayer {
   z: number;
   yaw: number;
   pitch: number;
-  charge: number;
   damage: number;
   /** Seconds since falling, or -1 while standing. */
   fallTime: number;
@@ -88,7 +87,6 @@ export type CameraView =
       pitch: number;
       speed: number;
       grounded: boolean;
-      charge: number;
       weapon: number;
       sprinting: boolean;
       sliding: boolean;
@@ -221,6 +219,35 @@ function textCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingCo
   return [cv, cv.getContext('2d')];
 }
 
+/** Wraps an angle into [-PI, PI). */
+function wrapAngleLocal(a: number): number {
+  return ((((a + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) - Math.PI;
+}
+
+const numberTextures = new Map<string, THREE.CanvasTexture>();
+/** Damage numbers: bold, inked, white (yellow for heavy hits). */
+function numberTexture(text: string, heavy: boolean): THREE.CanvasTexture {
+  const key = `${text}|${heavy}`;
+  let tex = numberTextures.get(key);
+  if (tex) return tex;
+  const [cv, ctx] = textCanvas(512, 192);
+  if (ctx) {
+    ctx.font = `900 110px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 20;
+    ctx.strokeStyle = INK;
+    ctx.strokeText(text, 256, 96);
+    ctx.fillStyle = heavy ? '#ffd93d' : '#fff6e0';
+    ctx.fillText(text, 256, 96);
+  }
+  tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  numberTextures.set(key, tex);
+  return tex;
+}
+
 const wordTextures = new Map<string, THREE.CanvasTexture>();
 function wordTexture(word: string): THREE.CanvasTexture {
   let tex = wordTextures.get(word);
@@ -268,6 +295,8 @@ interface Rig {
   lean: number;
   /** 1 at the start of a knife slash, easing to 0. */
   slash: number;
+  /** Seconds of muzzle flash left. */
+  muzzle: number;
 }
 
 /** What a player's model depends on: rebuilt when it changes. */
@@ -336,7 +365,7 @@ function makeRig(color: string, weapon: number, knife: boolean): Rig {
   label.position.y = C.PLAYER_HEIGHT + 0.55;
   group.add(label);
 
-  return { key: rigKey(color, weapon, knife), group, body, bodyMat, gunPivot, gun, shield, label, labelCtx, labelTex, labelText: '', flash: 0, lean: 0, slash: 0 };
+  return { key: rigKey(color, weapon, knife), group, body, bodyMat, gunPivot, gun, shield, label, labelCtx, labelTex, labelText: '', flash: 0, lean: 0, slash: 0, muzzle: 0 };
 }
 
 function drawLabel(rig: Rig, name: string, damage: number, talking: boolean): void {
@@ -553,6 +582,17 @@ export class Scene3D {
   private dprQuery: MediaQueryList | null = null;
 
   private trauma = 0;
+  /** View punch from your own shots (radians), recovering to 0. */
+  private punchPitch = 0;
+  private punchYaw = 0;
+  /** Weapon sway from turning. */
+  private swayX = 0;
+  private swayY = 0;
+  private lastYaw: number | null = null;
+  private lastPitch: number | null = null;
+  /** Camera dip after a hard landing (metres), and its spring velocity. */
+  private landDip = 0;
+  private landVel = 0;
   private time = 0;
 
   private readonly bulletGeo = new THREE.SphereGeometry(1, 14, 10);
@@ -898,7 +938,9 @@ export class Scene3D {
       rig.shield.visible = (p.fx & FX_SHIELD) !== 0;
       rig.flash = Math.max(0, rig.flash - dt);
       rig.bodyMat.emissiveIntensity = rig.flash > 0 ? 0.8 : 0;
-      rig.gun.muzzle.scale.setScalar(0.1 + p.charge * 0.4);
+      // A brief muzzle flash when they fire.
+      rig.muzzle = Math.max(0, rig.muzzle - dt);
+      rig.gun.muzzle.scale.setScalar(rig.muzzle > 0 ? 0.6 : 0.1);
       drawLabel(rig, this.nameOf(view, p.id), p.damage, view.speaking?.has(p.id) ?? false);
     }
     for (const [id, rig] of this.rigs) {
@@ -947,9 +989,6 @@ export class Scene3D {
       toThree(b.x, b.y, b.z, obj.group.position);
       const v = toThree(b.vx, b.vy, b.vz, tmpV);
       const speed = v.length();
-      // How charged the shot is (0-1), from where its size sits in the weapon's range.
-      const span = w.radius[1] - w.radius[0];
-      const charge = span > 0 ? clamp((b.r - w.radius[0]) / span, 0, 1) : 0.5;
       if (bomb) {
         obj.group.scale.setScalar(b.r * 0.8);
       } else {
@@ -964,7 +1003,7 @@ export class Scene3D {
         obj.tail.quaternion.setFromUnitVectors(UP, v.multiplyScalar(-1 / speed));
         // Longshot rounds leave a long streak, pellets short ones.
         const len = bomb ? Math.min(1.5, speed * 0.04) : b.weapon === 2 ? Math.min(14, speed * 0.06) : b.weapon === 1 ? Math.min(2.2, speed * 0.028) : Math.min(5, speed * 0.045);
-        const width = bomb ? b.r * 0.6 : (b.weapon === 2 ? 0.035 : 0.022) * (1 + charge * 0.8);
+        const width = bomb ? b.r * 0.6 : b.weapon === 2 ? 0.05 : b.weapon === 4 ? 0.018 : 0.026;
         obj.tail.scale.set(width, len, width);
       } else {
         obj.tail.visible = false;
@@ -1070,6 +1109,23 @@ export class Scene3D {
     this.trauma = Math.min(1, this.trauma + amount);
   }
 
+  /** A hard landing: the camera dips, harder the faster you came down. */
+  landImpact(speed: number): void {
+    if (speed < 4) return;
+    this.landVel += Math.min(3.5, speed * 0.16);
+  }
+
+  /** A floating "+12%" where your shot landed, rising and fading. */
+  damageNumber(x: number, y: number, z: number, amount: number, heavy: boolean): void {
+    const text = `+${Math.round(amount)}%`;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: numberTexture(text, heavy), transparent: true, depthTest: false, depthWrite: false }));
+    toThree(x, y, z + 0.6, sprite.position);
+    sprite.position.x += (Math.random() - 0.5) * 0.4;
+    sprite.renderOrder = 11;
+    this.scene.add(sprite);
+    this.words.push({ sprite, life: 0.8, size: heavy ? 1.5 : 1.1 });
+  }
+
   /** Your own knife slash, shown the moment you swing. */
   localSlash(): void {
     this.slashT = 1;
@@ -1077,11 +1133,16 @@ export class Scene3D {
   }
 
   /** Your own shot, shown the moment you fire (before the server confirms it). */
-  localFire(weapon: number, charge: number, color: string): void {
-    const heavy = weapon === 1 || weapon === 3 ? 1 : weapon === 4 ? 0.15 : charge;
+  localFire(weapon: number, color: string): void {
+    const def = weaponDef(weapon);
+    // How heavy the gun feels, 0..1, from how hard it punches the view.
+    const heavy = clamp(def.viewKick / 0.13, 0.1, 1);
     this.kick = Math.min(1.5, this.kick + 0.3 + heavy * 0.9);
     this.flashTime = 0.06;
-    this.addTrauma(0.04 + heavy * 0.18);
+    this.addTrauma(0.03 + heavy * 0.12);
+    // The view punches up (and a touch sideways), then springs back.
+    this.punchPitch += def.viewKick;
+    this.punchYaw += (Math.random() - 0.5) * def.viewKick * 0.5;
     if (!this.vmGun) return;
     this.vmGun.muzzle.getWorldPosition(tmpV);
     const dir = this.camera.getWorldDirection(tmpV2);
@@ -1101,7 +1162,10 @@ export class Scene3D {
         if (ev.p === view.myId) return false;
         const at = toThree(ev.x, ev.y, ev.z);
         const d = toThree(Math.cos(ev.a) * Math.cos(ev.b), Math.sin(ev.a) * Math.cos(ev.b), Math.sin(ev.b), tmpV2);
-        this.particles.burst(at, 8 + Math.round(ev.c * 12), new THREE.Color(this.colorOf(view, ev.p)), 6 + ev.c * 6, 0.3, 0, d, 0.6);
+        const heavy = clamp(weaponDef(ev.w).viewKick / 0.13, 0.1, 1);
+        this.particles.burst(at, 8 + Math.round(heavy * 12), new THREE.Color(this.colorOf(view, ev.p)), 6 + heavy * 6, 0.3, 0, d, 0.6);
+        const shooter = this.rigs.get(ev.p);
+        if (shooter) shooter.muzzle = 0.06;
         return false;
       }
       case 'hit': {
@@ -1253,7 +1317,19 @@ export class Scene3D {
     this.aimT += ((cam.aiming ? 1 : 0) - this.aimT) * Math.min(1, dt * 14);
     const a = this.aimT;
     this.viewmodel.visible = !(!cam.knife && weaponDef(cam.weapon).scope && a > 0.7);
-    // Bob while running, kick after a shot, lower while sliding, glow while charging.
+    // Sway: the gun lags a little behind quick turns, then catches up.
+    if (this.lastYaw !== null) {
+      const dy = wrapAngleLocal(cam.yaw - this.lastYaw);
+      const dp = cam.pitch - (this.lastPitch ?? cam.pitch);
+      this.swayX = clamp(this.swayX + dy * 0.6, -0.08, 0.08);
+      this.swayY = clamp(this.swayY - dp * 0.6, -0.06, 0.06);
+    }
+    this.lastYaw = cam.yaw;
+    this.lastPitch = cam.pitch;
+    const settle = Math.exp(-dt * 10);
+    this.swayX *= settle;
+    this.swayY *= settle;
+    // Bob while running, kick after a shot, lower while sliding.
     if (cam.grounded) this.bob += dt * cam.speed * (cam.sprinting ? 1.1 : 1.4);
     const bobAmt = (cam.grounded && !cam.sliding ? Math.min(1.4, cam.speed / C.MOVE_SPEED) : 0) * (1 - a * 0.8);
     this.kick = Math.max(0, this.kick - dt * 6);
@@ -1263,21 +1339,20 @@ export class Scene3D {
     const sw = slashCurve(this.slashT);
     const draw = this.drawT * this.drawT;
     this.viewmodel.position.set(
-      0.19 * hip + Math.cos(this.bob) * 0.01 * bobAmt - sprintTuck * 0.03 - sw * 0.12,
-      -0.2 * hip - 0.062 * a + Math.abs(Math.sin(this.bob)) * 0.012 * bobAmt - cam.charge * 0.012 * hip - (cam.sliding ? 0.03 : 0) - draw * 0.25 + sw * 0.04,
+      0.19 * hip + Math.cos(this.bob) * 0.01 * bobAmt - sprintTuck * 0.03 - sw * 0.12 + this.swayX * hip,
+      -0.2 * hip - 0.062 * a + Math.abs(Math.sin(this.bob)) * 0.012 * bobAmt - (cam.sliding ? 0.03 : 0) - draw * 0.25 + sw * 0.04 + this.swayY * hip - this.landDip * 0.05,
       -0.5 * hip - 0.4 * a + this.kick * 0.06 - Math.abs(sw) * 0.08,
     );
     this.viewmodel.rotation.set(
       this.kick * 0.18 * (1 - a * 0.6) - sprintTuck * 0.25 - draw * 0.6 - Math.abs(sw) * 0.3,
       sprintTuck * 0.35 + sw * 0.9,
-      (cam.charge * 0.05 + (cam.sliding ? 0.25 : 0)) * hip + sw * 0.8,
+      (cam.sliding ? 0.25 : 0) * hip + sw * 0.8 - this.swayX * 1.5 * hip,
     );
     if (this.vmGun) {
       this.flashTime = Math.max(0, this.flashTime - dt);
-      const pulse = cam.charge >= 1 ? 1 + Math.sin(this.time * 30) * 0.15 : 1;
       const flash = this.flashTime > 0 ? 0.6 : 0;
-      this.vmGun.muzzle.scale.setScalar((0.08 + cam.charge * 0.35 + flash) * pulse);
-      this.vmGun.muzzle.material.opacity = Math.min(1, 0.35 + cam.charge * 0.65 + flash);
+      this.vmGun.muzzle.scale.setScalar(0.06 + flash);
+      this.vmGun.muzzle.material.opacity = Math.min(1, 0.3 + flash);
     }
   }
 
@@ -1314,7 +1389,15 @@ export class Scene3D {
       fov = cam.aiming ? weaponDef(cam.weapon).adsFov : C.FOV + (cam.sliding ? 12 : cam.sprinting ? 7 : 0);
       this.roll += ((cam.sliding ? 0.08 : 0) - this.roll) * Math.min(1, dt * 10);
       toThree(cam.x, cam.y, cam.z, this.camera.position);
-      this.camera.rotation.set(cam.pitch + n(1), cam.yaw - Math.PI / 2 + n(2), this.roll + n(3), 'YXZ');
+      // Landing dip: the view drops a little and springs back up.
+      this.landVel += (-this.landDip * 180 - this.landVel * 18) * dt;
+      this.landDip = Math.max(-0.3, this.landDip + this.landVel * dt);
+      this.camera.position.y -= this.landDip;
+      // View punch from firing recovers quickly, like a real gun settling.
+      const recover = Math.exp(-dt * 11);
+      this.punchPitch *= recover;
+      this.punchYaw *= recover;
+      this.camera.rotation.set(cam.pitch + this.punchPitch + n(1), cam.yaw - Math.PI / 2 + this.punchYaw + n(2), this.roll + n(3), 'YXZ');
       this.updateViewmodel(cam, myColor, dt);
     } else {
       const t = this.time * 0.07;

@@ -12,6 +12,8 @@ first to 5 round wins takes the match.
 - **Private games:** share a 4-letter code or a link. The host picks the map
   from a carousel (or picks Random for a new map every round) and starts the
   match.
+- **No-jump rule:** the host of a private game can switch off jumping, so
+  recoil mode (`R`) is the only way up.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
 - **12 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
@@ -22,11 +24,11 @@ first to 5 round wins takes the match.
   slide to keep the speed), aim down sights (the Longshot has a scope), and climb any ledge up to 2.7 m by jumping into it.
   Jump pads launch you into the air.
 - **Five weapons**, picked in the lobby (click a card or press 1 to 5):
-  - **Blaster:** hold to charge a big shove. The all-rounder.
-  - **Scatter:** a fistful of pellets. Brutal up close.
-  - **Longshot:** charge a lightning-fast bolt that hits like a train.
+  - **Revolver:** every click is a solid shove. The all-rounder.
+  - **Scatter:** a pump shotgun. Brutal up close.
+  - **Longshot:** a bolt-action sniper. Slow, but one clean hit sends them flying.
   - **Boomer:** lobs bombs that burst on impact and blast everyone nearby.
-  - **Pepper:** hold the trigger for a stream of little pokes.
+  - **Pepper:** an SMG. Hold the trigger for a stream of little pokes.
 - **Obstacles on every map:** crates, AC units, water tanks and brick walls to
   climb, stand on and hide behind.
 - **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, and Heal.
@@ -105,7 +107,7 @@ that Vite prints, for example `http://192.168.1.20:5173`.
 | Aim down sights | Hold the right mouse button (or `Q`) | AIM button (toggles) |
 | Look | Mouse (click the game to play: it goes fullscreen and captures the mouse; hold `Esc` to let go) | Drag anywhere |
 | Jump / climb | `Space` (into a ledge to climb it) | JUMP button |
-| Fire | Left mouse button (or `F`); charge weapons fire on release | FIRE button |
+| Fire | Left mouse button (or `F`): one shot per click, or hold for the Pepper | FIRE button |
 
 Playing with the mouse goes fullscreen with the keyboard locked (Chrome and
 Edge), so Ctrl+W while sliding forward can't close the tab. Other browsers ask

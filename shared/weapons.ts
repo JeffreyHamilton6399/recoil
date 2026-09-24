@@ -1,28 +1,30 @@
-// Weapons. Every player picks one in the lobby. Each pair is [min charge,
-// full charge] for charge weapons; automatic weapons always fire at full
-// (so both values are the same).
+// Weapons. Every player picks one in the lobby. Semi-automatic guns fire once
+// per click; automatic guns fire for as long as the trigger is held.
+// Heavier guns hit harder: more damage, and more knockback.
 
-export type FireMode = 'charge' | 'auto';
+export type FireMode = 'semi' | 'auto';
 
 export interface WeaponDef {
   name: string;
   blurb: string;
   mode: FireMode;
-  /** Charge weapons: seconds to full charge. */
-  chargeTime: number;
   /** Seconds after a shot before the next one. */
   cooldown: number;
   /** Bullets per shot, fanned out by `spread` radians (random within it for pellets). */
   pellets: number;
   spread: number;
-  speed: readonly [number, number];
-  radius: readonly [number, number];
+  speed: number;
+  radius: number;
   /** Knockback per bullet. */
-  knockback: readonly [number, number];
+  knockback: number;
   /** Damage percentage per bullet. */
-  damage: readonly [number, number];
-  /** Kick back on the shooter (kept small: getting hit is what sends you flying). */
-  recoil: readonly [number, number];
+  damage: number;
+  /** Kick back on the shooter normally (kept small: getting hit is what sends you flying). */
+  recoil: number;
+  /** Kick back on the shooter in recoil mode, per shot. */
+  boost: number;
+  /** How far the view punches up when you fire (radians; visual only). */
+  viewKick: number;
   /** Explosion radius when the bullet lands (0 = no explosion). */
   splash: number;
   /** Bullet drop (units per second squared). */
@@ -47,18 +49,19 @@ export interface WeaponDef {
 
 export const WEAPONS: readonly WeaponDef[] = [
   {
-    name: 'Blaster',
-    blurb: 'Hold to charge a big shove. The all-rounder.',
-    mode: 'charge',
-    chargeTime: 0.7,
-    cooldown: 0.15,
+    name: 'Revolver',
+    blurb: 'Six-shooter. Every click is a solid shove. The all-rounder.',
+    mode: 'semi',
+    cooldown: 0.3,
     pellets: 1,
     spread: 0,
-    speed: [70, 100],
-    radius: [0.15, 0.26],
-    knockback: [8, 19],
-    damage: [6, 20],
-    recoil: [0.3, 0.8],
+    speed: 95,
+    radius: 0.16,
+    knockback: 12,
+    damage: 12,
+    recoil: 0.5,
+    boost: 11,
+    viewKick: 0.05,
     splash: 0,
     gravity: 0,
     lifetime: 1.1,
@@ -70,17 +73,18 @@ export const WEAPONS: readonly WeaponDef[] = [
   },
   {
     name: 'Scatter',
-    blurb: 'A fistful of pellets. Brutal up close, useless far away.',
-    mode: 'auto',
-    chargeTime: 0,
+    blurb: 'Pump shotgun. A fistful of pellets: brutal up close, useless far away.',
+    mode: 'semi',
     cooldown: 0.8,
     pellets: 7,
     spread: 0.1,
-    speed: [75, 75],
-    radius: [0.1, 0.1],
-    knockback: [4.2, 4.2],
-    damage: [3, 3],
-    recoil: [1.2, 1.2],
+    speed: 75,
+    radius: 0.1,
+    knockback: 4.2,
+    damage: 3,
+    recoil: 1.2,
+    boost: 16,
+    viewKick: 0.09,
     splash: 0,
     gravity: 0,
     lifetime: 0.2,
@@ -92,17 +96,18 @@ export const WEAPONS: readonly WeaponDef[] = [
   },
   {
     name: 'Longshot',
-    blurb: 'Charge a high-velocity round. Hits like a train.',
-    mode: 'charge',
-    chargeTime: 1.1,
-    cooldown: 0.5,
+    blurb: 'Bolt-action sniper. Slow, but one clean hit sends them flying.',
+    mode: 'semi',
+    cooldown: 1.1,
     pellets: 1,
     spread: 0,
-    speed: [170, 240],
-    radius: [0.11, 0.15],
-    knockback: [5, 26],
-    damage: [8, 30],
-    recoil: [0.2, 0.6],
+    speed: 240,
+    radius: 0.14,
+    knockback: 26,
+    damage: 30,
+    recoil: 0.6,
+    boost: 18,
+    viewKick: 0.13,
     splash: 0,
     gravity: 0,
     lifetime: 0.7,
@@ -114,17 +119,18 @@ export const WEAPONS: readonly WeaponDef[] = [
   },
   {
     name: 'Boomer',
-    blurb: 'Lobs a bomb that bursts on impact and blasts everyone nearby.',
-    mode: 'auto',
-    chargeTime: 0,
+    blurb: 'Launcher. Lobs a bomb that bursts on impact and blasts everyone nearby.',
+    mode: 'semi',
     cooldown: 0.85,
     pellets: 1,
     spread: 0,
-    speed: [26, 26],
-    radius: [0.32, 0.32],
-    knockback: [20, 20],
-    damage: [15, 15],
-    recoil: [0.5, 0.5],
+    speed: 26,
+    radius: 0.32,
+    knockback: 20,
+    damage: 15,
+    recoil: 0.5,
+    boost: 14,
+    viewKick: 0.08,
     splash: 3.4,
     gravity: 7,
     lifetime: 3,
@@ -136,17 +142,18 @@ export const WEAPONS: readonly WeaponDef[] = [
   },
   {
     name: 'Pepper',
-    blurb: 'Hold the trigger for a stream of little pokes.',
+    blurb: 'SMG. Hold the trigger for a stream of little pokes.',
     mode: 'auto',
-    chargeTime: 0,
     cooldown: 0.085,
     pellets: 1,
     spread: 0.03,
-    speed: [85, 85],
-    radius: [0.09, 0.09],
-    knockback: [2.6, 2.6],
-    damage: [2.2, 2.2],
-    recoil: [0.1, 0.1],
+    speed: 85,
+    radius: 0.09,
+    knockback: 2.6,
+    damage: 2.2,
+    recoil: 0.1,
+    boost: 1.6,
+    viewKick: 0.012,
     splash: 0,
     gravity: 0,
     lifetime: 0.57,
@@ -166,16 +173,17 @@ export const SHOCK_WEAPON = 9;
 export const SHOCK_GRENADE: WeaponDef = {
   name: 'Shock grenade',
   blurb: 'Bounces, then bursts into a shockwave that throws everyone nearby. Hardly any damage.',
-  mode: 'auto',
-  chargeTime: 0,
+  mode: 'semi',
   cooldown: 0,
   pellets: 1,
   spread: 0,
-  speed: [19, 19],
-  radius: [0.2, 0.2],
-  knockback: [23, 23],
-  damage: [4, 4],
-  recoil: [0, 0],
+  speed: 19,
+  radius: 0.2,
+  knockback: 23,
+  damage: 4,
+  recoil: 0,
+  boost: 0,
+  viewKick: 0,
   splash: 6,
   gravity: 20,
   lifetime: 1.1,

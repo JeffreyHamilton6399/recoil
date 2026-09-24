@@ -70,7 +70,14 @@ let predPrev: Vec3 = { x: 0, y: 0, z: 0 };
 let correction: Vec3 = { x: 0, y: 0, z: 0 };
 let tickAcc = 0;
 let lookReset = true; // face where the server puts you on the next snapshot
-let chargeDinged = false;
+/** The room's no-jump rule (from the roster). */
+let roomNoJump = false;
+/** Crosshair spread from firing, easing back to 0. */
+let bloom = 0;
+/** Metres walked since the last footstep. */
+let stepDist = 0;
+/** How spread out the crosshair is right now (0..1). */
+let spread = 0;
 let lastInput: InputState | null = null;
 /** Knife in hand (knife players), and recoil mode (remembered between visits). */
 let holdKnife = false;
@@ -147,6 +154,7 @@ const ui = new UI({
   onLeave: () => leaveToMenu(''),
   onStart: () => net.send({ t: 'start' }),
   onPickMap: (choice) => net.send({ t: 'map', choice }),
+  onNoJump: (on) => net.send({ t: 'rules', noJump: on }),
   onProfile: () => {
     if (roomCode && myId !== -1) net.send({ t: 'profile', name: ui.name, color: ui.color });
   },
@@ -316,6 +324,7 @@ function handleMessage(msg: ServerMessage): void {
       roomPub = msg.pub;
       mapChoice = msg.mapChoice;
       startsIn = msg.startsIn;
+      roomNoJump = msg.noJump;
       refreshRoomUi();
       break;
     case 'error':
@@ -344,7 +353,7 @@ function refreshRoomUi(): void {
   hud.setVisible(true);
   ui.setLobby(
     phase === 'lobby'
-      ? { code: roomCode, roster, spectators, myId, pub: roomPub, mapChoice, startsIn, muted: [...voice.muted], speaking: [...voice.speaking] }
+      ? { code: roomCode, roster, spectators, myId, pub: roomPub, mapChoice, startsIn, noJump: roomNoJump, muted: [...voice.muted], speaking: [...voice.speaking] }
       : null,
   );
 }
@@ -383,9 +392,8 @@ function onSnapshot(s: Snapshot): void {
 // ---------------------------------------------------------------------------
 
 /** Runs one tick of your own movement, exactly as the server will. Jumps, slides, climbs and pads land in `events`. */
-function advance(p: PlayerState, inp: InputState, snap: Snapshot, events?: GameEvent[]): number {
-  const rules = phaseRules(snap.ph);
-  const fired = controlPlayer(p, inp, C.TICK_DT, rules.canMove, rules.canFire, events);
+function advance(p: PlayerState, inp: InputState, snap: Snapshot, events?: GameEvent[]): boolean {
+  const fired = controlPlayer(p, inp, C.TICK_DT, phaseRules(snap.ph, roomNoJump), events);
   const map = MAPS[snap.m] ?? MAPS[0];
   const h = C.TICK_DT / C.PHYSICS_SUBSTEPS;
   for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) movePlayer(p, h, map, snap.r, events);
@@ -427,7 +435,6 @@ function reconcile(s: Snapshot): void {
   } else {
     predPrev = { x: server.x, y: server.y, z: server.z };
   }
-  // The local charge is the one you feel; keep it unless the server reset it.
   pred = server;
 }
 
@@ -436,7 +443,7 @@ function clientTick(): void {
   const latest = snaps[snaps.length - 1];
   if (!roomCode || myId === -1 || !net.isOpen || !latest) return;
   const inp = input.sample();
-  // Without the mouse captured, don't charge, fire or aim by accident.
+  // Without the mouse captured, don't fire or aim by accident.
   if (!input.locked && !ui.isTouch) {
     inp.firing = false;
     inp.aim = false;
@@ -470,9 +477,10 @@ function clientTick(): void {
   const vzBefore = pred.vz;
   const events: GameEvent[] = [];
   const fired = advance(pred, inp, latest, events);
-  if (fired >= 0) {
-    sfx.shot(pred.weapon, fired, 0);
-    scene.localFire(pred.weapon, fired, myColor());
+  if (fired) {
+    sfx.shot(pred.weapon, 0);
+    scene.localFire(pred.weapon, myColor());
+    bloom = Math.min(1, bloom + weaponDef(pred.weapon).viewKick * 6 + 0.1);
   }
   // Your own offhand sounds right away (the server's copy is skipped).
   if (pred.offUse) {
@@ -490,12 +498,10 @@ function clientTick(): void {
     } else if (ev.k === 'mantle') sfx.mantle(0);
     else if (ev.k === 'pad') sfx.pad(0);
   }
-  if (!wasGrounded && pred.grounded) sfx.land(-vzBefore);
-
-  // Ding once when your charge tops out.
-  const full = pred.charging && pred.charge >= 1;
-  if (full && !chargeDinged) sfx.chargeFull();
-  chargeDinged = full;
+  if (!wasGrounded && pred.grounded) {
+    sfx.land(-vzBefore);
+    scene.landImpact(-vzBefore);
+  }
 }
 
 function myColor(): string {
@@ -515,19 +521,18 @@ function toViewPlayer(p: PlayerSnap): ViewPlayer {
     z: p[3],
     yaw: p[7],
     pitch: p[8],
-    charge: p[9],
-    damage: p[10],
-    fallTime: p[11],
-    fx: p[12],
-    weapon: p[15],
-    sliding: p[16] > 0,
-    knife: (p[12] & FX_KNIFE) !== 0,
+    damage: p[9],
+    fallTime: p[10],
+    fx: p[11],
+    weapon: p[14],
+    sliding: p[15] > 0,
+    knife: (p[11] & FX_KNIFE) !== 0,
   };
 }
 
 function lerpPlayer(a: PlayerSnap, b: PlayerSnap, t: number): ViewPlayer {
   // A player who just started falling has no fall time in `a`; a respawn jumps.
-  const fall = b[11] < 0 ? -1 : a[11] < 0 ? b[11] * t : lerp(a[11], b[11], t);
+  const fall = b[10] < 0 ? -1 : a[10] < 0 ? b[10] * t : lerp(a[10], b[10], t);
   const jumped = Math.hypot(b[1] - a[1], b[2] - a[2], b[3] - a[3]) > 6;
   const k = jumped ? 1 : t;
   return {
@@ -537,13 +542,12 @@ function lerpPlayer(a: PlayerSnap, b: PlayerSnap, t: number): ViewPlayer {
     z: lerp(a[3], b[3], k),
     yaw: a[7] + angleDiff(a[7], b[7]) * k,
     pitch: lerp(a[8], b[8], k),
-    charge: lerp(a[9], b[9], t),
-    damage: b[10],
+    damage: b[9],
     fallTime: fall,
-    fx: b[12],
-    weapon: b[15],
-    sliding: b[16] > 0,
-    knife: (b[12] & FX_KNIFE) !== 0,
+    fx: b[11],
+    weapon: b[14],
+    sliding: b[15] > 0,
+    knife: (b[11] & FX_KNIFE) !== 0,
   };
 }
 
@@ -664,7 +668,6 @@ function attractView(time: number): View {
       z: hop,
       yaw: a + Math.PI + Math.sin(time * (0.7 + i * 0.13) + i) * 0.7,
       pitch: Math.sin(time * 0.9 + i) * 0.3,
-      charge: 0,
       damage: (i * 37) % 120,
       fallTime: -1,
       fx: 0,
@@ -703,7 +706,7 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
   const heavy = scene.onEvent(ev, view);
   switch (ev.k) {
     case 'fire':
-      if (ev.p !== myId) sfx.shot(ev.w, ev.c, scene.panFor(ev.x, ev.y, ev.z), 0.7);
+      if (ev.p !== myId) sfx.shot(ev.w, scene.panFor(ev.x, ev.y, ev.z), 0.7);
       break;
     case 'boom':
       if (ev.w === SHOCK_WEAPON) sfx.shockwave(scene.panFor(ev.x, ev.y, ev.z));
@@ -742,7 +745,12 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
     case 'hit':
       sfx.hit(ev.f, scene.panFor(ev.x, ev.y, ev.z));
       lastHitBy.set(ev.p, { by: ev.o, time });
-      if (ev.o === myId) hud.hitMarker();
+      if (ev.o === myId && ev.p !== myId) {
+        // Your hit: a tick, a marker and a number where it landed.
+        hud.hitMarker();
+        sfx.hitmarker(heavy);
+        scene.damageNumber(ev.x, ev.y, ev.z, ev.d, heavy);
+      }
       if (ev.p === myId) hud.hurt(ev.f);
       if (heavy && ev.o === myId) scene.addTrauma(0.1);
       break;
@@ -761,6 +769,10 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
       sfx.whoosh(scene.panFor(ev.x, ev.y, 0));
       const last = lastHitBy.get(ev.p);
       if (last && time - last.time < 5 && last.by !== ev.p) {
+        if (last.by === myId) {
+          hud.hitMarker(true);
+          sfx.knockoutConfirm();
+        }
         hud.addFeed([[nameOf(last.by), colorOf(last.by)], ' knocked ', [nameOf(ev.p), colorOf(ev.p)], ' off']);
       } else {
         hud.addFeed([[nameOf(ev.p), colorOf(ev.p)], ' fell off']);
@@ -814,14 +826,6 @@ function soundCues(view: View): void {
   }
   lastPhaseSeen = view.phase;
 
-  const charging = new Set<number>();
-  const firePhase = view.phase === 'playing' || view.phase === 'lobby';
-  for (const p of view.players) {
-    if (!firePhase || p.fallTime >= 0 || p.charge <= 0) continue;
-    charging.add(p.id);
-    sfx.setCharge(p.id, p.charge, p.id === myId ? 0 : scene.panFor(p.x, p.y, p.z), p.id === myId ? 1 : 0.35);
-  }
-  sfx.silenceChargesExcept(charging);
 }
 
 let lastFrame = nowSec();
@@ -875,7 +879,6 @@ function frame(): void {
         z,
         yaw: input.yaw,
         pitch: input.pitch,
-        charge: pred.charging ? pred.charge : 0,
         damage: serverMe?.damage ?? pred.damage,
         fallTime: pred.falling ? pred.fallTime : -1,
         fx: serverMe?.fx ?? 0,
@@ -889,6 +892,21 @@ function frame(): void {
       const eyeTarget = pred.slide > 0 ? C.SLIDE_EYE_HEIGHT : C.EYE_HEIGHT;
       eyeHeight += (eyeTarget - eyeHeight) * Math.min(1, dt * 14);
       const speed = Math.hypot(pred.vx, pred.vy);
+      const sprinting = (lastInput?.sprint ?? false) && pred.grounded && speed > C.MOVE_SPEED * 1.1;
+      // Footsteps: one every couple of metres on the ground (none while sliding).
+      if (pred.grounded && pred.slide <= 0 && speed > 1.5 && !out) {
+        stepDist += speed * dt;
+        if (stepDist > (sprinting ? 2.9 : 2.3)) {
+          stepDist = 0;
+          sfx.step(sprinting);
+        }
+      } else {
+        stepDist = 1.6; // the first step comes quickly once you start moving
+      }
+      // Crosshair spread: wider when moving fast or in the air, tighter aiming down sights.
+      bloom = Math.max(0, bloom - dt * 2.5);
+      const moving = Math.min(1, speed / (C.MOVE_SPEED * C.SPRINT_MULT));
+      spread = Math.min(1, (moving * 0.45 + (pred.grounded ? 0 : 0.4) + bloom) * (pred.aiming ? 0.3 : 1));
       if (!out) {
         cam = {
           kind: 'first',
@@ -899,9 +917,8 @@ function frame(): void {
           pitch: input.pitch,
           speed,
           grounded: pred.grounded,
-          charge: me.charge,
           weapon: pred.weapon,
-          sprinting: (lastInput?.sprint ?? false) && pred.grounded && speed > C.MOVE_SPEED * 1.1,
+          sprinting,
           sliding: pred.slide > 0,
           aiming: pred.aiming,
           knife: pred.knifeOut,
@@ -913,7 +930,6 @@ function frame(): void {
     while (snaps.length > 3 && snaps[1].k * C.TICK_DT < renderTime - 0.5) snaps.shift();
   } else {
     view = attractView(now);
-    sfx.silenceChargesExcept(new Set());
   }
 
   view.speaking = voice.speaking;
@@ -935,6 +951,7 @@ function frame(): void {
         roundWinner,
         matchWinner,
         weapon: pred?.weapon ?? 0,
+        spread,
         aiming: cam.kind === 'first' && cam.aiming,
         ready: pred ? 1 - Math.min(1, pred.cooldown / Math.max(0.05, weaponDef(pred.weapon).cooldown)) : 1,
         offhand: pred?.offhand ?? ui.offhand,

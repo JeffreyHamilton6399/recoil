@@ -23,6 +23,8 @@ export interface UiHandlers {
   onStart(): void;
   /** Host picked a map (-1 = random). */
   onPickMap(choice: number): void;
+  /** Host switched the no-jump rule. */
+  onNoJump(on: boolean): void;
   /** Name or colour changed. */
   onProfile(): void;
   /** Picked a weapon. */
@@ -49,6 +51,8 @@ export interface LobbyInfo {
   mapChoice: number;
   /** Public rooms: seconds until the match starts, or -1. */
   startsIn: number;
+  /** The room's no-jump rule. */
+  noJump: boolean;
   /** Players you've muted, and who is talking right now. */
   muted: PlayerId[];
   speaking: PlayerId[];
@@ -84,6 +88,8 @@ export class UI {
   private readonly lobbyColors = el('lobby-colors');
   private readonly lobbyName = el<HTMLInputElement>('lobby-name');
   private readonly weaponList = el('weapon-list');
+  private readonly noJumpRule = el('rule-nojump');
+  private readonly noJumpBox = el<HTMLInputElement>('chk-nojump');
   private readonly weaponsSection = el('weapons-section');
   private readonly offhandList = el('offhand-list');
   private readonly botControls = el('bot-controls');
@@ -143,6 +149,7 @@ export class UI {
     }
     this.copyBtn.addEventListener('click', () => void this.copyLink());
     this.startBtn.addEventListener('click', () => handlers.onStart());
+    this.noJumpBox.addEventListener('change', () => handlers.onNoJump(this.noJumpBox.checked));
     el('btn-lobby-leave').addEventListener('click', () => handlers.onLeave());
     el('btn-leave').addEventListener('click', () => handlers.onLeave());
     el('btn-lobby-toggle').addEventListener('click', () => {
@@ -589,6 +596,11 @@ export class UI {
     const enough = online >= C.MIN_PLAYERS;
     this.setMapMode(info.pub ? 'public' : isHost ? 'host' : 'guest', info.mapChoice);
     this.startBtn.classList.toggle('hidden', !isHost);
+    // The no-jump rule: the host of a private room switches it; everyone sees it.
+    this.noJumpRule.classList.toggle('hidden', info.pub || (!isHost && !info.noJump));
+    this.noJumpRule.classList.toggle('readonly', !isHost);
+    this.noJumpBox.disabled = !isHost;
+    this.noJumpBox.checked = info.noJump;
     this.botControls.classList.toggle('hidden', !isHost || info.roster.length >= C.MAX_PLAYERS);
     this.startBtn.disabled = !enough;
     this.startBtn.textContent = enough ? `Start match (${online} players)` : 'Start match';

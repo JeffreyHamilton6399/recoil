@@ -111,8 +111,6 @@ export const LOBBY_RESPAWN_DELAY = 0.4;
 
 /** Holding sprint while moving forward multiplies running speed by this. */
 export const SPRINT_MULT = 1.45;
-/** Running speed multiplier while charging a shot. */
-export const CHARGE_MOVE_MULT = 0.8;
 /** A slide kicks you this much faster than you were going... */
 export const SLIDE_BOOST = 4.5;
 /** ...and at least this fast, but a slide never pushes you past SLIDE_MAX
@@ -172,10 +170,8 @@ export const POWERUP_RADIUS = 0.6;
 export const POWERUP_HEIGHT = 1;
 /** Uncollected power-ups vanish after this many seconds. */
 export const POWERUP_LIFETIME = 12;
-/** Rapid Fire: duration, cooldown between shots, and charge speed multiplier. */
+/** Rapid Fire: duration (it halves the time between shots). */
 export const RAPID_TIME = 6;
-export const RAPID_COOLDOWN = 0.05;
-export const RAPID_CHARGE_MULT = 2;
 /** Triple Shot: duration and the angle between the three volleys (radians). */
 export const TRIPLE_TIME = 7;
 export const TRIPLE_SPREAD = 0.12;
@@ -259,16 +255,6 @@ export const KNIFE_SWING = 0.4;
 /** Running speed multiplier with the knife out. */
 export const KNIFE_MOVE_MULT = 1.12;
 
-// ---------------------------------------------------------------------------
-// Recoil mode (R): your own shots throw you backwards
-// ---------------------------------------------------------------------------
-
-/** The kick of a full shot in recoil mode (a charged shot at full charge, or a slow gun's single shot). */
-export const RECOIL_MODE_KICK = 15;
-/** Charge weapons: the kick at no charge, as a fraction of a full one. */
-export const RECOIL_MODE_MIN = 0.45;
-/** Automatic weapons: guns firing faster than this (seconds per shot) get a proportionally smaller kick per shot. */
-export const RECOIL_MODE_REF_COOLDOWN = 0.8;
 /** Shock grenade: seconds before you can throw another. */
 export const SHOCK_COOLDOWN = 7;
 /** Extra upward angle when throwing, so it arcs. */

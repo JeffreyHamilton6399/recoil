@@ -61,10 +61,9 @@ export interface PlayerState {
   wallTop: number;
   wallNx: number;
   wallNy: number;
-  /** Charge amount, 0..1. */
-  charge: number;
-  charging: boolean;
-  /** Seconds left before the player can charge again. */
+  /** The fire button was held last tick (semi-automatic guns need a fresh click). */
+  fireHeld: boolean;
+  /** Seconds left before the player can fire again. */
   cooldown: number;
   /** Damage percentage. Higher means more knockback taken. */
   damage: number;
@@ -126,8 +125,8 @@ export interface Powerup {
 
 /** Things that happened during a tick, sent to clients for effects and sound. */
 export type GameEvent =
-  /** a is yaw, b is pitch, c is charge, w the weapon. */
-  | { k: 'fire'; p: PlayerId; w: number; c: number; x: number; y: number; z: number; a: number; b: number }
+  /** a is yaw, b is pitch, w the weapon. */
+  | { k: 'fire'; p: PlayerId; w: number; x: number; y: number; z: number; a: number; b: number }
   /** An explosion of radius r, from weapon w (SHOCK_WEAPON for a shockwave). */
   | { k: 'boom'; p: PlayerId; x: number; y: number; z: number; r: number; w: number }
   /** A knife swing from (x, y, z) facing yaw a; hit if it connected. */
@@ -165,6 +164,8 @@ export interface GameState {
   mapIndex: number;
   /** Host's map pick: a map index, or -1 for a random map each round. */
   mapChoice: number;
+  /** Room rule, set by the host: no jumping, so recoil is the only way up. */
+  noJump: boolean;
   players: PlayerState[];
   bullets: Bullet[];
   powerups: Powerup[];
@@ -190,7 +191,7 @@ export const FX_RAPID = 2;
 export const FX_TRIPLE = 4;
 export const FX_MEGA = 8;
 export const FX_GROUNDED = 16;
-export const FX_CHARGING = 32;
+export const FX_FIRE_HELD = 32;
 export const FX_SLIDE_LOCK = 64;
 export const FX_AIM = 128;
 export const FX_OFF_HELD = 256;
@@ -198,14 +199,14 @@ export const FX_KNIFE = 512;
 export const FX_RECOIL = 1024;
 
 /**
- * [id, x, y, z, vx, vy, vz, yaw, pitch, charge, damage,
+ * [id, x, y, z, vx, vy, vz, yaw, pitch, damage,
  *  fallTime (-1 while standing), fx bits, cooldown, input ack,
  *  weapon, slide seconds left, slide cooldown, offhand, offhand cooldown]
  */
 export type PlayerSnap = [
   number, number, number, number, number, number, number, number, number,
   number, number, number, number, number, number, number, number, number,
-  number, number,
+  number,
 ];
 
 /** [id, owner, x, y, z, radius, weapon] */
@@ -258,6 +259,8 @@ export type ClientMessage =
   | { t: 'quick'; id: string; name: string; color: number; w: number }
   /** Host of a private room picks the map (-1 = random). */
   | { t: 'map'; choice: number }
+  /** Host of a private room sets the room's rules. */
+  | { t: 'rules'; noJump: boolean }
   | { t: 'profile'; name: string; color: number }
   | { t: 'start' }
   /** Pick a weapon (index into WEAPONS). */
@@ -288,6 +291,8 @@ export type ServerMessage =
       /** Public (quick play) room. */
       pub: boolean;
       mapChoice: number;
+      /** The room's no-jump rule. */
+      noJump: boolean;
       /** Public rooms: seconds until the match starts automatically, or -1. */
       startsIn: number;
     }
