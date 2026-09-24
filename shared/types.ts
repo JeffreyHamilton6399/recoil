@@ -86,6 +86,8 @@ export interface PlayerState {
   ack: number;
   /** Offhand: OFFHAND_KNIFE or OFFHAND_SHOCK. */
   offhand: number;
+  /** Offhand to switch to at the next spawn. */
+  nextOffhand: number;
   /** Seconds before the offhand can be used again. */
   offCd: number;
   /** The offhand button was held last tick (each use needs a fresh press). */

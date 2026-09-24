@@ -158,6 +158,7 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
     shield: 0,
     ack: 0,
     offhand: C.OFFHAND_KNIFE,
+    nextOffhand: C.OFFHAND_KNIFE,
     offCd: 0,
     offHeld: false,
     knifeOut: false,
@@ -178,6 +179,8 @@ function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number
   p.vz = 0;
   p.grounded = true;
   p.weapon = p.nextWeapon;
+  p.offhand = p.nextOffhand;
+  p.offCd = 0;
   p.slide = 0;
   p.slideCd = 0;
   p.wallTop = -1;
@@ -256,12 +259,18 @@ export function setWeapon(s: GameState, id: PlayerId, weapon: number): void {
   }
 }
 
-/** Picks an offhand (knife or shock grenade). */
+/**
+ * Picks an offhand (knife or shock grenade). In the lobby it's yours right
+ * away; mid-match, from your next spawn (so swapping can't skip a cooldown).
+ */
 export function setOffhand(s: GameState, id: PlayerId, offhand: number): void {
   const p = getPlayer(s, id);
   if (!p || !OFFHANDS[offhand]) return;
-  p.offhand = offhand;
-  p.offCd = 0;
+  p.nextOffhand = offhand;
+  if (s.phase === 'lobby') {
+    p.offhand = offhand;
+    p.offCd = 0;
+  }
 }
 
 /** Back to the lobby warm-up, on the picked map. Scores are kept for display until the next match. */

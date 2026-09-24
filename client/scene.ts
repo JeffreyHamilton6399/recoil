@@ -10,9 +10,10 @@ import * as THREE from 'three';
 import * as C from '../shared/constants.js';
 import { MAPS, mapScale, scaledBumpers, type MapDef } from '../shared/maps.js';
 import { clamp } from '../shared/sim.js';
-import { FX_SHIELD, type GameEvent, type PlayerId, type PowerupKind, type RosterEntry } from '../shared/types.js';
+import { FX_GROUNDED, FX_SHIELD, type GameEvent, type PlayerId, type PowerupKind, type RosterEntry } from '../shared/types.js';
 import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
 import { FONT, INK, POWERUP_STYLE, arenaOutline, makeSurfaceCanvas } from './art.js';
+import { animateCharacter, flashCharacter, makeCharacter, type Character } from './character.js';
 import { makeArms, makeGun, makeKnife, type Gun } from './guns.js';
 import { Inker } from './ink.js';
 import { buildBlocks, buildPads, type Pads, buildRamps } from './props.js';
@@ -282,8 +283,9 @@ function wordTexture(word: string): THREE.CanvasTexture {
 interface Rig {
   key: string;
   group: THREE.Group;
+  /** The character model (legs, torso, head); its upper body holds the gun. */
+  char: Character;
   body: THREE.Group;
-  bodyMat: THREE.MeshToonMaterial;
   gunPivot: THREE.Group;
   gun: Gun;
   shield: THREE.Mesh;
@@ -314,26 +316,14 @@ function slashCurve(t: number): number {
 
 function makeRig(color: string, weapon: number, knife: boolean): Rig {
   const group = new THREE.Group();
-  const body = new THREE.Group();
-  group.add(body);
-  const bodyMat = new THREE.MeshToonMaterial({ color, gradientMap: TOON, emissive: new THREE.Color('#ffffff'), emissiveIntensity: 0 });
-  const torso = outlined(new THREE.Mesh(new THREE.CapsuleGeometry(C.PLAYER_RADIUS, C.PLAYER_HEIGHT - C.PLAYER_RADIUS * 2, 6, 16), bodyMat));
-  torso.position.y = C.PLAYER_HEIGHT / 2;
-  torso.castShadow = true;
-  body.add(torso);
-
-  // Visor, facing -z (the rig's forward).
-  const visor = new THREE.Mesh(
-    new THREE.BoxGeometry(0.62, 0.2, 0.3),
-    new THREE.MeshStandardMaterial({ color: INK, emissive: new THREE.Color('#00e1ff'), emissiveIntensity: 0.7, roughness: 0.2 }),
-  );
-  visor.position.set(0, C.EYE_HEIGHT, -0.3);
-  body.add(visor);
+  const char = makeCharacter(color);
+  group.add(char.root);
+  const body = char.upper;
 
   // Gun held in front of the chest in both hands (or a knife in the right),
   // pitched with the aim.
   const gunPivot = new THREE.Group();
-  gunPivot.position.set(0, 1.22, 0);
+  gunPivot.position.copy(char.chest);
   const gun = knife ? makeKnife(color) : makeGun(weapon, color);
   if (knife) {
     gun.group.position.set(0.3, -0.12, -0.42);
@@ -342,7 +332,7 @@ function makeRig(color: string, weapon: number, knife: boolean): Rig {
     gun.group.position.set(0.16, -0.06, -0.46);
   }
   gunPivot.add(gun.group);
-  const shoulders: [THREE.Vector3, THREE.Vector3] = [new THREE.Vector3(0.36, 0.04, -0.05), new THREE.Vector3(-0.36, 0.04, -0.05)];
+  const shoulders: [THREE.Vector3, THREE.Vector3] = [new THREE.Vector3(0.33, 0.06, -0.02), new THREE.Vector3(-0.33, 0.06, -0.02)];
   const hands: [THREE.Vector3, THREE.Vector3] = knife
     ? [gun.grip.clone().add(gun.group.position), new THREE.Vector3(-0.34, -0.42, -0.2)]
     : [gun.grip.clone().add(gun.group.position), gun.fore.clone().add(gun.group.position)];
@@ -365,7 +355,7 @@ function makeRig(color: string, weapon: number, knife: boolean): Rig {
   label.position.y = C.PLAYER_HEIGHT + 0.55;
   group.add(label);
 
-  return { key: rigKey(color, weapon, knife), group, body, bodyMat, gunPivot, gun, shield, label, labelCtx, labelTex, labelText: '', flash: 0, lean: 0, slash: 0, muzzle: 0 };
+  return { key: rigKey(color, weapon, knife), group, char, body, gunPivot, gun, shield, label, labelCtx, labelTex, labelText: '', flash: 0, lean: 0, slash: 0, muzzle: 0 };
 }
 
 function drawLabel(rig: Rig, name: string, damage: number, talking: boolean): void {
@@ -922,10 +912,11 @@ export class Scene3D {
       rig.group.visible = !gone && !(cam.kind === 'first' && p.id === view.myId);
       toThree(p.x, p.y, p.z, rig.group.position);
       rig.group.rotation.set(0, p.yaw - Math.PI / 2, 0);
-      // Lean back into a slide.
+      // Walk, jump and slide poses; lean back into a slide.
+      animateCharacter(rig.char, dt, rig.group.position, (p.fx & FX_GROUNDED) !== 0, p.sliding, p.pitch);
       rig.lean += ((p.sliding ? 1 : 0) - rig.lean) * Math.min(1, dt * 12);
       rig.body.rotation.x = rig.lean * 0.9;
-      rig.body.position.y = -rig.lean * 0.2;
+      rig.body.position.y -= rig.lean * 0.2;
       if (p.fallTime >= 0) {
         // Tumble as you fall.
         rig.group.rotation.x = p.fallTime * 3;
@@ -937,7 +928,7 @@ export class Scene3D {
       rig.gunPivot.rotation.y = p.knife ? slashCurve(rig.slash) * 1.1 : 0;
       rig.shield.visible = (p.fx & FX_SHIELD) !== 0;
       rig.flash = Math.max(0, rig.flash - dt);
-      rig.bodyMat.emissiveIntensity = rig.flash > 0 ? 0.8 : 0;
+      flashCharacter(rig.char, rig.flash > 0);
       // A brief muzzle flash when they fire.
       rig.muzzle = Math.max(0, rig.muzzle - dt);
       rig.gun.muzzle.scale.setScalar(rig.muzzle > 0 ? 0.6 : 0.1);

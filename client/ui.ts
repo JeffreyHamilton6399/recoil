@@ -92,6 +92,9 @@ export class UI {
   private readonly noJumpBox = el<HTMLInputElement>('chk-nojump');
   private readonly weaponsSection = el('weapons-section');
   private readonly offhandList = el('offhand-list');
+  private readonly loadout = el('loadout');
+  private readonly loadoutSlot = el('loadout-slot');
+  private readonly weaponsHome: { parent: HTMLElement; next: Node | null };
   private readonly botControls = el('bot-controls');
   private readonly startBtn = el<HTMLButtonElement>('btn-start');
   private readonly lobbyStatus = el('lobby-status');
@@ -124,6 +127,7 @@ export class UI {
   offhand = 0;
 
   constructor(private readonly handlers: UiHandlers) {
+    this.weaponsHome = { parent: this.weaponsSection.parentElement ?? this.lobby, next: this.weaponsSection.nextSibling };
     this.loadProfile();
     this.nameInput.value = this.name;
     this.lobbyName.value = this.name;
@@ -193,6 +197,22 @@ export class UI {
   /** While the mouse is captured for play, the lobby panel gets out of the way. */
   setLocked(locked: boolean): void {
     this.lobby.classList.toggle('locked', locked);
+  }
+
+  /**
+   * While you're out of a round (knocked off, or waiting to join), the
+   * weapon and offhand pickers move into a Loadout panel so you can change
+   * them for your next spawn.
+   */
+  setLoadout(show: boolean): void {
+    if (show === !this.loadout.classList.contains('hidden')) return;
+    this.loadout.classList.toggle('hidden', !show);
+    if (show) {
+      this.loadoutSlot.append(this.weaponsSection);
+      this.weaponsSection.classList.remove('hidden');
+    } else {
+      this.weaponsHome.parent.insertBefore(this.weaponsSection, this.weaponsHome.next);
+    }
   }
 
   // -------------------------------------------------------------------------

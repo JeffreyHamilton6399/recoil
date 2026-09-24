@@ -529,4 +529,91 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   console.log(`ok 11 - semi-auto once per click, auto ${auto}/s held, sniper hits hardest, no-jump rule (recoil lift ${top.toFixed(2)} m)`);
 }
 
+// 12. Power-ups: each one is picked up and does what it says; and they spawn during play.
+{
+  const kinds = ['rapid', 'triple', 'mega', 'shield', 'heal'] as const;
+  const results: string[] = [];
+  for (const kind of kinds) {
+    const g = createGame(40);
+    addPlayer(g, 0);
+    addPlayer(g, 1);
+    const [a, b] = g.players;
+    Object.assign(a, { x: -4, y: 0, damage: 50 });
+    Object.assign(b, { x: 4, y: 0 });
+    g.powerups.push({ id: 999, kind, x: a.x, y: a.y, age: 0 });
+    const ev = step(g, new Map([[0, { ...NO_INPUT, yaw: 0 }]]));
+    assert.ok(ev.some((e) => e.k === 'pickup' && e.u === kind), `${kind} is picked up`);
+    assert.ok(!g.powerups.some((u) => u.id === 999), `${kind} leaves the roof`);
+    const fire = (): number => {
+      a.fireHeld = false;
+      a.cooldown = 0;
+      const before = g.bullets.length;
+      step(g, new Map([[0, { ...NO_INPUT, yaw: 0, firing: true }]]));
+      return g.bullets.length - before;
+    };
+    switch (kind) {
+      case 'rapid': {
+        fire();
+        assert.ok(Math.abs(a.cooldown - WEAPONS[0].cooldown * 0.5) < C.TICK_DT + 1e-9, 'rapid fire halves the time between shots');
+        break;
+      }
+      case 'triple':
+        assert.equal(fire(), 3, 'triple shot fires three');
+        break;
+      case 'mega': {
+        fire();
+        const round = g.bullets[g.bullets.length - 1];
+        assert.ok(round.knockback > WEAPONS[0].knockback * 1.5 && round.radius > WEAPONS[0].radius, 'mega shot is bigger and hits harder');
+        assert.equal(a.mega, C.MEGA_SHOTS - 1, 'mega shot uses one charge');
+        break;
+      }
+      case 'shield': {
+        assert.ok(a.shield > 0, 'shield is up');
+        // B shoots A: the shield takes it.
+        b.yaw = Math.PI;
+        let blocked = false;
+        for (let i = 0; i < 20 && !blocked; i++) {
+          b.fireHeld = false;
+          b.cooldown = 0;
+          blocked = step(g, new Map([[1, { ...NO_INPUT, yaw: Math.PI, pitch: -0.02, firing: i === 0 }]])).some((e) => e.k === 'block' && e.p === 0);
+        }
+        assert.ok(blocked && a.shield === 0, 'the shield blocks a hit and breaks');
+        break;
+      }
+      case 'heal':
+        assert.equal(a.damage, 0, 'heal clears your damage');
+        break;
+    }
+    results.push(kind);
+  }
+  // They spawn by themselves during a round.
+  const g = createGame(41);
+  addPlayer(g, 0);
+  addPlayer(g, 1);
+  startMatch(g);
+  let spawned = 0;
+  for (let i = 0; i < C.TICK_RATE * 25; i++) spawned += step(g, new Map()).filter((e) => e.k === 'spawn').length;
+  assert.ok(spawned >= 2, `power-ups spawn during play (${spawned} in 25 s)`);
+  console.log(`ok 12 - power-ups work: ${results.join(', ')}; ${spawned} spawned in 25 s`);
+}
+
+// 13. Loadout changes mid-match wait for your next spawn (no skipping a cooldown by swapping).
+{
+  const g = createGame(50);
+  addPlayer(g, 0);
+  addPlayer(g, 1);
+  startMatch(g);
+  const p = g.players[0];
+  setWeapon(g, 0, 2);
+  setOffhand(g, 0, C.OFFHAND_SHOCK);
+  assert.ok(p.weapon === 0 && p.offhand === C.OFFHAND_KNIFE, 'mid-match picks do not change what you hold');
+  p.offCd = 5;
+  // Next round: the new loadout, fresh.
+  g.phase = 'roundEnd';
+  g.phaseTime = C.ROUND_END_TIME;
+  step(g, new Map());
+  assert.deepEqual([p.weapon, p.offhand, p.offCd], [2, C.OFFHAND_SHOCK, 0], 'the new loadout arrives on the next spawn');
+  console.log('ok 13 - loadout picks mid-match apply on the next spawn');
+}
+
 console.log('all simulation tests passed');

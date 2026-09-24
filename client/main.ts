@@ -70,6 +70,8 @@ let predPrev: Vec3 = { x: 0, y: 0, z: 0 };
 let correction: Vec3 = { x: 0, y: 0, z: 0 };
 let tickAcc = 0;
 let lookReset = true; // face where the server puts you on the next snapshot
+/** Out of the round in a match (knocked off, or waiting to join): the loadout panel is up. */
+let spectating = false;
 /** The room's no-jump rule (from the roster). */
 let roomNoJump = false;
 /** Crosshair spread from firing, easing back to 0. */
@@ -203,7 +205,13 @@ window.addEventListener('keydown', (e) => {
   // Number keys pick a weapon while the lobby is up.
   if (e.code === 'KeyR' && !e.repeat && roomCode && myId !== -1) setRecoilMode(!recoilMode);
   const digit = /^Digit([1-9])$/.exec(e.code);
-  if (digit && input.locked) {
+  if (digit && spectating) {
+    // Out of the round: pick the loadout for your next spawn.
+    const n = Number(digit[1]);
+    if (n <= 5) ui.setWeapon(n - 1);
+    else if (n === 6) ui.setOffhand(C.OFFHAND_KNIFE);
+    else if (n === 7) ui.setOffhand(C.OFFHAND_SHOCK);
+  } else if (digit && input.locked) {
     if (digit[1] === '1') setKnife(false);
     if (digit[1] === '2') setKnife(true);
   } else if (digit && ui.inLobby && myId !== -1) ui.setWeapon(Number(digit[1]) - 1);
@@ -940,6 +948,10 @@ function frame(): void {
   }
   // Slower look while zoomed in, so aiming stays steady.
   input.sensitivity = scene.zoom;
+  // The loadout panel while you're out of a round.
+  const phase = snaps[snaps.length - 1]?.ph ?? 'lobby';
+  spectating = !!roomCode && myId !== -1 && phase !== 'lobby' && (!pred || (pred.falling && pred.fallTime > C.FALL_DURATION * 0.5));
+  ui.setLoadout(spectating);
   if (roomCode) {
     hud.update(
       {
