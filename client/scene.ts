@@ -525,6 +525,8 @@ export class Scene3D {
   private time = 0;
 
   private readonly bulletGeo = new THREE.SphereGeometry(1, 14, 10);
+  /** A small round, 1 unit long along +Y (scaled per weapon). */
+  private readonly roundGeo = new THREE.CapsuleGeometry(0.22, 0.56, 3, 8);
   private readonly tailGeo = new THREE.ConeGeometry(1, 1, 10, 1, true).translate(0, 0.5, 0);
 
   constructor(canvas: HTMLCanvasElement) {
@@ -876,19 +878,29 @@ export class Scene3D {
     for (const b of view.bullets) {
       seen.add(b.id);
       let obj = this.bullets.get(b.id);
+      const w = weaponDef(b.weapon);
+      const bomb = b.weapon === 3;
       if (!obj) {
         const color = new THREE.Color(this.colorOf(view, b.owner));
-        const accent = new THREE.Color(weaponDef(b.weapon).accent);
-        // Bombs are dark with a hot glow; everything else is a bright bolt.
-        const core = b.weapon === 3 ? new THREE.Color('#2b2250') : color.clone().lerp(new THREE.Color('#ffffff'), 0.55);
+        const accent = new THREE.Color(w.accent);
         const group = new THREE.Group();
-        const ball = new THREE.Mesh(this.bulletGeo, b.weapon === 3 ? toon(core) : new THREE.MeshBasicMaterial({ color: core }));
-        if (b.weapon === 3) outlined(ball, 1.15);
-        group.add(ball);
-        group.add(glowSprite(b.weapon === 3 ? accent : color, b.weapon === 2 ? 3.4 : 2.6));
+        if (bomb) {
+          // The Boomer lobs a grenade: dark, outlined, with a hot glow.
+          const ball = new THREE.Mesh(this.bulletGeo, toon(new THREE.Color('#2b2250')));
+          outlined(ball, 1.15);
+          group.add(ball);
+          group.add(glowSprite(accent, 2.6));
+        } else {
+          // A small brass round with a hot tip.
+          const round = new THREE.Mesh(this.roundGeo, new THREE.MeshBasicMaterial({ color: '#e0b04a' }));
+          group.add(round);
+          group.add(glowSprite(new THREE.Color('#fff1c4'), 0.9));
+        }
+        // Tracer: a thin bright streak behind the round, tinted with the shooter's colour.
+        const tracerColor = bomb ? accent : color.clone().lerp(new THREE.Color('#fff4d0'), 0.6);
         const tail = new THREE.Mesh(
           this.tailGeo,
-          new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+          new THREE.MeshBasicMaterial({ color: tracerColor, transparent: true, opacity: bomb ? 0.5 : 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
         );
         this.scene.add(tail);
         this.scene.add(group);
@@ -896,24 +908,33 @@ export class Scene3D {
         this.bullets.set(b.id, obj);
       }
       toThree(b.x, b.y, b.z, obj.group.position);
-      // Drawn smaller than the hitbox so shots don't fill the screen; bombs stay chunky enough to read.
-      const look = b.r * (obj.weapon === 3 ? 0.8 : 0.6);
-      obj.group.scale.setScalar(look);
       const v = toThree(b.vx, b.vy, b.vz, tmpV);
       const speed = v.length();
+      // How charged the shot is (0-1), from where its size sits in the weapon's range.
+      const span = w.radius[1] - w.radius[0];
+      const charge = span > 0 ? clamp((b.r - w.radius[0]) / span, 0, 1) : 0.5;
+      if (bomb) {
+        obj.group.scale.setScalar(b.r * 0.8);
+      } else {
+        // Rounds are drawn a fixed small size (the hitbox is a bit more forgiving).
+        const len = b.weapon === 2 ? 0.2 : 0.12;
+        obj.group.scale.setScalar(len);
+        if (speed > 1e-3) obj.group.quaternion.setFromUnitVectors(UP, tmpV2.copy(v).multiplyScalar(1 / speed));
+      }
       if (speed > 1e-3) {
         obj.tail.visible = true;
         obj.tail.position.copy(obj.group.position);
         obj.tail.quaternion.setFromUnitVectors(UP, v.multiplyScalar(-1 / speed));
-        // The Longshot leaves a long streak; pellets barely any.
-        const len = obj.weapon === 2 ? Math.min(9, speed * 0.07) : obj.weapon === 1 || obj.weapon === 4 ? Math.min(1.2, speed * 0.03) : Math.min(4, speed * 0.06);
-        obj.tail.scale.set(look * 0.9, len, look * 0.9);
+        // Longshot rounds leave a long streak, pellets short ones.
+        const len = bomb ? Math.min(1.5, speed * 0.04) : b.weapon === 2 ? Math.min(14, speed * 0.06) : b.weapon === 1 ? Math.min(2.2, speed * 0.028) : Math.min(5, speed * 0.045);
+        const width = bomb ? b.r * 0.6 : (b.weapon === 2 ? 0.035 : 0.022) * (1 + charge * 0.8);
+        obj.tail.scale.set(width, len, width);
       } else {
         obj.tail.visible = false;
       }
-      if (obj.weapon === 3 && Math.random() < 0.5) {
+      if (bomb && Math.random() < 0.5) {
         // Bombs trail sparks from their fuse.
-        this.particles.burst(obj.group.position, 1, new THREE.Color(weaponDef(3).accent), 1, 0.3, -1);
+        this.particles.burst(obj.group.position, 1, new THREE.Color(w.accent), 1, 0.3, -1);
       }
     }
     for (const [id, obj] of this.bullets) {
