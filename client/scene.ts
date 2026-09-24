@@ -885,7 +885,7 @@ export class Scene3D {
         const ball = new THREE.Mesh(this.bulletGeo, b.weapon === 3 ? toon(core) : new THREE.MeshBasicMaterial({ color: core }));
         if (b.weapon === 3) outlined(ball, 1.15);
         group.add(ball);
-        group.add(glowSprite(b.weapon === 3 ? accent : color, b.weapon === 2 ? 6 : 4.5));
+        group.add(glowSprite(b.weapon === 3 ? accent : color, b.weapon === 2 ? 3.4 : 2.6));
         const tail = new THREE.Mesh(
           this.tailGeo,
           new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
@@ -896,7 +896,9 @@ export class Scene3D {
         this.bullets.set(b.id, obj);
       }
       toThree(b.x, b.y, b.z, obj.group.position);
-      obj.group.scale.setScalar(b.r);
+      // Drawn smaller than the hitbox so shots don't fill the screen; bombs stay chunky enough to read.
+      const look = b.r * (obj.weapon === 3 ? 0.8 : 0.6);
+      obj.group.scale.setScalar(look);
       const v = toThree(b.vx, b.vy, b.vz, tmpV);
       const speed = v.length();
       if (speed > 1e-3) {
@@ -905,7 +907,7 @@ export class Scene3D {
         obj.tail.quaternion.setFromUnitVectors(UP, v.multiplyScalar(-1 / speed));
         // The Longshot leaves a long streak; pellets barely any.
         const len = obj.weapon === 2 ? Math.min(9, speed * 0.07) : obj.weapon === 1 || obj.weapon === 4 ? Math.min(1.2, speed * 0.03) : Math.min(4, speed * 0.06);
-        obj.tail.scale.set(b.r * 0.9, len, b.r * 0.9);
+        obj.tail.scale.set(look * 0.9, len, look * 0.9);
       } else {
         obj.tail.visible = false;
       }
