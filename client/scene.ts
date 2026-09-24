@@ -586,10 +586,10 @@ export class Scene3D {
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     const sc = this.sun.shadow.camera;
-    sc.left = -44;
-    sc.right = 44;
-    sc.top = 44;
-    sc.bottom = -44;
+    sc.left = -54;
+    sc.right = 54;
+    sc.top = 54;
+    sc.bottom = -54;
     sc.near = 1;
     sc.far = 220;
     this.sun.shadow.bias = -0.0006;

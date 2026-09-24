@@ -64,11 +64,13 @@ first to 5 round wins takes the match.
 
 ## Structures
 
-Roofs are bigger (30 m radius) and some have buildings on them. You can run
+Roofs are bigger (38 m radius) and some have buildings on them. You can run
 through doorways, walk up ramps onto rooftops, cross bridges, and duck
 under carports. Blocks can float (roofs, bridges), and ramps are walkable
 slopes; both are set in `shared/maps.ts` using the `hut`, `pergola`, `slab`,
-and `ramp` helpers.
+and `ramp` helpers. Bots find their way around walls and through doorways
+(A* over a walk grid in `shared/nav.ts`), climb ramps to hold the high
+ground with long guns, and chase players who camp on roofs.
 
 ## Run locally
 

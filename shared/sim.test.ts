@@ -423,4 +423,42 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   console.log(`ok 9 - ramp to roof (${up.z.toFixed(2)} m), through a doorway, blocked by a wall, under a bridge, head bump`);
 }
 
+// 10. Bots take the high ground: a sniper climbs onto a roof, and a close-range
+// bot chases someone camping up there.
+{
+  const helipad = MAPS.findIndex((m) => m.name === 'Helipad');
+  const S = mapScale(C.ARENA_START_RADIUS);
+  const trial = (weapon: number, enemyX: number, enemyY: number, enemyZ: number, seed: number): number => {
+    const s = createGame(seed);
+    setMapChoice(s, helipad);
+    addPlayer(s, 0, weapon);
+    addPlayer(s, 1, 0);
+    const me = s.players[0];
+    const them = s.players[1];
+    me.x = 0;
+    me.y = -2 * S;
+    them.x = enemyX;
+    them.y = enemyY;
+    them.z = enemyZ;
+    const bot = new BotBrain(3);
+    let top = 0;
+    for (let i = 0; i < 30 * 25; i++) {
+      step(s, new Map([[0, bot.think(s, me)], [1, { ...NO_INPUT, yaw: them.yaw }]]));
+      if (me.grounded) top = Math.max(top, me.z);
+    }
+    return top;
+  };
+  let sniperUp = 0;
+  let chaserUp = 0;
+  for (let k = 0; k < 4; k++) {
+    // A long gun with the enemy far off across the roof.
+    if (trial(2, -0.5 * S, 7.5 * S, 0, 50 + k) > 2.5) sniperUp++;
+    // A shotgun against someone on the west hut's roof.
+    if (trial(1, -6.3 * S, 0, 2.95, 80 + k) > 2.5) chaserUp++;
+  }
+  assert.ok(sniperUp >= 2, `hard sniper bots climb onto a roof (${sniperUp}/4)`);
+  assert.ok(chaserUp >= 2, `hard bots chase players onto roofs (${chaserUp}/4)`);
+  console.log(`ok 10 - bots take the high ground (sniper ${sniperUp}/4, chaser ${chaserUp}/4)`);
+}
+
 console.log('all simulation tests passed');

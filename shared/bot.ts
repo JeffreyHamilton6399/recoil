@@ -10,6 +10,7 @@
 
 import * as C from './constants.js';
 import { floorAt, inBlock, isOffMap, type MapDef } from './maps.js';
+import { clearLine, climbs, findPath, navGrid, type Climb, type NavGrid } from './nav.js';
 import { NO_INPUT, angleDiff, clamp, currentMap, phaseRules, wrapAngle } from './sim.js';
 import type { GameState, InputState, PlayerId, PlayerState } from './types.js';
 import { weaponDef } from './weapons.js';
@@ -44,12 +45,14 @@ interface Skill {
   chargeSense: number;
   /** 0..1: how much it strafes, hops and slides to be hard to hit. */
   agility: number;
+  /** 0..1: how often it takes the high ground (roofs and bridges) or chases people up there. */
+  highGround: number;
 }
 
 const SKILLS: Record<BotLevel, Skill> = {
-  1: { reaction: 0.55, aimError: 0.13, turnRate: 3, lead: 0.2, fireCone: 0.18, dodge: 0, offhand: 0.15, caution: 0.55, chargeSense: 0.2, agility: 0.2 },
-  2: { reaction: 0.28, aimError: 0.055, turnRate: 6, lead: 0.7, fireCone: 0.1, dodge: 0.35, offhand: 0.55, caution: 0.85, chargeSense: 0.65, agility: 0.6 },
-  3: { reaction: 0.13, aimError: 0.02, turnRate: 11, lead: 1, fireCone: 0.06, dodge: 0.8, offhand: 1, caution: 1, chargeSense: 1, agility: 1 },
+  1: { reaction: 0.55, aimError: 0.13, turnRate: 3, lead: 0.2, fireCone: 0.18, dodge: 0, offhand: 0.15, caution: 0.55, chargeSense: 0.2, agility: 0.2, highGround: 0.15 },
+  2: { reaction: 0.28, aimError: 0.055, turnRate: 6, lead: 0.7, fireCone: 0.1, dodge: 0.35, offhand: 0.55, caution: 0.85, chargeSense: 0.65, agility: 0.6, highGround: 0.5 },
+  3: { reaction: 0.13, aimError: 0.02, turnRate: 11, lead: 1, fireCone: 0.06, dodge: 0.8, offhand: 1, caution: 1, chargeSense: 1, agility: 1, highGround: 0.85 },
 };
 
 /** Preferred fighting distance per weapon (Blaster, Scatter, Longshot, Boomer, Pepper). */
@@ -82,6 +85,19 @@ export class BotBrain {
   private offPressed = false;
   private hopIn = 1;
   private lastCrouch = false;
+  /** 'fight' as usual, 'climb' heading up a ramp, 'high' holding a roof or bridge. */
+  private mode: 'fight' | 'climb' | 'high' = 'fight';
+  private modeFor = 0;
+  private decideIn = 2;
+  private holdFor = 0;
+  private climb: Climb | null = null;
+  /** Route waypoints (A*), and where it goes. */
+  private route: [number, number][] = [];
+  private routeTo: [number, number] = [0, 0];
+  private replanIn = 0;
+  private stuckFor = 0;
+  private lastX = 0;
+  private lastY = 0;
   /** What the bot has seen of each player recently, oldest first (for reaction delay). */
   private readonly memory = new Map<PlayerId, Seen[]>();
 
@@ -163,18 +179,79 @@ export class BotBrain {
     let jump = false;
     let crouch = false;
     let sprint = false;
+    const grid = navGrid(map, R);
     const fromCentre = Math.hypot(me.x, me.y);
+    const up = me.z > 1.2; // standing on a roof, bridge or ramp
     // Where our momentum takes us in a moment.
     const aheadX = me.x + me.vx * 0.45;
     const aheadY = me.y + me.vy * 0.45;
     const danger = this.edgeDanger(map, R, aheadX, aheadY) || fromCentre > R * (0.95 - 0.35 * sk.caution);
+
+    // Plans: now and then, head for the high ground, or chase someone up there.
+    this.decideIn -= dt;
+    if (this.mode === 'fight' && this.decideIn <= 0 && me.grounded && !up) {
+      this.decideIn = 2 + Math.random() * 3;
+      const ways = climbs(map, R);
+      if (ways.length > 0 && Math.random() < sk.highGround) {
+        const nearest = enemies.reduce((m, p) => Math.min(m, Math.hypot(p.x - me.x, p.y - me.y)), Infinity);
+        const longGun = me.weapon === 0 || me.weapon === 2 || me.weapon === 4;
+        const targetUp = target !== undefined && target.z > 1.2;
+        if ((longGun && nearest > 9) || (targetUp && (!longGun || !visible))) {
+          // Chasing: the way up nearest them. Otherwise: the way up nearest us.
+          const [rx, ry] = targetUp && target ? [target.x, target.y] : [me.x, me.y];
+          this.climb = ways.reduce((best, c) => (Math.hypot(c.topX - rx, c.topY - ry) < Math.hypot(best.topX - rx, best.topY - ry) ? c : best));
+          this.mode = 'climb';
+          this.modeFor = 0;
+          this.route = [];
+        }
+      }
+    }
+    this.modeFor += dt;
+
     if (!me.grounded) {
       // In the air (jumping or knocked back): steer home if we're drifting out.
       if (danger || fromCentre > R * 0.5) [wx, wy] = unit(-me.x, -me.y);
-    } else if (danger) {
-      [wx, wy] = unit(-me.x, -me.y);
+    } else if (danger && !up) {
+      this.mode = 'fight';
+      [wx, wy] = this.goto(grid, me, 0, 0, dt);
       sprint = true;
+    } else if (this.mode === 'climb' && this.climb) {
+      const c = this.climb;
+      if (me.z >= c.h - 0.3) {
+        // Made it: hold the high ground for a while.
+        this.mode = 'high';
+        this.modeFor = 0;
+        this.holdFor = 5 + Math.random() * 10 * sk.highGround;
+      } else if (this.modeFor > 14) {
+        this.mode = 'fight';
+      } else if (me.z > 0.15 || Math.hypot(c.entryX - me.x, c.entryY - me.y) < 1.2) {
+        // On the ramp: straight up it.
+        wx = c.dx;
+        wy = c.dy;
+        sprint = true;
+      } else {
+        [wx, wy] = this.goto(grid, me, c.entryX, c.entryY, dt);
+        sprint = true;
+      }
+    } else if (this.mode === 'high' && this.climb) {
+      const c = this.climb;
+      this.holdFor -= dt;
+      if (!up || this.holdFor <= 0 || (seen !== null && dist < 4 && me.weapon !== 1)) {
+        // Knocked off, bored, or someone's too close: back to the fight.
+        this.mode = 'fight';
+        this.decideIn = 3 + Math.random() * 3;
+      } else {
+        // Stay near the top spot, strafing a little, but never step off the edge.
+        const toTop = Math.hypot(c.topX - me.x, c.topY - me.y);
+        if (toTop > 2) [wx, wy] = unit(c.topX - me.x, c.topY - me.y);
+        else if (seen) {
+          const [tx, ty] = unit(seen.x - me.x, seen.y - me.y);
+          wx = -ty * this.strafeDir * 0.5;
+          wy = tx * this.strafeDir * 0.5;
+        }
+      }
     } else if (seen) {
+      this.mode = 'fight';
       const want = RANGE[me.weapon] ?? 10;
       const [tx, ty] = unit(seen.x - me.x, seen.y - me.y);
       // Close in or back off to our weapon's range...
@@ -193,31 +270,62 @@ export class BotBrain {
       wx += (-me.x / (fromCentre || 1)) * pull;
       wy += (-me.y / (fromCentre || 1)) * pull;
       sprint = along > 0 && dist > want + 6;
+      // Can't see them, or the way is blocked: take the route around.
+      if (!up && (!visible || along > 0) && !clearLine(grid, me.x, me.y, seen.x, seen.y)) {
+        [wx, wy] = this.goto(grid, me, seen.x, seen.y, dt);
+        sprint = true;
+      }
     } else {
       // Wander gently around the middle.
-      if (fromCentre > R * 0.35) [wx, wy] = unit(-me.x, -me.y);
+      if (fromCentre > R * 0.35) [wx, wy] = this.goto(grid, me, 0, 0, dt);
     }
 
-    // Never walk into a hole or off the edge; step around walls or climb them.
     if (me.grounded && (wx !== 0 || wy !== 0)) {
-      const safe = this.safeHeading(map, R, me, wx, wy);
-      if (safe) {
-        [wx, wy] = safe;
-        const wall = inBlock(map, R, me.x + wx * 0.9, me.y + wy * 0.9, me.z + 0.5);
-        if (wall) {
-          const top = floorAt(map, R, me.x + wx * 0.9, me.y + wy * 0.9, me.z + C.MANTLE_MAX);
-          if (top - me.z > C.STEP_HEIGHT && top - me.z <= C.MANTLE_MAX) jump = true;
-          else [wx, wy] = rotate(wx, wy, this.strafeDir * 1.1);
+      if (up) {
+        // On a roof: don't walk off unless we mean to (leaving the high ground).
+        const [ux, uy] = unit(wx, wy);
+        const below = floorAt(map, R, me.x + ux * 0.9, me.y + uy * 0.9, me.z + C.STEP_HEIGHT);
+        if (this.mode === 'high' && below < me.z - 0.8) {
+          wx = 0;
+          wy = 0;
         }
       } else {
-        [wx, wy] = unit(-me.x, -me.y);
+        // Never walk into a hole or off the edge; step around walls or climb them.
+        const onRamp = this.mode === 'climb' && me.z > 0.05;
+        const safe = onRamp ? unit(wx, wy) : this.safeHeading(map, R, me, wx, wy);
+        if (safe) {
+          [wx, wy] = safe;
+          const wall = !onRamp && inBlock(map, R, me.x + wx * 0.9, me.y + wy * 0.9, me.z + 0.5);
+          if (wall) {
+            const top = floorAt(map, R, me.x + wx * 0.9, me.y + wy * 0.9, me.z + C.MANTLE_MAX);
+            if (top - me.z > C.STEP_HEIGHT && top - me.z <= C.MANTLE_MAX) jump = true;
+            else [wx, wy] = rotate(wx, wy, this.strafeDir * 1.1);
+          }
+        } else {
+          [wx, wy] = unit(-me.x, -me.y);
+        }
       }
+    }
+
+    // Stuck (pushing but not moving)? Replan, hop, and try another way.
+    const moved = Math.hypot(me.x - this.lastX, me.y - this.lastY);
+    this.lastX = me.x;
+    this.lastY = me.y;
+    if (me.grounded && canMove && (wx !== 0 || wy !== 0) && moved < 0.02) this.stuckFor += dt;
+    else this.stuckFor = Math.max(0, this.stuckFor - dt * 2);
+    if (this.stuckFor > 0.7) {
+      this.stuckFor = 0;
+      this.route = [];
+      this.strafeDir = -this.strafeDir;
+      jump = true;
+      [wx, wy] = rotate(wx, wy, this.strafeDir * 1.5);
+      if (this.mode !== 'fight' && this.modeFor > 4) this.mode = 'fight';
     }
 
     // Dodge shots heading our way; hop around when fighting.
     if (me.grounded && canMove) {
       const threat = this.incoming(s, me);
-      if (threat && Math.random() < sk.dodge * 0.35) {
+      if (threat && Math.random() < sk.dodge * 0.35 && this.mode !== 'high') {
         const [bx, by] = unit(threat.vx, threat.vy);
         // Side-step across the shot's path, towards the middle if we can.
         const sideX = -by;
@@ -228,7 +336,7 @@ export class BotBrain {
         if (Math.random() < sk.dodge * 0.5) jump = true;
       }
       this.hopIn -= dt;
-      if (seen && this.hopIn <= 0) {
+      if (seen && this.hopIn <= 0 && this.mode === 'fight') {
         this.hopIn = 1.2 + Math.random() * (4 - sk.agility * 2.5);
         if (!danger && Math.random() < sk.agility * 0.6) jump = true;
         else if (!danger && Math.random() < sk.agility * 0.5 && Math.hypot(me.vx, me.vy) > C.SLIDE_MIN_SPEED) crouch = true;
@@ -305,6 +413,24 @@ export class BotBrain {
   }
 
   // -------------------------------------------------------------------------
+
+  /** Direction to walk towards a point: straight if clear, else along an A* route. */
+  private goto(grid: NavGrid, me: PlayerState, gx: number, gy: number, dt: number): [number, number] {
+    if (clearLine(grid, me.x, me.y, gx, gy)) {
+      this.route = [];
+      return unit(gx - me.x, gy - me.y);
+    }
+    this.replanIn -= dt;
+    const moved = Math.hypot(gx - this.routeTo[0], gy - this.routeTo[1]);
+    if (this.route.length === 0 || this.replanIn <= 0 || moved > 2) {
+      this.route = findPath(grid, me.x, me.y, gx, gy) ?? [];
+      this.routeTo = [gx, gy];
+      this.replanIn = 0.7;
+    }
+    while (this.route.length > 1 && Math.hypot(this.route[0][0] - me.x, this.route[0][1] - me.y) < 0.9) this.route.shift();
+    const next = this.route[0];
+    return next ? unit(next[0] - me.x, next[1] - me.y) : unit(gx - me.x, gy - me.y);
+  }
 
   /** Records where everyone is, so perception can lag by the reaction time. */
   private remember(s: GameState): void {
