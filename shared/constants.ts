@@ -200,6 +200,21 @@ export const WIN_SCORE = 5;
 /** Team mode: the two teams' names and colours (indices into PLAYER_PALETTE). */
 export const TEAM_NAMES: readonly string[] = ['Red', 'Blue'];
 export const TEAM_COLORS: readonly number[] = [0, 1];
+/** Turrets: reach (m), turn rate (rad/s), seconds between shots, hit points, and seconds out of action once knocked out. */
+export const TURRET_RANGE = 30;
+export const TURRET_TURN = 2.4;
+export const TURRET_COOLDOWN = 1.15;
+export const TURRET_HP = 45;
+export const TURRET_DOWN_TIME = 14;
+/** Turret head height above its base, and its hit radius (m). */
+export const TURRET_HEIGHT = 1.1;
+export const TURRET_RADIUS = 0.75;
+/** Sudden death: seconds into a round before bombs start falling, and the gap between bombs (s), first and fastest. */
+export const BOMB_TIME = 60;
+export const BOMB_EVERY = 1.3;
+export const BOMB_EVERY_MIN = 0.35;
+/** Bombs drop from this height (m). */
+export const BOMB_HEIGHT = 55;
 /** Grappling hook (Q): reach (m), pull (m/s²), top reeling speed (m/s), longest hold (s), and the wait after letting go (s). */
 export const GRAPPLE_RANGE = 34;
 export const GRAPPLE_PULL = 62;

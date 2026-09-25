@@ -5,9 +5,9 @@
 // "click to play" hint and a red flash when you get hit.
 
 import * as C from '../shared/constants.js';
-import { MAPS } from '../shared/maps.js';
+import { MAPS, mapScale } from '../shared/maps.js';
 import { FX_MEGA, FX_SPEED, FX_RAPID, FX_SHIELD, FX_TRIPLE, type PlayerId, type RosterEntry } from '../shared/types.js';
-import { OFFHANDS, weaponDef } from '../shared/weapons.js';
+import { BOMB_WEAPON, OFFHANDS, weaponDef } from '../shared/weapons.js';
 import { POWERUP_STYLE } from './art.js';
 import type { View, ViewPlayer } from './scene.js';
 
@@ -57,6 +57,9 @@ export interface HudInfo {
   knife: boolean;
   recoil: boolean;
   offLeft: number;
+  /** Grappling hook: seconds until it's ready, and whether it's hooked on now. */
+  hookLeft: number;
+  hooked: boolean;
 }
 
 export class Hud {
@@ -76,6 +79,14 @@ export class Hud {
   private readonly vignette = el('vignette');
   private readonly speedlines = el('speedlines');
   private readonly scope = el('scope');
+  private readonly clock = el('round-clock');
+  private readonly koPop = el('ko-pop');
+  private readonly mini = el('minimap') as HTMLCanvasElement;
+  private miniIn = 0;
+  private lastClock = '';
+  /** A big line in the middle of the screen for a moment (sudden death). */
+  private flash: { text: string; sub: string; until: number } | null = null;
+  private clockTime = 0;
 
   private hurtLevel = 0;
   private hitTimer = 0;
@@ -93,6 +104,25 @@ export class Hud {
     this.hit.classList.add('on');
     this.hit.classList.toggle('kill', kill);
     this.hitTimer = kill ? 0.35 : 0.12;
+  }
+
+  /** You knocked someone off: a pop-up under the crosshair. */
+  knockout(name: string, color: string): void {
+    this.koPop.innerHTML = '';
+    const label = document.createElement('span');
+    label.textContent = 'KNOCKED OFF';
+    const who = document.createElement('b');
+    who.textContent = name.toUpperCase();
+    who.style.setProperty('--c', color);
+    this.koPop.append(label, who);
+    this.koPop.classList.remove('on');
+    void this.koPop.offsetWidth;
+    this.koPop.classList.add('on');
+  }
+
+  /** A big message across the middle for a few seconds. */
+  flashCenter(text: string, sub: string, seconds: number): void {
+    this.flash = { text, sub, until: this.clockTime + seconds };
   }
 
   hurt(force: number): void {
@@ -120,7 +150,14 @@ export class Hud {
 
   update(info: HudInfo, dt: number): void {
     const { view, me } = info;
+    this.clockTime += dt;
     this.root.classList.toggle('touch', info.touch);
+    this.updateClock(info);
+    this.miniIn -= dt;
+    if (this.miniIn <= 0) {
+      this.miniIn = 1 / 15;
+      this.drawMinimap(info);
+    }
 
     // Hit marker and hurt flash.
     this.hitTimer -= dt;
@@ -164,12 +201,13 @@ export class Hud {
         const t = Math.min(1, d / 150);
         this.dmg.style.color = t < 0.5 ? `hsl(${50 - t * 40}, 100%, ${100 - t * 80}%)` : `hsl(${50 - t * 50}, 100%, ${70 - (t - 0.5) * 20}%)`;
       }
-      const fx = me.fx & (FX_SHIELD | FX_RAPID | FX_TRIPLE | FX_MEGA);
+      const fx = me.fx & (FX_SHIELD | FX_RAPID | FX_TRIPLE | FX_MEGA | FX_SPEED);
+      const hookWait = info.hooked ? -1 : Math.ceil(info.hookLeft * 2) / 2;
       const offLeft = Math.ceil(info.offLeft);
       const isKnife = info.offhand === C.OFFHAND_KNIFE;
       // The knife never cools down (a swing is quick), so only the grenade shows a countdown.
       const offWait = isKnife ? 0 : offLeft;
-      const chipKey = `${fx}|${info.weapon}|${info.offhand}|${offWait}|${info.knife}|${info.recoil}`;
+      const chipKey = `${fx}|${info.weapon}|${info.offhand}|${offWait}|${info.knife}|${info.recoil}|${hookWait}`;
       if (chipKey !== this.lastChips) {
         this.lastChips = chipKey;
         this.chips.textContent = '';
@@ -194,6 +232,11 @@ export class Hud {
         recoil.style.setProperty('--c', '#ffd93d');
         recoil.textContent = info.recoil ? 'R  RECOIL ON' : 'R  RECOIL OFF';
         this.chips.append(recoil);
+        const hook = document.createElement('div');
+        hook.className = hookWait > 0 ? 'chip cooling' : 'chip';
+        hook.style.setProperty('--c', '#c9c4d8');
+        hook.textContent = hookWait < 0 ? 'Q  HOOKED' : hookWait > 0 ? `Q  HOOK  ${hookWait.toFixed(1)}s` : 'Q  HOOK';
+        this.chips.append(hook);
         const add = (bit: number, kind: keyof typeof POWERUP_STYLE): void => {
           if (!(fx & bit)) return;
           const chip = document.createElement('div');
@@ -270,6 +313,174 @@ export class Hud {
     }
   }
 
+  /**
+   * The round clock by the menu button: time played, a countdown to the
+   * bombs, then SUDDEN DEATH (or, in capture the flag, the time left).
+   */
+  private updateClock(info: HudInfo): void {
+    const { view } = info;
+    const fmt = (t: number): string => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+    let text = '';
+    let mode = '';
+    if (view.phase === 'playing') {
+      const t = view.phaseTime;
+      if (info.teams?.flags) {
+        const left = Math.max(0, info.teams.timeLeft ?? 0);
+        text = `⚑ ${fmt(left)} left`;
+        mode = left <= 30 ? 'warn' : '';
+      } else if (t < C.BOMB_TIME) {
+        const toBombs = C.BOMB_TIME - t;
+        text = toBombs <= 15 ? `💣 Bombs in ${Math.ceil(toBombs)}` : `⏱ ${fmt(t)}`;
+        mode = toBombs <= 15 ? 'warn' : '';
+      } else {
+        text = '💣 SUDDEN DEATH';
+        mode = 'sudden';
+      }
+    }
+    const key = `${text}|${mode}`;
+    if (key === this.lastClock) return;
+    this.lastClock = key;
+    this.clock.textContent = text;
+    this.clock.className = mode;
+    this.clock.classList.toggle('hidden', text === '');
+    this.root.classList.toggle('sudden', mode === 'sudden');
+  }
+
+  /**
+   * A small top-down map: the rooftops (taller ones lighter), blocks, pads,
+   * turrets, flags, falling bombs, everyone as a dot, and you as an arrow.
+   */
+  private drawMinimap(info: HudInfo): void {
+    const { view } = info;
+    const cv = this.mini;
+    const show = view.myId !== -1 && view.phase !== 'lobby' ? true : view.myId !== -1;
+    cv.classList.toggle('hidden', !show);
+    if (!show) return;
+    const px = cv.clientWidth || 140;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (cv.width !== Math.round(px * dpr)) {
+      cv.width = Math.round(px * dpr);
+      cv.height = Math.round(px * dpr);
+    }
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const map = MAPS[view.mapIndex] ?? MAPS[0];
+    const R = view.arenaRadius;
+    const S = mapScale(R);
+    const k = cv.width / 2 / (C.ARENA_START_RADIUS * 1.02);
+    const cx = cv.width / 2;
+    const X = (x: number): number => cx + x * k;
+    const Y = (y: number): number => cx - y * k;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = 'rgba(13, 9, 24, 0.6)';
+    ctx.beginPath();
+    ctx.arc(cx, cx, cx - 1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cx, cx - 2, 0, Math.PI * 2);
+    ctx.clip();
+    // Rooftops.
+    ctx.fillStyle = map.theme.top;
+    ctx.globalAlpha = 0.75;
+    if (map.roofs) {
+      for (const r of map.roofs) {
+        ctx.fillStyle = (r.h ?? 0) > 0 ? '#e6e0f5' : map.theme.top;
+        ctx.globalAlpha = (r.h ?? 0) > 0 ? 0.55 + Math.min(0.35, (r.h ?? 0) / 20) : 0.6;
+        ctx.fillRect(X((r.x - r.w / 2) * S), Y((r.y + r.d / 2) * S), r.w * S * k, r.d * S * k);
+      }
+    } else if (map.shape === 'circle') {
+      ctx.beginPath();
+      ctx.arc(cx, cx, R * k, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const h = map.shape === 'square' ? R * C.SQUARE_HALF_SCALE : R * 0.95;
+      ctx.fillRect(X(-h), Y(h), 2 * h * k, 2 * h * k);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(13, 9, 24, 0.9)';
+    for (const hole of map.holes) {
+      ctx.beginPath();
+      ctx.arc(X(hole.x * S), Y(hole.y * S), hole.r * S * k, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Blocks and pads.
+    ctx.fillStyle = 'rgba(40, 30, 70, 0.8)';
+    for (const b of map.blocks) {
+      if (Math.max(b.w, b.d) < 0.2) continue;
+      ctx.fillRect(X((b.x - b.w / 2) * S), Y((b.y + b.d / 2) * S), Math.max(1, b.w * S * k), Math.max(1, b.d * S * k));
+    }
+    ctx.fillStyle = '#7fe7ff';
+    for (const p of map.pads) {
+      ctx.beginPath();
+      ctx.arc(X(p.x * S), Y(p.y * S), Math.max(1.5, p.r * S * k), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Turrets.
+    (map.turrets ?? []).forEach((t, i) => {
+      const down = view.turrets?.[i]?.[2] === 1;
+      ctx.fillStyle = down ? '#6b6680' : '#ff9f1c';
+      const x = X(t.x * S);
+      const y = Y(t.y * S);
+      const r = 4 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(x, y - r);
+      ctx.lineTo(x + r, y + r * 0.8);
+      ctx.lineTo(x - r, y + r * 0.8);
+      ctx.fill();
+    });
+    // Falling bombs.
+    ctx.strokeStyle = '#ff3b4e';
+    ctx.lineWidth = 2 * dpr;
+    for (const b of view.bullets) {
+      if (b.weapon !== BOMB_WEAPON) continue;
+      ctx.beginPath();
+      ctx.arc(X(b.x), Y(b.y), weaponDef(BOMB_WEAPON).splash * k, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Flags.
+    view.flags?.forEach((f, team) => {
+      ctx.fillStyle = C.PLAYER_PALETTE[C.TEAM_COLORS[team]];
+      ctx.fillRect(X(f.x) - 3 * dpr, Y(f.y) - 7 * dpr, 6 * dpr, 5 * dpr);
+      ctx.fillRect(X(f.x) - 3 * dpr, Y(f.y) - 7 * dpr, 1.5 * dpr, 10 * dpr);
+    });
+    // Everyone else, then you.
+    for (const p of view.players) {
+      if (p.id === view.myId || p.fallTime >= 0) continue;
+      const r = view.roster.find((q) => q.id === p.id);
+      ctx.fillStyle = C.PLAYER_PALETTE[r?.color ?? 0] ?? '#fff';
+      ctx.beginPath();
+      ctx.arc(X(p.x), Y(p.y), 3.2 * dpr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#0d0918';
+      ctx.lineWidth = 1 * dpr;
+      ctx.stroke();
+    }
+    const me = view.players.find((p) => p.id === view.myId);
+    if (me && me.fallTime < 0) {
+      const x = X(me.x);
+      const y = Y(me.y);
+      const a = -me.yaw;
+      const r = 6 * dpr;
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#0d0918';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+      ctx.lineTo(x + Math.cos(a + 2.5) * r * 0.8, y + Math.sin(a + 2.5) * r * 0.8);
+      ctx.lineTo(x + Math.cos(a - 2.5) * r * 0.8, y + Math.sin(a - 2.5) * r * 0.8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 2 * dpr;
+    ctx.beginPath();
+    ctx.arc(cx, cx, cx - 2, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   private updateBanners(info: HudInfo): void {
     const { view, me } = info;
     const nameOf = (id: PlayerId | null): string => view.roster.find((r: RosterEntry) => r.id === id)?.name ?? 'Nobody';
@@ -284,7 +495,10 @@ export class Hud {
         break;
       case 'playing': {
         const flags = info.teams?.flags;
-        if (view.phaseTime < C.FIGHT_BANNER_TIME) center = flags ? 'CAPTURE THE FLAG!' : 'FIGHT!';
+        if (this.flash && this.clockTime < this.flash.until) {
+          center = this.flash.text;
+          sub = this.flash.sub;
+        } else if (view.phaseTime < C.FIGHT_BANNER_TIME) center = flags ? 'CAPTURE THE FLAG!' : 'FIGHT!';
         else if (me && me.fallTime >= 0) {
           center = 'KNOCKED OFF!';
           small = true;

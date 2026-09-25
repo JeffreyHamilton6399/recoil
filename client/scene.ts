@@ -8,10 +8,10 @@
 
 import * as THREE from 'three';
 import * as C from '../shared/constants.js';
-import { MAPS, mapScale, scaledBumpers, type MapDef } from '../shared/maps.js';
+import { MAPS, floorAt, mapScale, scaledBumpers, type MapDef } from '../shared/maps.js';
 import { clamp, flagBase } from '../shared/sim.js';
 import { FX_GROUNDED, FX_SHIELD, type GameEvent, type PlayerId, type PowerupKind, type RosterEntry } from '../shared/types.js';
-import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
+import { BOMB_WEAPON, SHOCK_WEAPON, TURRET_WEAPON, weaponDef } from '../shared/weapons.js';
 import { FONT, INK, POWERUP_STYLE, arenaOutline, makeSurfaceCanvas } from './art.js';
 import { animateCharacter, flashCharacter, makeCharacter, type Character } from './character.js';
 import { makeArms, makeGun, makeKnife, type Gun } from './guns.js';
@@ -78,6 +78,17 @@ export interface View {
   speaking?: ReadonlySet<PlayerId>;
   /** Capture the flag: Red's and Blue's flags (carrier -1 when at home). */
   flags?: ViewFlag[];
+  /** Turrets: [yaw, pitch, knocked out (1) or not]. */
+  turrets?: [number, number, number][];
+}
+
+/** A turret on the roof: the part that turns, and its glowing eye. */
+interface TurretObj {
+  head: THREE.Group;
+  eye: THREE.Sprite;
+  muzzle: THREE.Object3D;
+  yaw: number;
+  pitch: number;
 }
 
 export interface ViewFlag {
@@ -134,6 +145,11 @@ const BOOM_WORDS = ['KABOOM!', 'BOOM!', 'KRAKOOM!'];
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
+
+/** Shortest signed turn from angle a to angle b. */
+function angleBetween(a: number, b: number): number {
+  return ((((b - a + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) - Math.PI;
+}
 
 function toThree(x: number, y: number, z: number, out = new THREE.Vector3()): THREE.Vector3 {
   return out.set(x, z, -y);
@@ -635,6 +651,9 @@ export class Scene3D {
 
   private readonly rigs = new Map<PlayerId, Rig>();
   private readonly flagObjs: FlagObj[] = [];
+  private turretObjs: TurretObj[] = [];
+  /** Warning rings on the roof under falling bombs, by bullet id. */
+  private readonly bombMarks = new Map<number, THREE.Mesh>();
   /** Grappling hook lines, by player. */
   private readonly ropes = new Map<PlayerId, { line: THREE.Mesh; claw: THREE.Mesh }>();
   private readonly bullets = new Map<number, BulletObj>();
@@ -923,11 +942,11 @@ export class Scene3D {
       new THREE.Vector2(x1, y1),
       new THREE.Vector2(x0, y1),
     ];
-    const pieces: { shape: THREE.Shape; depth: number }[] = [];
+    const pieces: { shape: THREE.Shape; depth: number; top?: number }[] = [];
     if (map.roofs) {
       for (const r of map.roofs) {
         const shape = new THREE.Shape(rect((r.x - r.w / 2) * S, (r.y - r.d / 2) * S, (r.x + r.w / 2) * S, (r.y + r.d / 2) * S));
-        pieces.push({ shape, depth: r.bridge ? 0.6 : TOWER_DEPTH });
+        pieces.push({ shape, depth: r.bridge ? 0.6 : TOWER_DEPTH, top: r.h });
       }
     } else {
       const shape = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
@@ -960,8 +979,8 @@ export class Scene3D {
 
     const roof = new THREE.Group();
     roof.rotation.x = -Math.PI / 2; // shape (x, y) -> world (x, -z); extrusion -> up
-    for (const { shape, depth } of pieces) {
-      const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 40 });
+    for (const { shape, depth, top } of pieces) {
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: depth + (top ?? 0), bevelEnabled: false, curveSegments: 40 });
       geo.translate(0, 0, -depth);
       const tower = new THREE.Mesh(geo, [topMat, sideMat]);
       tower.receiveShadow = true;
@@ -970,9 +989,9 @@ export class Scene3D {
 
     // Hazard stripe around the edge (of every rooftop) and around every hole.
     this.edgeMat = new THREE.MeshBasicMaterial({ color: '#ffd93d', transparent: true, opacity: 0.9, depthWrite: false });
-    const stripe = (shape: THREE.Shape): void => {
+    const stripe = (shape: THREE.Shape, top = 0): void => {
       const edge = new THREE.Mesh(new THREE.ShapeGeometry(shape, 40), this.edgeMat ?? undefined);
-      edge.position.z = 0.02;
+      edge.position.z = top + 0.02;
       roof.add(edge);
     };
     if (map.roofs) {
@@ -992,7 +1011,7 @@ export class Scene3D {
         }
         const ring = new THREE.Shape(rect(x0, y0, x1, y1));
         ring.holes.push(new THREE.Path(rect(x0 + e, y0 + e, x1 - e, y1 - e).reverse()));
-        stripe(ring);
+        stripe(ring, r.h ?? 0);
       }
     } else {
       const ring = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
@@ -1010,6 +1029,7 @@ export class Scene3D {
     this.arena.add(buildBlocks(map, S));
     this.arena.add(buildRamps(map, S));
     this.pads = buildPads(map, S);
+    this.turretObjs = (map.turrets ?? []).map((t) => this.makeTurret(t.x * S, t.y * S, t.z ?? 0));
     this.arena.add(this.pads.group);
 
     // Bumper pillars.
@@ -1038,6 +1058,7 @@ export class Scene3D {
   // -------------------------------------------------------------------------
 
   private colorOf(view: View, id: PlayerId): string {
+    if (id < 0) return id === -1 ? '#ff9f1c' : '#ff3b4e';
     const r = view.roster.find((q) => q.id === id);
     return C.PLAYER_PALETTE[r?.color ?? id % C.PLAYER_PALETTE.length] ?? C.PLAYER_PALETTE[0];
   }
@@ -1103,7 +1124,7 @@ export class Scene3D {
       let obj = this.bullets.get(b.id);
       const w = weaponDef(b.weapon);
       // Boomer bombs and shock grenades are thrown objects, not bullets.
-      const bomb = b.weapon === 3 || b.weapon === SHOCK_WEAPON;
+      const bomb = b.weapon === 3 || b.weapon === 7 || b.weapon === SHOCK_WEAPON || b.weapon === BOMB_WEAPON || b.weapon === TURRET_WEAPON;
       const key = `${this.colorOf(view, b.owner)}|${bomb ? b.weapon : 'round'}`;
       if (!obj) {
         // Reuse a finished bullet of the same look if there is one.
@@ -1122,10 +1143,20 @@ export class Scene3D {
         const group = new THREE.Group();
         if (bomb) {
           // The Boomer lobs a grenade: dark, outlined, with a hot glow.
-          const ball = new THREE.Mesh(this.bulletGeo, toon(new THREE.Color(b.weapon === SHOCK_WEAPON ? '#1d4a5c' : '#2b2250')));
+          const shell = b.weapon === SHOCK_WEAPON ? '#1d4a5c' : b.weapon === BOMB_WEAPON ? '#1a1424' : b.weapon === TURRET_WEAPON ? '#5a2a08' : b.weapon === 7 ? '#5a4410' : '#2b2250';
+          const ball = new THREE.Mesh(this.bulletGeo, toon(new THREE.Color(shell)));
           outlined(ball, 1.15);
           group.add(ball);
-          group.add(glowSprite(accent, 2.6));
+          if (b.weapon === BOMB_WEAPON) {
+            // A proper cartoon bomb: fins on top and a red warning light.
+            const fin = outlined(new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.1, 1.4), toon('#3a3547')), 1.08);
+            fin.position.y = 1.1;
+            group.add(fin);
+            const fin2 = fin.clone();
+            fin2.rotation.y = Math.PI / 2;
+            group.add(fin2);
+          }
+          group.add(glowSprite(accent, b.weapon === BOMB_WEAPON ? 3.4 : 2.6));
         } else {
           // A small brass round with a hot tip.
           const round = new THREE.Mesh(this.roundGeo, new THREE.MeshBasicMaterial({ color: '#e0b04a' }));
@@ -1147,10 +1178,10 @@ export class Scene3D {
       const v = toThree(b.vx, b.vy, b.vz, tmpV);
       const speed = v.length();
       if (bomb) {
-        obj.group.scale.setScalar(b.r * 0.8);
+        obj.group.scale.setScalar(b.weapon === BOMB_WEAPON ? b.r * 1.6 : b.r * 0.8);
       } else {
         // Rounds are drawn a fixed small size (the hitbox is a bit more forgiving).
-        const len = b.weapon === 2 ? 0.2 : 0.12;
+        const len = b.weapon === 2 || b.weapon === 6 ? 0.2 : b.weapon === 5 ? 0.09 : 0.12;
         obj.group.scale.setScalar(len);
         if (speed > 1e-3) obj.group.quaternion.setFromUnitVectors(UP, tmpV2.copy(v).multiplyScalar(1 / speed));
       }
@@ -1159,8 +1190,21 @@ export class Scene3D {
         obj.tail.position.copy(obj.group.position);
         obj.tail.quaternion.setFromUnitVectors(UP, v.multiplyScalar(-1 / speed));
         // Longshot rounds leave a long streak, pellets short ones.
-        const len = bomb ? Math.min(1.5, speed * 0.04) : b.weapon === 2 ? Math.min(14, speed * 0.06) : b.weapon === 1 ? Math.min(2.2, speed * 0.028) : Math.min(5, speed * 0.045);
-        const width = bomb ? b.r * 0.6 : b.weapon === 2 ? 0.05 : b.weapon === 4 ? 0.018 : 0.026;
+        const len =
+          b.weapon === BOMB_WEAPON
+            ? Math.min(6, speed * 0.25)
+            : bomb
+              ? Math.min(1.5, speed * 0.04)
+              : b.weapon === 6
+                ? Math.min(24, speed * 0.08)
+                : b.weapon === 2
+                  ? Math.min(14, speed * 0.06)
+                  : b.weapon === 1
+                    ? Math.min(2.2, speed * 0.028)
+                    : b.weapon === 5
+                      ? Math.min(3, speed * 0.03)
+                      : Math.min(5, speed * 0.045);
+        const width = bomb ? b.r * 0.6 : b.weapon === 6 ? 0.08 : b.weapon === 2 ? 0.05 : b.weapon === 4 || b.weapon === 5 ? 0.018 : 0.026;
         obj.tail.scale.set(width, len, width);
       } else {
         obj.tail.visible = false;
@@ -1198,6 +1242,98 @@ export class Scene3D {
         }
       }
       this.bullets.delete(id);
+    }
+  }
+
+  /** A turret: a squat base, and a head with a barrel and a red eye that turns. */
+  private makeTurret(x: number, y: number, z: number): TurretObj {
+    const g = new THREE.Group();
+    toThree(x, y, z, g.position);
+    const metal = toon('#4a4f63');
+    const trim = toon('#ff9f1c');
+    const base = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.6, 0.55, 16), metal), 1.06);
+    base.position.y = 0.27;
+    g.add(base);
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.05, 6, 20), trim);
+    band.rotation.x = Math.PI / 2;
+    band.position.y = 0.45;
+    g.add(band);
+    const head = new THREE.Group();
+    head.position.y = C.TURRET_HEIGHT;
+    const shell = outlined(new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.55, 0.8), metal), 1.06);
+    head.add(shell);
+    const barrel = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 0.95, 10), toon('#2b2f3d')), 1.12);
+    barrel.rotation.z = -Math.PI / 2;
+    barrel.position.x = 0.8;
+    head.add(barrel);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.97, 0.1, 0.82), trim);
+    stripe.position.y = 0.12;
+    head.add(stripe);
+    const eye = glowSprite('#ff3b4e', 0.9);
+    eye.position.set(0.5, 0.05, 0);
+    head.add(eye);
+    const muzzle = new THREE.Object3D();
+    muzzle.position.x = 1.3;
+    head.add(muzzle);
+    g.add(head);
+    this.arena.add(g);
+    return { head, eye, muzzle, yaw: 0, pitch: 0 };
+  }
+
+  /** Turrets turn smoothly towards what the server says; knocked-out ones slump and smoke. */
+  private syncTurrets(view: View, dt: number): void {
+    const list = view.turrets ?? [];
+    this.turretObjs.forEach((t, i) => {
+      const [yaw, pitch, down] = list[i] ?? [t.yaw, t.pitch, 0];
+      const k = Math.min(1, dt * 14);
+      t.yaw += angleBetween(t.yaw, yaw) * k;
+      t.pitch += ((down ? -0.55 : pitch) - t.pitch) * k;
+      t.head.rotation.set(0, t.yaw, t.pitch);
+      t.eye.visible = !down;
+      if (down && Math.random() < 0.25) {
+        t.head.getWorldPosition(tmpV);
+        this.particles.burst(tmpV, 1, tmpColor.set('#3a3547'), 1.2, 0.9, -2.5);
+      }
+    });
+  }
+
+  /** A pulsing red ring on the roof under every falling bomb. */
+  private syncBombMarks(view: View): void {
+    const map = MAPS[view.mapIndex] ?? MAPS[0];
+    const seen = new Set<number>();
+    for (const b of view.bullets) {
+      if (b.weapon !== BOMB_WEAPON) continue;
+      seen.add(b.id);
+      let mark = this.bombMarks.get(b.id);
+      if (!mark) {
+        const r = weaponDef(BOMB_WEAPON).splash;
+        mark = new THREE.Mesh(
+          new THREE.RingGeometry(r * 0.82, r, 40),
+          new THREE.MeshBasicMaterial({ color: '#ff3b4e', transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }),
+        );
+        mark.rotation.x = -Math.PI / 2;
+        const dot = new THREE.Mesh(
+          new THREE.CircleGeometry(r * 0.25, 24),
+          new THREE.MeshBasicMaterial({ color: '#ff3b4e', transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide }),
+        );
+        mark.add(dot);
+        this.scene.add(mark);
+        this.bombMarks.set(b.id, mark);
+      }
+      const floor = floorAt(map, view.arenaRadius, b.x, b.y, b.z);
+      mark.visible = floor > -Infinity;
+      toThree(b.x, b.y, Math.max(0, floor) + 0.05, mark.position);
+      // Tighter and faster the closer it gets.
+      const near = clamp(1 - (b.z - floor) / C.BOMB_HEIGHT, 0, 1);
+      const pulse = 0.5 + 0.5 * Math.sin(this.time * (8 + near * 22));
+      mark.scale.setScalar(1.25 - near * 0.25 + pulse * 0.06);
+      (mark.material as THREE.MeshBasicMaterial).opacity = 0.35 + near * 0.5 * pulse + 0.1;
+    }
+    for (const [id, mark] of this.bombMarks) {
+      if (seen.has(id)) continue;
+      this.scene.remove(mark);
+      disposeTree(mark);
+      this.bombMarks.delete(id);
     }
   }
 
@@ -1557,9 +1693,43 @@ export class Scene3D {
         if (ev.p === view.myId) this.addTrauma(0.2 + ev.f / 35);
         return heavy;
       }
+      case 'tfire': {
+        const t = this.turretObjs[ev.i];
+        if (!t) return false;
+        t.muzzle.getWorldPosition(tmpV);
+        const dir = tmpV2.set(Math.cos(t.yaw), 0, -Math.sin(t.yaw));
+        this.particles.burst(tmpV, 16, new THREE.Color('#ffb347'), 7, 0.25, 0, dir, 0.5);
+        this.particles.burst(tmpV, 6, new THREE.Color('#fff6e0'), 4, 0.15, 0);
+        return false;
+      }
+      case 'thit': {
+        const t = this.turretObjs[ev.i];
+        if (!t) return false;
+        t.head.getWorldPosition(tmpV);
+        this.particles.burst(tmpV, 10, new THREE.Color('#ffe08a'), 8, 0.25, 4);
+        return false;
+      }
+      case 'tdown': {
+        const t = this.turretObjs[ev.i];
+        if (!t) return false;
+        t.head.getWorldPosition(tmpV);
+        this.particles.burst(tmpV, 50, new THREE.Color('#ffb347'), 11, 0.6, 5);
+        this.particles.burst(tmpV, 30, new THREE.Color('#3a3547'), 5, 1.2, -2);
+        this.addWord(tmpV.clone().add(tmpV2.set(0, 1.2, 0)), 'KA-CHUNK!', 3);
+        this.addTrauma(clamp(0.4 - tmpV.distanceTo(this.camera.position) / 30, 0, 0.4));
+        return false;
+      }
+      case 'sudden':
+        this.addTrauma(0.35);
+        return false;
       case 'boom': {
         const at = toThree(ev.x, ev.y, ev.z);
         const isShock = ev.w === SHOCK_WEAPON;
+        if (ev.w === BOMB_WEAPON) {
+          // Sudden-death bombs: a bigger, darker blast with a smoke column.
+          this.particles.burst(at, 40, new THREE.Color('#ff3b4e'), 14, 0.7, 5);
+          this.particles.burst(at, 40, new THREE.Color('#2a2438'), 6, 1.4, -3);
+        }
         if (isShock) {
           // A shockwave: an electric blue burst, no fire.
           this.particles.burst(at, 70, new THREE.Color('#7fe7ff'), 16, 0.5, 0);
@@ -1752,6 +1922,8 @@ export class Scene3D {
 
     this.syncPlayers(view, cam, dt);
     this.syncFlags(view, cam);
+    this.syncTurrets(view, dt);
+    this.syncBombMarks(view);
     this.syncRopes(view, cam);
     this.syncBullets(view);
     this.syncPowerups(view);

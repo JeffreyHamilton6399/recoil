@@ -216,7 +216,7 @@ export class Input {
           // Lock only the game's keys; Escape stays with the browser so it can
           // still let go of the mouse and leave fullscreen with a single press.
           const kb = (navigator as Navigator & { keyboard?: { lock?: (keys?: string[]) => Promise<void> } }).keyboard;
-          return kb?.lock?.([...Object.keys(KEYS), 'KeyV', 'KeyR', 'KeyM', 'KeyT', 'KeyN', 'Tab', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5']);
+          return kb?.lock?.([...Object.keys(KEYS), 'KeyV', 'KeyR', 'KeyM', 'KeyT', 'KeyN', 'Tab', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Digit0']);
         })
         .catch(() => {});
     }

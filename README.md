@@ -22,10 +22,10 @@ first to 5 round wins takes the match.
   and the flag goes home. First to 3 captures, or the most after 5 minutes.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
-- **20 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
+- **22 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
   Vent Farm, Chimneys, Hex Plaza, Billboard, Sky Garden, Split Level, Parking
   Deck, Solar Farm, Downtown, High Rise, City Blocks, Skyline, Twin Bases,
-  Crane Yard, Sky Islands and Canyon Run. The last six are blocks of separate buildings: jump
+  Crane Yard, Sky Islands, Canyon Run, Terraces and Stack City. The last eight are blocks of separate buildings: jump
   the gaps, blast across with recoil, or take the bridges. Downtown and High Rise have
   two-storey towers to walk into: stairs up to the second floor, again up to
   a roof deck, and sky bridges between them. Arenas can be circles, squares, hexagons, or diamonds,
@@ -41,8 +41,15 @@ first to 5 round wins takes the match.
   - **Longshot:** a bolt-action sniper. Slow, but one clean hit sends them flying.
   - **Boomer:** lobs bombs that burst on impact and blast everyone nearby.
   - **Pepper:** an SMG. Hold the trigger for a stream of little pokes.
+  - **Minigun:** hold it down for a storm of tiny shoves. Slow to run with.
+  - **Railgun:** one slug that goes straight through everyone in a line.
+  - **Flak:** shells that burst in the air, great for catching people mid-jump.
 - **Obstacles on every map:** crates, AC units, water tanks and brick walls to
   climb, stand on and hide behind.
+- **Turrets** stand guard on several maps and shoot at anyone they can see.
+  Shoot one enough to knock it out for a while.
+- **Sudden death:** a round that goes past a minute gets bombs dropped on it,
+  faster and faster. A red ring shows where each one will land.
 - **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, Heal, and Speed.
 - **Hand-drawn toon look, all made in code with three.js:** a post-processing
   pass inks the whole frame like a comic panel. Outlines come from depth and

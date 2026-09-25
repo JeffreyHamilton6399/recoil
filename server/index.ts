@@ -661,6 +661,7 @@ function tickRoom(room: Room, now: number): void {
     snap.tm = state.matchTeam;
   }
   if (state.ctf) snap.fl = state.flags.map((f) => [f.x, f.y, f.z, f.carrier]);
+  if (state.turrets.length > 0) snap.tu = state.turrets.map((t) => [t.yaw, t.pitch, t.down > 0 ? 1 : 0]);
   const data = JSON.stringify(snap, compactReplacer);
   for (const c of clients) sendRaw(c, data);
 }

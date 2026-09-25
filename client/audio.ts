@@ -279,9 +279,24 @@ export class Sfx {
     this.tone('sine', 300, 560, 0.08, 0.06 * volume, pan, 0, 0.1);
   }
 
-  /** A shot from a specific weapon (0 Revolver, 1 Scatter, 2 Longshot, 3 Boomer, 4 Pepper). */
+  /** A shot from a specific weapon (0 Revolver, 1 Scatter, 2 Longshot, 3 Boomer, 4 Pepper, 5 Minigun, 6 Railgun, 7 Flak). */
   shot(weapon: number, pan: number, volume = 1): void {
     switch (weapon) {
+      case 5: // Minigun: a buzzing brrt, each shot a tiny tick.
+        this.gunshot({ crack: 3000, body: 4400, thump: 170, size: 0.08, tail: 0.08, vol: 0.32 * volume, pan });
+        this.tone('square', 95 + Math.random() * 10, 90, 0.05, 0.03 * volume, pan, 0, 0.05);
+        break;
+      case 6: // Railgun: a rising electric whine, then a hard zap-crack.
+        this.tone('sawtooth', 300, 2400, 0.12, 0.08 * volume, pan, 0, 0.2);
+        this.gunshot({ crack: 5200, body: 6500, thump: 90, size: 0.9, tail: 0.7, vol: 0.9 * volume, pan });
+        this.tone('sine', 1800, 180, 0.4, 0.14 * volume, pan, 0.02, 0.6);
+        this.noiseBurst('bandpass', 7000, 2000, 2, 0.35, 0.08 * volume, pan, 0.002, 0.03, 0.8);
+        break;
+      case 7: // Flak: a deep pop and a whistle out of the barrel.
+        this.tone('sine', 150, 60, 0.18, 0.5 * volume, pan, 0, 0.2);
+        this.noiseBurst('lowpass', 2200, 300, 0.8, 0.12, 0.35 * volume, pan, 0.002, 0, 0.3);
+        this.tone('sine', 1400, 900, 0.3, 0.05 * volume, pan, 0.03, 0.3);
+        break;
       case 1: // Scatter: a shotgun boom, then the pump.
         this.gunshot({ crack: 1700, body: 3200, thump: 95, size: 1, tail: 0.45, vol: 0.95 * volume, pan });
         this.action(pan, volume, 0.32);
@@ -501,6 +516,46 @@ export class Sfx {
   ko(good: boolean): void {
     const notes = good ? [523, 659, 784, 1047] : [440, 392, 330];
     notes.forEach((f, i) => this.pluck(f, 0.22, 0.16, 0, 0.1 + i * 0.09));
+  }
+
+  /** A turret firing: a heavy mechanical chunk with a thump. */
+  turretShot(pan: number, volume = 1): void {
+    this.gunshot({ crack: 1400, body: 2600, thump: 80, size: 0.7, tail: 0.3, vol: 0.55 * volume, pan });
+    this.click(900, 0.12 * volume, pan, 0.006, 0.08);
+    this.click(700, 0.1 * volume, pan, 0.006, 0.14);
+  }
+
+  /** A turret being hit: a tinny clank. */
+  turretHit(pan: number): void {
+    this.tone('square', 1300 + Math.random() * 300, 900, 0.06, 0.05, pan, 0, 0.2);
+    this.noiseBurst('bandpass', 4000, 2500, 3, 0.06, 0.06, pan, 0.001, 0, 0.2);
+  }
+
+  /** A turret knocked out: sparks, a crunch and a winding-down whine. */
+  turretDown(pan: number): void {
+    this.boom(3, pan);
+    this.tone('sawtooth', 900, 60, 0.9, 0.08, pan, 0.05, 0.4);
+    for (let i = 0; i < 5; i++) this.click(2500 + Math.random() * 2000, 0.06, pan, 0.006, 0.1 + i * 0.07);
+  }
+
+  /** A bomb falling from the sky towards (pan): a long falling whistle. */
+  bombWhistle(pan: number, volume = 1): void {
+    this.tone('sine', 2100, 600, 1.7, 0.07 * volume, pan, 0, 0.3);
+    this.tone('sine', 2130, 610, 1.7, 0.04 * volume, pan, 0, 0.3);
+  }
+
+  /** Sudden death: an air-raid siren wail. */
+  siren(): void {
+    for (let i = 0; i < 2; i++) {
+      this.tone('sawtooth', 380, 760, 0.9, 0.06, 0, i * 1.6, 0.4);
+      this.tone('sawtooth', 760, 380, 0.7, 0.06, 0, i * 1.6 + 0.9, 0.4);
+    }
+  }
+
+  /** You knocked someone off: a bright, satisfying ding-ding. */
+  knockout(): void {
+    [1319, 1760].forEach((f, i) => this.pluck(f, 0.25, 0.16, 0, i * 0.08));
+    this.tone('sine', 2637, 2637, 0.3, 0.04, 0, 0.16, 0.5);
   }
 
   /** Grappling hook: the line zips out and the hook bites (pan: where it bit). */

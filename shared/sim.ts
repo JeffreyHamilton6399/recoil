@@ -8,7 +8,7 @@
 // The world is 3D: x and y are horizontal, z is up, and the roof is at z = 0.
 
 import * as C from './constants.js';
-import { MAPS, floorAt, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, spawnAt, spawnPoint, type MapDef } from './maps.js';
+import { MAPS, floorAt, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, scaledTurrets, spawnAt, spawnPoint, type MapDef } from './maps.js';
 import {
   FX_AIM,
   FX_AIR_JUMPED,
@@ -35,8 +35,9 @@ import {
   type PlayerSnap,
   type PlayerState,
   type PowerupKind,
+  type Turret,
 } from './types.js';
-import { OFFHANDS, SHOCK_WEAPON, WEAPONS, weaponDef } from './weapons.js';
+import { BOMB_OWNER, BOMB_WEAPON, OFFHANDS, SHOCK_WEAPON, TURRET_OWNER, TURRET_WEAPON, WEAPONS, weaponDef } from './weapons.js';
 
 export const NO_INPUT: InputState = Object.freeze({
   forward: 0,
@@ -244,6 +245,175 @@ function placeAll(s: GameState): void {
     resetAtSpawn(s, p, i, n);
   });
   s.flags = s.ctf ? [0, 1].map((team) => ({ team, ...flagBase(currentMap(s), team), z: 0, carrier: -1 })) : [];
+  s.turrets = (currentMap(s).turrets ?? []).map((_, i): Turret => ({ yaw: i * 1.7, pitch: 0, cd: 1, hp: C.TURRET_HP, down: 0, target: -1, retarget: 0 }));
+  s.bombIn = 0;
+}
+
+/** Nothing solid between two points (the roof, blocks and ramps all block the view). */
+function lineOfSight(map: MapDef, R: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): boolean {
+  const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 0.6);
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    const x = x0 + (x1 - x0) * t;
+    const y = y0 + (y1 - y0) * t;
+    const z = z0 + (z1 - z0) * t;
+    if ((z <= 0 && !isOffMap(map, R, x, y)) || inBlock(map, R, x, y, z)) return false;
+  }
+  return true;
+}
+
+/**
+ * Turrets: each one finds the nearest player it can see, swings round to
+ * lead them, and fires a heavy slug when it's lined up. Everyone is fair
+ * game. Knocked-out turrets come back after a while.
+ */
+function updateTurrets(s: GameState, dt: number, events: GameEvent[]): void {
+  const map = currentMap(s);
+  const R = s.arenaRadius;
+  const spots = scaledTurrets(map, R);
+  const w = weaponDef(TURRET_WEAPON);
+  s.turrets.forEach((t, i) => {
+    const at = spots[i];
+    if (!at) return;
+    if (t.down > 0) {
+      t.down = Math.max(0, t.down - dt);
+      if (t.down === 0) t.hp = C.TURRET_HP;
+      return;
+    }
+    t.cd = Math.max(0, t.cd - dt);
+    t.retarget -= dt;
+    let target = t.target >= 0 ? getPlayer(s, t.target) : undefined;
+    if (target && (!target.inRound || target.falling)) target = undefined;
+    if (t.retarget <= 0) {
+      t.retarget = 0.4;
+      let best: PlayerState | undefined;
+      let bestD = C.TURRET_RANGE;
+      for (const p of s.players) {
+        if (!p.inRound || p.falling) continue;
+        const d = Math.hypot(p.x - at.x, p.y - at.y, p.z + 1 - at.z);
+        if (d < bestD && lineOfSight(map, R, at.x, at.y, at.z, p.x, p.y, p.z + 1)) {
+          best = p;
+          bestD = d;
+        }
+      }
+      target = best;
+      t.target = best?.id ?? -1;
+    }
+    let wantYaw = t.yaw + 0.6;
+    let wantPitch = 0;
+    if (target) {
+      const lead = (Math.hypot(target.x - at.x, target.y - at.y) / w.speed) * 0.7;
+      const tx = target.x + target.vx * lead;
+      const ty = target.y + target.vy * lead;
+      const tz = target.z + 1 + target.vz * lead * 0.5;
+      wantYaw = Math.atan2(ty - at.y, tx - at.x);
+      wantPitch = Math.atan2(tz - at.z, Math.hypot(tx - at.x, ty - at.y));
+    }
+    const turn = C.TURRET_TURN * dt;
+    t.yaw = wrapAngle(t.yaw + clamp(angleDiff(t.yaw, wantYaw), -turn, turn));
+    t.pitch += clamp(wantPitch - t.pitch, -turn, turn);
+    if (target && t.cd <= 0 && Math.abs(angleDiff(t.yaw, wantYaw)) < 0.06 && Math.abs(wantPitch - t.pitch) < 0.06) {
+      t.cd = C.TURRET_COOLDOWN;
+      const d = aimDir(t.yaw, t.pitch);
+      const off = C.TURRET_RADIUS + 0.2;
+      s.bullets.push({
+        id: s.nextId++,
+        owner: TURRET_OWNER,
+        team: -1,
+        weapon: TURRET_WEAPON,
+        x: at.x + d.x * off,
+        y: at.y + d.y * off,
+        z: at.z + d.z * off,
+        vx: d.x * w.speed,
+        vy: d.y * w.speed,
+        vz: d.z * w.speed,
+        radius: w.radius,
+        knockback: w.knockback,
+        damage: w.damage,
+        age: 0,
+      });
+      events.push({ k: 'tfire', i, x: at.x, y: at.y, z: at.z });
+    }
+  });
+}
+
+/** The working turret a shot at (x, y, z) hits, or -1. */
+function turretAt(s: GameState, x: number, y: number, z: number, r: number): number {
+  const spots = scaledTurrets(currentMap(s), s.arenaRadius);
+  for (let i = 0; i < s.turrets.length; i++) {
+    const at = spots[i];
+    if (!at || s.turrets[i].down > 0) continue;
+    const rr = C.TURRET_RADIUS + r;
+    const dx = x - at.x;
+    const dy = y - at.y;
+    const dz = z - (at.z - 0.3);
+    if (dx * dx + dy * dy + dz * dz < rr * rr) return i;
+  }
+  return -1;
+}
+
+function damageTurret(s: GameState, i: number, amount: number, events: GameEvent[]): void {
+  const t = s.turrets[i];
+  if (!t || t.down > 0) return;
+  t.hp -= amount;
+  events.push({ k: 'thit', i });
+  if (t.hp <= 0) {
+    const at = scaledTurrets(currentMap(s), s.arenaRadius)[i];
+    t.down = C.TURRET_DOWN_TIME;
+    t.target = -1;
+    events.push({ k: 'tdown', i, x: at?.x ?? 0, y: at?.y ?? 0, z: at?.z ?? 0 });
+  }
+}
+
+/**
+ * Sudden death: a round that runs past BOMB_TIME gets bombs dropped on it,
+ * faster and faster, mostly near people.
+ */
+function updateBombs(s: GameState, dt: number, events: GameEvent[]): void {
+  if (s.playTime < C.BOMB_TIME) return;
+  if (s.playTime - dt < C.BOMB_TIME) events.push({ k: 'sudden' });
+  s.bombIn -= dt;
+  if (s.bombIn > 0) return;
+  const over = s.playTime - C.BOMB_TIME;
+  s.bombIn = Math.max(C.BOMB_EVERY_MIN, C.BOMB_EVERY - over * 0.025);
+  const map = currentMap(s);
+  const R = s.arenaRadius;
+  const alive = s.players.filter((p) => p.inRound && !p.falling);
+  let x = 0;
+  let y = 0;
+  if (alive.length > 0 && random(s) < 0.6) {
+    const p = alive[Math.floor(random(s) * alive.length)];
+    const a = random(s) * Math.PI * 2;
+    const r = random(s) * 4;
+    x = p.x + Math.cos(a) * r;
+    y = p.y + Math.sin(a) * r;
+  } else {
+    for (let tries = 0; tries < 8; tries++) {
+      const a = random(s) * Math.PI * 2;
+      const r = Math.sqrt(random(s)) * R * 0.9;
+      x = Math.cos(a) * r;
+      y = Math.sin(a) * r;
+      if (!isOffMap(map, R, x, y)) break;
+    }
+  }
+  const w = weaponDef(BOMB_WEAPON);
+  s.bullets.push({
+    id: s.nextId++,
+    owner: BOMB_OWNER,
+    team: -1,
+    weapon: BOMB_WEAPON,
+    x,
+    y,
+    z: C.BOMB_HEIGHT,
+    vx: 0,
+    vy: 0,
+    vz: -14,
+    radius: w.radius,
+    knockback: w.knockback,
+    damage: w.damage,
+    age: 0,
+  });
+  events.push({ k: 'bomb', x, y });
 }
 
 /** Capture the flag: a flag goes back to its base. */
@@ -316,6 +486,8 @@ export function createGame(seed: number): GameState {
     teams: false,
     ctf: false,
     flags: [],
+    turrets: [],
+    bombIn: 0,
     teamScores: [0, 0],
     roundTeam: null,
     matchTeam: null,
@@ -472,6 +644,7 @@ export function startRound(s: GameState): void {
   s.powerupTimer = C.POWERUP_FIRST_DELAY;
   s.roundWinner = null;
   s.roundTeam = null;
+  s.bombIn = 0;
   // Someone left and a team is empty: even it out so there's a fight.
   if (s.teams && (teamSize(s, 0) === 0 || teamSize(s, 1) === 0)) balanceTeams(s);
   placeAll(s);
@@ -1149,6 +1322,13 @@ function knock(p: PlayerState, dx: number, dy: number, dz: number, impulse: numb
 function explode(s: GameState, b: Bullet, x: number, y: number, z: number, events: GameEvent[]): void {
   const radius = weaponDef(b.weapon).splash;
   events.push({ k: 'boom', p: b.owner, x, y, z, r: radius, w: b.weapon });
+  if (b.owner >= 0) {
+    const spots = scaledTurrets(currentMap(s), s.arenaRadius);
+    spots.forEach((at, i) => {
+      const d = Math.hypot(at.x - x, at.y - y, at.z - z);
+      if (d < radius + C.TURRET_RADIUS) damageTurret(s, i, b.damage * 2 * Math.max(0.3, 1 - d / radius), events);
+    });
+  }
   for (const p of s.players) {
     if (!p.inRound || p.falling) continue;
     const cz = p.z + C.PLAYER_HEIGHT / 2;
@@ -1191,9 +1371,23 @@ function moveBullet(s: GameState, b: Bullet, h: number, standing: PlayerState[],
     b.y += b.vy * hh;
     b.z += b.vz * hh;
 
-    // Players.
+    // Turrets (players' shots only).
+    if (b.owner >= 0 && s.turrets.length > 0) {
+      const ti = turretAt(s, b.x, b.y, b.z, b.radius);
+      if (ti >= 0) {
+        if (w.splash > 0) explode(s, b, b.x, b.y, b.z, events);
+        else {
+          damageTurret(s, ti, b.damage, events);
+          events.push({ k: 'cancel', x: b.x, y: b.y, z: b.z, r: b.radius });
+        }
+        return false;
+      }
+    }
+
+    // Players. A piercing shot hits each one once and carries on.
     for (const p of standing) {
       if (p.id === b.owner || (s.teams && p.team === b.team)) continue;
+      if (w.pierce && b.hits?.includes(p.id)) continue;
       const rr = C.PLAYER_RADIUS + b.radius;
       if (capsuleDist2(p, b.x, b.y, b.z) >= rr * rr) continue;
       if (w.splash > 0) {
@@ -1203,12 +1397,20 @@ function moveBullet(s: GameState, b: Bullet, h: number, standing: PlayerState[],
       if (p.shield > 0) {
         p.shield = 0;
         events.push({ k: 'block', p: p.id, x: b.x, y: b.y, z: b.z });
+        if (w.pierce) {
+          (b.hits ??= []).push(p.id);
+          continue;
+        }
         return false;
       }
       const impulse = b.knockback * (1 + p.damage / C.DAMAGE_SCALE);
       knock(p, b.vx, b.vy, b.vz, impulse);
       p.damage += b.damage;
       events.push({ k: 'hit', p: p.id, o: b.owner, x: b.x, y: b.y, z: b.z, f: impulse, d: b.damage });
+      if (w.pierce) {
+        (b.hits ??= []).push(p.id);
+        continue;
+      }
       return false;
     }
 
@@ -1282,6 +1484,8 @@ function integrate(s: GameState, h: number, events: GameEvent[]): void {
     for (let c = a + 1; c < s.bullets.length; c++) {
       const bb = s.bullets[c];
       if (dead.has(bb.id) || bb.owner === ba.owner || (s.teams && bb.team === ba.team)) continue;
+      // Sudden-death bombs can't be shot down.
+      if (ba.weapon === BOMB_WEAPON || bb.weapon === BOMB_WEAPON) continue;
       const rr = ba.radius + bb.radius;
       const dx = bb.x - ba.x;
       const dy = bb.y - ba.y;
@@ -1365,6 +1569,8 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
     if (!s.ctf) s.arenaRadius = arenaRadiusAt(s.playTime);
   }
   if (lobby || playing) updatePowerups(s, dt, events);
+  if (lobby || playing) updateTurrets(s, dt, events);
+  if (playing && !s.ctf) updateBombs(s, dt, events);
 
   const h = dt / C.PHYSICS_SUBSTEPS;
   for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) integrate(s, h, events);

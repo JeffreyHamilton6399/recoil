@@ -4,10 +4,10 @@
 // HUD) and the render loop.
 
 import * as C from '../shared/constants.js';
-import { MAPS } from '../shared/maps.js';
+import { MAPS, scaledTurrets } from '../shared/maps.js';
 import { angleDiff, clamp, controlPlayer, lerp, movePlayer, phaseRules, playerFromSnap } from '../shared/sim.js';
 import { FX_KNIFE, POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
-import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
+import { BOMB_OWNER, SHOCK_WEAPON, TURRET_OWNER, weaponDef } from '../shared/weapons.js';
 import type { GameEvent, InputState, PlayerId, PlayerSnap, PlayerState, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
 import { Sfx } from './audio.js';
 import { Hud, type TeamInfo } from './hud.js';
@@ -276,17 +276,17 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') ui.setMuted(sfx.toggleMute());
   // Number keys pick a weapon while the lobby is up.
   if (e.code === 'KeyR' && !e.repeat && roomCode && myId !== -1) setRecoilMode(!recoilMode);
-  const digit = /^Digit([1-9])$/.exec(e.code);
+  const digit = /^Digit([0-9])$/.exec(e.code);
   if (digit && spectating) {
-    // Out of the round: pick the loadout for your next spawn.
+    // Out of the round: pick the loadout for your next spawn (1-8 guns, 9 knife, 0 grenade).
     const n = Number(digit[1]);
-    if (n <= 5) ui.setWeapon(n - 1);
-    else if (n === 6) ui.setOffhand(C.OFFHAND_KNIFE);
-    else if (n === 7) ui.setOffhand(C.OFFHAND_SHOCK);
+    if (n >= 1 && n <= 8) ui.setWeapon(n - 1);
+    else if (n === 9) ui.setOffhand(C.OFFHAND_KNIFE);
+    else if (n === 0) ui.setOffhand(C.OFFHAND_SHOCK);
   } else if (digit && input.locked) {
     if (digit[1] === '1') setKnife(false);
     if (digit[1] === '2') setKnife(true);
-  } else if (digit && ui.inLobby && myId !== -1) ui.setWeapon(Number(digit[1]) - 1);
+  } else if (digit && ui.inLobby && myId !== -1 && digit[1] !== '0') ui.setWeapon(Number(digit[1]) - 1);
 });
 // Crisp UI sounds for every button in the menus and lobby.
 document.addEventListener('click', (e) => {
@@ -710,6 +710,7 @@ function viewAt(time: number): View | null {
     roster,
     myId,
     flags: b.fl?.map(([x, y, z, carrier]) => ({ x, y, z, carrier })),
+    turrets: b.tu,
   };
 }
 
@@ -790,10 +791,13 @@ function attractView(time: number): View {
 // ---------------------------------------------------------------------------
 
 function colorOf(id: PlayerId): string {
+  if (id < 0) return id === TURRET_OWNER ? '#ff9f1c' : '#ff3b4e';
   const r = roster.find((q) => q.id === id);
   return C.PLAYER_PALETTE[r?.color ?? id] ?? C.PLAYER_PALETTE[0];
 }
 function nameOf(id: PlayerId): string {
+  if (id === TURRET_OWNER) return 'A turret';
+  if (id === BOMB_OWNER) return 'A bomb';
   return roster.find((q) => q.id === id)?.name ?? `Player ${id + 1}`;
 }
 
@@ -869,7 +873,9 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
       if (last && time - last.time < 5 && last.by !== ev.p) {
         if (last.by === myId) {
           hud.hitMarker(true);
+          hud.knockout(nameOf(ev.p), colorOf(ev.p));
           sfx.knockoutConfirm();
+          sfx.knockout();
         }
         hud.addFeed([[nameOf(last.by), colorOf(last.by)], ' knocked ', [nameOf(ev.p), colorOf(ev.p)], ' off']);
       } else {
@@ -880,6 +886,27 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
     }
     case 'hook':
       if (ev.p !== myId) sfx.hook(scene.panFor(ev.x, ev.y, ev.z));
+      break;
+    case 'tfire': {
+      const at = scaledTurrets(MAPS[view.mapIndex] ?? MAPS[0], view.arenaRadius)[ev.i];
+      if (at) sfx.turretShot(scene.panFor(at.x, at.y, at.z), 0.8);
+      break;
+    }
+    case 'thit': {
+      const at = scaledTurrets(MAPS[view.mapIndex] ?? MAPS[0], view.arenaRadius)[ev.i];
+      if (at) sfx.turretHit(scene.panFor(at.x, at.y, at.z));
+      break;
+    }
+    case 'tdown':
+      sfx.turretDown(scene.panFor(ev.x, ev.y, ev.z));
+      hud.addFeed([['Turret', '#ff9f1c'], ' knocked out']);
+      break;
+    case 'bomb':
+      sfx.bombWhistle(scene.panFor(ev.x, ev.y, 0), 0.8);
+      break;
+    case 'sudden':
+      sfx.siren();
+      hud.flashCenter('SUDDEN DEATH!', 'Bombs are falling. Watch for the red rings!', 3);
       break;
     case 'jump':
       if (ev.p !== myId) {
@@ -1110,6 +1137,8 @@ function frame(): void {
         ready: pred ? 1 - Math.min(1, pred.cooldown / Math.max(0.05, weaponDef(pred.weapon).cooldown)) : 1,
         offhand: pred?.offhand ?? ui.offhand,
         offLeft: pred?.offCd ?? 0,
+        hookLeft: pred?.grappleCd ?? 0,
+        hooked: (pred?.grappleT ?? -1) >= 0,
         knife: pred?.knifeOut ?? false,
         recoil: recoilMode,
       },

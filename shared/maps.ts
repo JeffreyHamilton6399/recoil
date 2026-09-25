@@ -88,6 +88,15 @@ export interface Roof {
   w: number;
   d: number;
   bridge?: boolean;
+  /** A taller building: its rooftop is this many metres up (default 0). */
+  h?: number;
+}
+
+/** An automatic turret, at (x, y) design units, standing on something z metres up. */
+export interface TurretSpot {
+  x: number;
+  y: number;
+  z?: number;
 }
 
 export interface MapDef {
@@ -106,6 +115,8 @@ export interface MapDef {
   pads: Circle[];
   /** A block of separate buildings: only these rooftops (and bridges) are solid. */
   roofs?: Roof[];
+  /** Automatic turrets that shoot at anyone in range. */
+  turrets?: TurretSpot[];
   theme: MapTheme;
 }
 
@@ -486,6 +497,7 @@ export const MAPS: readonly MapDef[] = [
       crate(3.2, 90, 0.8, 1.1),
       crate(3.2, 270, 0.8, 1.1),
     ),
+    turrets: [{ x: -5.4, y: -0.8, z: DECK_TOP }, { x: 5.4, y: -0.8, z: DECK_TOP }],
     pads: [pad(6.2, 135), pad(6.2, 315)],
     theme: { top: '#5d5a73', shade: '#46435a', side: '#6b5a7a', sideShade: '#4d3f5c', surface: 'tar', bumper: '#ff3d8b' },
   },
@@ -507,6 +519,7 @@ export const MAPS: readonly MapDef[] = [
       crate(4.2, 90, 0.8, 1.1),
       crate(4.2, 270, 0.8, 1.1),
     ),
+    turrets: [{ x: -0.7, y: -0.7, z: DECK_TOP }],
     pads: [pad(3.6, 45), pad(3.6, 225)],
     theme: { top: '#c9c3b6', shade: '#a59e8f', side: '#5a6a8a', sideShade: '#3f4d6b', surface: 'paving', bumper: '#ff3d8b' },
   },
@@ -550,6 +563,7 @@ export const MAPS: readonly MapDef[] = [
       crate(5.6, 90, 0.7, 1.1),
       crate(5.6, 270, 0.7, 1.1),
     ),
+    turrets: [{ x: -0.6, y: -0.6, z: DECK_TOP }],
     pads: [pad(7.3, 45), pad(7.3, 225)],
     theme: { top: '#8d8a9e', shade: '#6f6c80', side: '#4f5d80', sideShade: '#384463', surface: 'tar', bumper: '#ff3d8b' },
   },
@@ -674,6 +688,7 @@ export const MAPS: readonly MapDef[] = [
       { x: -1.6, y: -1.2, w: 0.8, d: 0.8, h: 1.1 },
     ),
     // Pads by the edge of the site: run on to fly the gap.
+    turrets: [{ x: -4.6, y: -3.8, z: 6.5 }, { x: 5.2, y: -4.5, z: DECK_TOP }],
     pads: [
       { x: -0.3, y: 0.2, r: 0.5 },
       { x: 3.8, y: -1.0, r: 0.5 },
@@ -711,6 +726,7 @@ export const MAPS: readonly MapDef[] = [
       { x: 0, y: -5.3, w: 1.1, d: 1.1, z: -0.8, h: 0.25 },
       { x: 4.59, y: -2.65, w: 1.1, d: 1.1, z: -0.8, h: 0.25 },
     ),
+    turrets: [{ x: 3.0, y: 5.196, z: 7.5 }, { x: -3.0, y: -5.196, z: 7.5 }],
     pads: [
       { x: 1.45, y: 1.45, r: 0.4 },
       { x: -1.45, y: 1.45, r: 0.4 },
@@ -748,11 +764,97 @@ export const MAPS: readonly MapDef[] = [
       { x: 3.0, y: -6.8, w: 1.6, d: 0.7, h: 1.3 },
     ),
     // Pads at the rim: sprint onto one to clear the canyon.
+    turrets: [{ x: -1.95, y: 2.2, z: 8 }, { x: 1.95, y: -1.6, z: 8 }],
     pads: [
       { x: -2.35, y: 0, r: 0.45 },
       { x: 2.35, y: 0, r: 0.45 },
     ],
     theme: { top: '#6e7b8c', shade: '#56616f', side: '#8a5a4a', sideShade: '#663f33', surface: 'parking', bumper: '#ff3d8b' },
+  },
+  {
+    name: 'Terraces',
+    blurb: 'Three tiers of rooftop stepping up to a summit. Turrets hold the top.',
+    shape: 'square',
+    holes: [],
+    bumpers: [],
+    roofs: [
+      { x: 0, y: 0, w: 3.6, d: 3.6, h: 4.8 },
+      { x: 3.9, y: 0, w: 3.6, d: 3.6, h: 2.4 },
+      { x: -3.9, y: 0, w: 3.6, d: 3.6, h: 2.4 },
+      { x: 0, y: 3.9, w: 3.6, d: 3.6, h: 2.4 },
+      { x: 0, y: -3.9, w: 3.6, d: 3.6, h: 2.4 },
+      { x: 4.6, y: 4.6, w: 4.0, d: 4.0 },
+      { x: -4.6, y: 4.6, w: 4.0, d: 4.0 },
+      { x: 4.6, y: -4.6, w: 4.0, d: 4.0 },
+      { x: -4.6, y: -4.6, w: 4.0, d: 4.0 },
+    ],
+    ...parts(
+      // Ramps from the low corners up to the middle tier, across the gaps.
+      { x: 4.6, y: 2.2, w: 0.7, d: 1.4, h: 2.4, dir: 3 },
+      { x: -4.6, y: -2.2, w: 0.7, d: 1.4, h: 2.4, dir: 1 },
+      { x: -2.2, y: 4.6, w: 1.4, d: 0.7, h: 2.4, dir: 0 },
+      { x: 2.2, y: -4.6, w: 1.4, d: 0.7, h: 2.4, dir: 2 },
+      // And from the middle tier up to the summit.
+      { x: 2.4, y: 1.0, w: 1.8, d: 0.6, h: 4.8, dir: 2, z: 2.4 },
+      { x: -2.4, y: -1.0, w: 1.8, d: 0.6, h: 4.8, dir: 0, z: 2.4 },
+      // Cover on the summit and the tiers.
+      { x: 0, y: 0, w: 0.9, d: 0.9, z: 4.8, h: 5.9 },
+      { x: 4.2, y: -0.8, w: 0.8, d: 0.8, z: 2.4, h: 3.5 },
+      { x: -4.2, y: 0.8, w: 0.8, d: 0.8, z: 2.4, h: 3.5 },
+      { x: 0.8, y: 4.2, w: 0.8, d: 0.8, z: 2.4, h: 3.5 },
+      { x: -0.8, y: -4.2, w: 0.8, d: 0.8, z: 2.4, h: 3.5 },
+      crate(7.0, 45, 0.8, 1.1),
+      crate(7.0, 225, 0.8, 1.1),
+    ),
+    turrets: [{ x: 1.3, y: 1.3, z: 4.8 }, { x: -1.3, y: -1.3, z: 4.8 }],
+    pads: [
+      { x: -3.6, y: 3.6, r: 0.45 },
+      { x: 3.6, y: -3.6, r: 0.45 },
+    ],
+    theme: { top: '#9c8f7a', shade: '#7d725f', side: '#7a5f6e', sideShade: '#5a4452', surface: 'tiles', bumper: '#ff3d8b' },
+  },
+  {
+    name: 'Stack City',
+    blurb: 'Nine buildings, all different heights. Climb, hook and drop your way to the top.',
+    shape: 'square',
+    holes: [],
+    bumpers: [],
+    roofs: [
+      { x: -5.2, y: -5.2, w: 4.3, d: 4.3 },
+      { x: 0, y: -5.2, w: 4.3, d: 4.3, h: 1.2 },
+      { x: 5.2, y: -5.2, w: 4.3, d: 4.3 },
+      { x: -5.2, y: 0, w: 4.3, d: 4.3, h: 2.4 },
+      { x: 0, y: 0, w: 4.3, d: 4.3, h: 6 },
+      { x: 5.2, y: 0, w: 4.3, d: 4.3, h: 2.4 },
+      { x: -5.2, y: 5.2, w: 4.3, d: 4.3 },
+      { x: 0, y: 5.2, w: 4.3, d: 4.3, h: 1.2 },
+      { x: 5.2, y: 5.2, w: 4.3, d: 4.3 },
+    ],
+    ...parts(
+      // Up from the corners to the side blocks...
+      { x: -5.2, y: -2.6, w: 0.6, d: 1.6, h: 2.4, dir: 1 },
+      { x: 5.2, y: 2.6, w: 0.6, d: 1.6, h: 2.4, dir: 3 },
+      // ...and from the side blocks up to the tall one in the middle.
+      { x: 2.6, y: -1.2, w: 1.4, d: 0.6, h: 6, dir: 2, z: 2.4 },
+      { x: -2.6, y: 1.2, w: 1.4, d: 0.6, h: 6, dir: 0, z: 2.4 },
+      // A water tower and a shed up top, AC units lower down.
+      ...pergola(0.9, 0.9, 1.4, 1.4).map((b) => ({ ...b, z: (b.z ?? 0) + 6, h: b.h + 6 })),
+      { x: -1.2, y: -1.0, w: 1.0, d: 0.8, z: 6, h: 7.2 },
+      { x: -5.2, y: 0.9, w: 0.9, d: 0.9, z: 2.4, h: 3.5 },
+      { x: 5.2, y: -0.9, w: 0.9, d: 0.9, z: 2.4, h: 3.5 },
+      { x: 0, y: -5.2, w: 1.4, d: 0.8, z: 1.2, h: 2.3 },
+      { x: 0, y: 5.2, w: 1.4, d: 0.8, z: 1.2, h: 2.3 },
+      crate(7.4, 45, 0.8, 1.1),
+      crate(7.4, 225, 0.8, 1.1),
+    ),
+    turrets: [{ x: 1.5, y: -1.5, z: 6 }, { x: -1.5, y: 1.5, z: 6 }],
+    pads: [
+      { x: 3.6, y: -3.6, r: 0.45 },
+      { x: -3.6, y: 3.6, r: 0.45 },
+      { x: -6.4, y: -6.4, r: 0.45 },
+      { x: 6.4, y: 6.4, r: 0.45 },
+    ],
+    theme: { top: '#8a8fa6', shade: '#6d7188', side: '#556b8f', sideShade: '#3d4f6d', surface: 'solar', bumper: '#ff3d8b' },
   },
 ];
 /** Vertex radius and first vertex angle of the polygon shapes, relative to the arena radius. */
@@ -832,9 +934,9 @@ export interface Box {
   bottom: number;
 }
 
-/** Blocks at the current arena size, as boxes in world units. */
-export const scaledBlocks = memo((map, s): readonly Box[] =>
-  map.blocks.map((b) => ({
+/** Blocks at the current arena size, as boxes in world units. Taller rooftops count as blocks reaching down to the street. */
+export const scaledBlocks = memo((map, s): readonly Box[] => [
+  ...map.blocks.map((b) => ({
     minX: (b.x - b.w / 2) * s,
     maxX: (b.x + b.w / 2) * s,
     minY: (b.y - b.d / 2) * s,
@@ -842,6 +944,21 @@ export const scaledBlocks = memo((map, s): readonly Box[] =>
     top: b.h,
     bottom: b.z ?? 0,
   })),
+  ...(map.roofs ?? [])
+    .filter((r) => (r.h ?? 0) > 0)
+    .map((r) => ({
+      minX: (r.x - r.w / 2) * s,
+      maxX: (r.x + r.w / 2) * s,
+      minY: (r.y - r.d / 2) * s,
+      maxY: (r.y + r.d / 2) * s,
+      top: r.h ?? 0,
+      bottom: -60,
+    })),
+]);
+
+/** Turret positions at the current arena size: x, y, and the height of the gun. */
+export const scaledTurrets = memo((map, s): readonly { x: number; y: number; z: number }[] =>
+  (map.turrets ?? []).map((t) => ({ x: t.x * s, y: t.y * s, z: (t.z ?? 0) + C.TURRET_HEIGHT })),
 );
 
 export interface RampBox {

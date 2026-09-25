@@ -97,6 +97,47 @@ export function makeGun(weapon: number, color: string): Gun {
       tip = -0.5;
       break;
     }
+    case 5: {
+      // Minigun: a cluster of barrels round a spindle, a chunky body and an ammo box.
+      group.add(box(0.2, 0.2, 0.36, body, 0, 0, -0.02));
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2;
+        group.add(tube(0.022, 0.5, dark, Math.cos(a) * 0.055, 0.02 + Math.sin(a) * 0.055, -0.44));
+      }
+      group.add(ring(0.085, 0.02, accent, -0.36));
+      group.add(ring(0.085, 0.02, accent, -0.62));
+      group.add(box(0.12, 0.14, 0.16, tinted, 0.13, -0.08, 0.02));
+      group.add(box(0.09, 0.18, 0.1, dark, 0, -0.15, 0.1));
+      fore.set(0, 0.14, -0.14);
+      tip = -0.72;
+      break;
+    }
+    case 6: {
+      // Railgun: twin rails either side of a glowing core.
+      group.add(box(0.14, 0.16, 0.46, body, 0, 0, -0.02));
+      group.add(box(0.035, 0.05, 0.62, dark, -0.06, 0.02, -0.52));
+      group.add(box(0.035, 0.05, 0.62, dark, 0.06, 0.02, -0.52));
+      group.add(box(0.03, 0.03, 0.56, accent, 0, 0.02, -0.5));
+      for (const z of [-0.3, -0.5, -0.7]) group.add(box(0.17, 0.02, 0.03, tinted, 0, 0.055, z));
+      group.add(box(0.1, 0.17, 0.2, dark, 0, -0.04, 0.3));
+      group.add(box(0.09, 0.17, 0.1, dark, 0, -0.14, 0.08));
+      fore.set(0, -0.06, -0.36);
+      tip = -0.84;
+      break;
+    }
+    case 7: {
+      // Flak: a short fat barrel with cooling rings and a drum.
+      group.add(box(0.15, 0.16, 0.36, body, 0, 0, -0.02));
+      group.add(tube(0.075, 0.4, dark, 0, 0.03, -0.4));
+      for (const z of [-0.3, -0.42, -0.54]) group.add(ring(0.085, 0.018, accent, z));
+      const drum = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.1, 16), tinted), 1.1);
+      drum.position.set(0, -0.12, -0.08);
+      group.add(drum);
+      group.add(box(0.09, 0.17, 0.1, dark, 0, -0.14, 0.1));
+      fore.set(0, -0.08, -0.3);
+      tip = -0.62;
+      break;
+    }
     default: {
       // Revolver: frame, fat cylinder, long barrel with a sight, and a grip.
       group.add(box(0.1, 0.13, 0.28, body, 0, 0.01, -0.02));

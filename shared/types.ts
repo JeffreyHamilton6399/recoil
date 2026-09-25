@@ -133,6 +133,22 @@ export interface Bullet {
   knockback: number;
   damage: number;
   age: number;
+  /** Piercing shots: players already hit. */
+  hits?: PlayerId[];
+}
+
+/** A turret's state (where it stands comes from the map). */
+export interface Turret {
+  yaw: number;
+  pitch: number;
+  /** Seconds until it can fire again. */
+  cd: number;
+  hp: number;
+  /** Seconds out of action after being knocked out (0 = working). */
+  down: number;
+  /** Who it's tracking, and when it next looks for someone. */
+  target: PlayerId | -1;
+  retarget: number;
 }
 
 /** Capture the flag: a team's flag, at home (carrier -1) or carried. */
@@ -183,6 +199,14 @@ export type GameEvent =
   | { k: 'pickup'; p: PlayerId; u: PowerupKind; x: number; y: number }
   /** Capture the flag: someone took team t's flag, brought it home (cap), or it went back to its base. */
   | { k: 'flag'; a: 'take' | 'cap' | 'back'; t: number; p: PlayerId }
+  /** Turret i fired from (x, y, z), was hit, or was knocked out. */
+  | { k: 'tfire'; i: number; x: number; y: number; z: number }
+  | { k: 'thit'; i: number }
+  | { k: 'tdown'; i: number; x: number; y: number; z: number }
+  /** Sudden death has started: bombs from the sky. */
+  | { k: 'sudden' }
+  /** A bomb has been dropped towards (x, y). */
+  | { k: 'bomb'; x: number; y: number }
   /** w is the round winner, or -1 if nobody survived. */
   | { k: 'ko'; w: PlayerId };
 
@@ -205,6 +229,10 @@ export interface GameState {
   ctf: boolean;
   /** Capture the flag: Red's and Blue's flags. */
   flags: Flag[];
+  /** The map's turrets. */
+  turrets: Turret[];
+  /** Sudden death: seconds until the next bomb. */
+  bombIn: number;
   /** Team mode: round wins for Red and Blue (captures in capture the flag). */
   teamScores: number[];
   /** Team mode: the team that won the round just finished (-1 for nobody, null during play), and the match. */
@@ -285,6 +313,8 @@ export interface Snapshot {
   ts?: number[];
   tw?: number | null;
   tm?: number | null;
+  /** Turrets: [yaw, pitch, knocked out (1) or not (0)]. */
+  tu?: [number, number, number][];
   /** Capture the flag only: [x, y, z, carrier] for Red's and Blue's flags. */
   fl?: [number, number, number, number][];
 }

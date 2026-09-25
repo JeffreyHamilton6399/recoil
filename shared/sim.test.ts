@@ -14,7 +14,7 @@
 
 import assert from 'node:assert/strict';
 import * as C from './constants.js';
-import { MAPS, floorAt, inBlock, isOffMap, mapScale, rampHeight, scaledBumpers, scaledRamps, spawnPoint } from './maps.js';
+import { MAPS, floorAt, inBlock, isOffMap, mapScale, rampHeight, scaledBumpers, scaledTurrets, scaledRamps, spawnPoint } from './maps.js';
 import {
   NO_INPUT,
   addPlayer,
@@ -66,8 +66,9 @@ function assertSane(s: GameState): void {
   for (const p of s.players) {
     if (p.grounded && !p.falling) {
       const onBlock = currentMap(s).blocks.some((b) => Math.abs(b.h - p.z) < 1e-9);
+      const onRoof = (currentMap(s).roofs ?? []).some((r) => Math.abs((r.h ?? 0) - p.z) < 1e-9);
       const onRamp = scaledRamps(currentMap(s), s.arenaRadius).some((r) => Math.abs(rampHeight(r, p.x, p.y) - p.z) < 0.35);
-      assert.ok(p.z === 0 || onBlock || onRamp, `grounded players stand on the roof, a block or a ramp (z=${p.z})`);
+      assert.ok(p.z === 0 || onBlock || onRoof || onRamp, `grounded players stand on the roof, a block or a ramp (z=${p.z})`);
     }
   }
   for (const sc of s.scores) assert.ok(sc <= C.WIN_SCORE);
@@ -628,6 +629,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   const g = createGame(60);
   addPlayer(g, 0);
   setMapChoice(g, idx);
+  g.turrets = []; // nobody shooting during the walk
   const p = g.players[0];
   const S = mapScale(g.arenaRadius);
   const walk = (dx: number, dy: number, yaw: number, ticks: number, onFloor: number): number => {
@@ -763,6 +765,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   const g = createGame(8);
   addPlayer(g, 0);
   setMapChoice(g, MAPS.findIndex((m) => m.name === 'Downtown'));
+  g.turrets = []; // nobody shooting during the climb
   const p = g.players[0];
   const S = mapScale(g.arenaRadius);
   // Stand west of the west tower and hook its roof deck.
@@ -804,6 +807,69 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   const fast = run(true);
   assert.ok(fast > slow * 1.25, `Speed makes you faster (${fast.toFixed(1)} vs ${slow.toFixed(1)} m)`);
   console.log(`ok 18 - grapple up to ${top.toFixed(1)} m, double jump ${twice.toFixed(2)} m vs ${single.toFixed(2)} m, speed ${fast.toFixed(1)} vs ${slow.toFixed(1)} m`);
+}
+
+// 19. Turrets shoot whoever they can see and can be shot out; sudden-death
+//     bombs start falling when a round runs long; the Railgun goes through
+//     a whole line of people; taller rooftops are solid to stand on.
+{
+  const idx = MAPS.findIndex((m) => m.name === 'Stack City');
+  const g = createGame(19);
+  for (let id = 0; id < 3; id++) addPlayer(g, id, 6);
+  setMapChoice(g, idx);
+  const S = mapScale(g.arenaRadius);
+  const [a, b, c] = g.players;
+  // Standing on the tall building in the middle.
+  Object.assign(a, { x: -0.5 * S, y: -0.5 * S, z: 6, vx: 0, vy: 0, vz: 0, grounded: true });
+  step(g, new Map());
+  assert.ok(Math.abs(a.z - 6) < 0.01 && a.grounded, `the tall rooftop holds you up (z=${a.z.toFixed(2)})`);
+
+  // A turret up there picks someone out and fires.
+  Object.assign(b, { x: 0.5 * S, y: -5.2 * S, z: 1.2, vx: 0, vy: 0, vz: 0, grounded: true });
+  Object.assign(c, { x: -5.2 * S, y: -5.2 * S, z: 0, vx: 0, vy: 0, vz: 0, grounded: true });
+  let tfired = 0;
+  for (let i = 0; i < 150; i++) tfired += step(g, new Map()).filter((e) => e.k === 'tfire').length;
+  assert.ok(tfired > 0, 'turrets fire at players they can see');
+
+  // Shoot a turret until it's knocked out.
+  const spot = scaledTurrets(MAPS[idx], g.arenaRadius)[0];
+  Object.assign(a, { x: spot.x - 4, y: spot.y, z: 6, vx: 0, vy: 0, vz: 0, grounded: true, weapon: 0, cooldown: 0 });
+  let down = false;
+  for (let i = 0; i < 400 && !down; i++) {
+    const pitch = Math.atan2(spot.z - 0.3 - (a.z + C.EYE_HEIGHT), Math.hypot(spot.x - a.x, spot.y - a.y));
+    const yaw = Math.atan2(spot.y - a.y, spot.x - a.x);
+    const ev = step(g, new Map([[a.id, { ...NO_INPUT, yaw, pitch, firing: i % 12 === 0 }]]));
+    if (ev.some((e) => e.k === 'tdown')) down = true;
+    Object.assign(a, { x: spot.x - 4, y: spot.y, z: 6, vx: 0, vy: 0, vz: 0, grounded: true, falling: false, fallTime: 0 });
+  }
+  assert.ok(down && g.turrets[0].down > 0, 'a turret can be shot out');
+
+  // Railgun: one slug through two people standing in a line.
+  const g2 = createGame(20);
+  for (let id = 0; id < 3; id++) addPlayer(g2, id, 6);
+  setMapChoice(g2, MAPS.findIndex((m) => m.name === 'Helipad'));
+  const [r0, r1, r2] = g2.players;
+  for (const [p, x] of [[r0, -6], [r1, 0], [r2, 4]] as const) Object.assign(p, { x, y: 0, z: 0, vx: 0, vy: 0, vz: 0, damage: 0, grounded: true });
+  step(g2, new Map([[r0.id, { ...NO_INPUT, yaw: 0, pitch: 0, firing: true }]]));
+  for (let i = 0; i < 10; i++) step(g2, new Map());
+  assert.ok(r1.damage > 0 && r2.damage > 0, `the railgun goes through both (${r1.damage}, ${r2.damage})`);
+
+  // Sudden death: bombs fall once a round passes BOMB_TIME.
+  const g3 = createGame(21);
+  for (let id = 0; id < 2; id++) addPlayer(g3, id, 0);
+  setMapChoice(g3, MAPS.findIndex((m) => m.name === 'Helipad'));
+  startMatch(g3);
+  while (g3.phase !== 'playing') step(g3, new Map());
+  let sudden = false;
+  let bombs = 0;
+  for (let i = 0; i < Math.ceil((C.BOMB_TIME + 5) / C.TICK_DT) && g3.phase === 'playing'; i++) {
+    for (const p of g3.players) Object.assign(p, { x: p.id * 4, y: 0, z: 0, vx: 0, vy: 0, vz: 0, grounded: true, falling: false });
+    const ev = step(g3, new Map());
+    if (ev.some((e) => e.k === 'sudden')) sudden = true;
+    bombs += ev.filter((e) => e.k === 'bomb').length;
+  }
+  assert.ok(sudden && bombs >= 3, `sudden death drops bombs (${bombs})`);
+  console.log(`ok 19 - tall rooftops, turrets (${tfired} shots, shot out), railgun pierces, sudden death (${bombs} bombs in 5 s)`);
 }
 
 console.log('all simulation tests passed');

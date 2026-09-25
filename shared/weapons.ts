@@ -45,6 +45,8 @@ export interface WeaponDef {
   bounce?: number;
   /** Bursts when its lifetime runs out instead of fizzling (grenades). */
   fuse?: boolean;
+  /** Goes straight through players, hitting each one once. */
+  pierce?: boolean;
 }
 
 export const WEAPONS: readonly WeaponDef[] = [
@@ -163,6 +165,77 @@ export const WEAPONS: readonly WeaponDef[] = [
     stats: { power: 1, rate: 5, range: 3, mobility: 4 },
     accent: '#3ccf6e',
   },
+  {
+    name: 'Minigun',
+    blurb: 'Spins up a storm. Tiny shoves, but so many of them. Slow to run with.',
+    mode: 'auto',
+    cooldown: 0.055,
+    pellets: 1,
+    spread: 0.055,
+    speed: 105,
+    radius: 0.11,
+    knockback: 3.1,
+    damage: 1.5,
+    recoil: 0.15,
+    boost: 2.4,
+    viewKick: 0.007,
+    splash: 0,
+    gravity: 0,
+    lifetime: 0.55,
+    moveMult: 0.8,
+    adsFov: 62,
+    scope: false,
+    stats: { power: 1, rate: 5, range: 2, mobility: 1 },
+    accent: '#ff5a5f',
+  },
+  {
+    name: 'Railgun',
+    blurb: 'A slug that goes straight through everyone in a line. Slow to reload.',
+    mode: 'semi',
+    cooldown: 1.35,
+    pellets: 1,
+    spread: 0,
+    speed: 320,
+    radius: 0.13,
+    knockback: 27,
+    damage: 18,
+    recoil: 3,
+    boost: 34,
+    viewKick: 0.1,
+    splash: 0,
+    gravity: 0,
+    lifetime: 0.35,
+    moveMult: 0.92,
+    adsFov: 40,
+    scope: false,
+    stats: { power: 5, rate: 1, range: 5, mobility: 3 },
+    accent: '#7fe7ff',
+    pierce: true,
+  },
+  {
+    name: 'Flak',
+    blurb: 'Shells that burst in the air. Catch people mid-jump.',
+    mode: 'semi',
+    cooldown: 0.75,
+    pellets: 1,
+    spread: 0,
+    speed: 48,
+    radius: 0.2,
+    knockback: 15,
+    damage: 7,
+    recoil: 1.4,
+    boost: 20,
+    viewKick: 0.05,
+    splash: 3.8,
+    gravity: 5,
+    lifetime: 0.5,
+    moveMult: 1,
+    adsFov: 56,
+    scope: false,
+    stats: { power: 3, rate: 3, range: 3, mobility: 4 },
+    accent: '#ffb13d',
+    fuse: true,
+  },
 ];
 
 /**
@@ -196,8 +269,63 @@ export const SHOCK_GRENADE: WeaponDef = {
   fuse: true,
 };
 
+/** Turret shots and sudden-death bombs: not in the picker either. */
+export const TURRET_WEAPON = 10;
+export const TURRET_GUN: WeaponDef = {
+  name: 'Turret',
+  blurb: 'An automatic turret.',
+  mode: 'semi',
+  cooldown: 0,
+  pellets: 1,
+  spread: 0,
+  speed: 60,
+  radius: 0.22,
+  knockback: 12,
+  damage: 6,
+  recoil: 0,
+  boost: 0,
+  viewKick: 0,
+  splash: 0,
+  gravity: 0,
+  lifetime: 0.7,
+  moveMult: 1,
+  adsFov: 60,
+  scope: false,
+  stats: { power: 3, rate: 2, range: 4, mobility: 1 },
+  accent: '#ff9f1c',
+};
+export const BOMB_WEAPON = 11;
+export const SKY_BOMB: WeaponDef = {
+  name: 'Bomb',
+  blurb: 'Sudden death.',
+  mode: 'semi',
+  cooldown: 0,
+  pellets: 1,
+  spread: 0,
+  speed: 0,
+  radius: 0.45,
+  knockback: 30,
+  damage: 16,
+  recoil: 0,
+  boost: 0,
+  viewKick: 0,
+  splash: 5.5,
+  gravity: 20,
+  lifetime: 5,
+  moveMult: 1,
+  adsFov: 60,
+  scope: false,
+  stats: { power: 5, rate: 1, range: 1, mobility: 1 },
+  accent: '#ff3b4e',
+};
+/** Bullets from things that aren't players: owner -1 for a turret, -2 for a sudden-death bomb. */
+export const TURRET_OWNER = -1;
+export const BOMB_OWNER = -2;
+
 export function weaponDef(index: number): WeaponDef {
   if (index === SHOCK_WEAPON) return SHOCK_GRENADE;
+  if (index === TURRET_WEAPON) return TURRET_GUN;
+  if (index === BOMB_WEAPON) return SKY_BOMB;
   return WEAPONS[index] ?? WEAPONS[0];
 }
 

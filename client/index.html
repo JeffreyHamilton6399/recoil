@@ -1192,6 +1192,119 @@
         font-weight: 500;
         text-align: center;
       }
+      /* Round clock, beside the menu button. */
+      #round-clock {
+        position: absolute;
+        top: max(14px, env(safe-area-inset-top));
+        left: calc(max(14px, env(safe-area-inset-left)) + 48px);
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(13, 9, 24, 0.72);
+        border: 2px solid rgba(255, 255, 255, 0.12);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        font-variant-numeric: tabular-nums;
+      }
+      #round-clock.hidden {
+        display: none;
+      }
+      #round-clock.warn {
+        border-color: #ffd93d;
+        color: #ffd93d;
+        animation: clock-tick 1s steps(2) infinite;
+      }
+      #round-clock.sudden {
+        border-color: #ff3b4e;
+        background: rgba(120, 10, 30, 0.8);
+        color: #fff;
+        animation: clock-pulse 0.6s ease-in-out infinite alternate;
+      }
+      @keyframes clock-tick {
+        50% {
+          opacity: 0.6;
+        }
+      }
+      @keyframes clock-pulse {
+        to {
+          transform: scale(1.08);
+          box-shadow: 0 0 18px rgba(255, 59, 78, 0.7);
+        }
+      }
+      /* Sudden death: the edges of the screen throb red. */
+      #fps.sudden::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        box-shadow: inset 0 0 80px rgba(255, 30, 60, 0.45);
+        animation: sudden-edge 0.8s ease-in-out infinite alternate;
+      }
+      @keyframes sudden-edge {
+        from {
+          opacity: 0.35;
+        }
+      }
+      /* Minimap under the menu button. */
+      #minimap {
+        position: absolute;
+        top: calc(max(14px, env(safe-area-inset-top)) + 48px);
+        left: max(14px, env(safe-area-inset-left));
+        width: 140px;
+        height: 140px;
+        pointer-events: none;
+      }
+      #minimap.hidden {
+        display: none;
+      }
+      #fps.touch #minimap {
+        width: 96px;
+        height: 96px;
+      }
+      /* Knocked someone off: a punchy pop-up under the crosshair. */
+      #ko-pop {
+        position: absolute;
+        left: 50%;
+        top: calc(50% + 46px);
+        transform: translateX(-50%);
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        font-weight: 900;
+        font-size: 15px;
+        letter-spacing: 0.08em;
+        color: #fff;
+        text-shadow: 0 2px 0 #0d0918, 0 0 12px rgba(0, 0, 0, 0.6);
+        opacity: 0;
+        pointer-events: none;
+      }
+      #ko-pop b {
+        color: var(--c);
+        font-size: 20px;
+      }
+      #ko-pop.on {
+        animation: ko-pop 1.5s ease-out forwards;
+      }
+      @keyframes ko-pop {
+        0% {
+          opacity: 0;
+          transform: translateX(-50%) scale(1.8);
+        }
+        12% {
+          opacity: 1;
+          transform: translateX(-50%) scale(0.95);
+        }
+        20% {
+          transform: translateX(-50%) scale(1);
+        }
+        75% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          transform: translateX(-50%) translateY(-14px);
+        }
+      }
       #feed {
         position: absolute;
         right: max(14px, env(safe-area-inset-right));
@@ -1552,6 +1665,9 @@
       <div id="center-text"></div>
       <div id="sub-text" class="hidden"></div>
       <div id="feed"></div>
+      <div id="round-clock" class="hidden"></div>
+      <canvas id="minimap" class="hidden" aria-label="Map"></canvas>
+      <div id="ko-pop"></div>
       <div id="vitals">
         <div id="dmg-wrap">
           <div id="dmg">0<small>%</small></div>
@@ -1604,7 +1720,7 @@
     <aside id="loadout" class="hidden scroll" aria-label="Loadout">
       <div class="loadout-head">
         <b>Loadout</b>
-        <span>Takes effect when you respawn · <kbd>1</kbd>–<kbd>5</kbd> weapon · <kbd>6</kbd> knife · <kbd>7</kbd> grenade</span>
+        <span>Takes effect when you respawn · <kbd>1</kbd>–<kbd>8</kbd> weapon · <kbd>9</kbd> knife · <kbd>0</kbd> grenade</span>
       </div>
       <div id="loadout-slot"></div>
     </aside>
@@ -1636,7 +1752,7 @@
         </div>
 
         <div id="weapons-section">
-          <div class="section-title">Weapon <span class="hint">keys 1–5</span></div>
+          <div class="section-title">Weapon <span class="hint">keys 1–8</span></div>
           <div id="weapon-list" class="weapons"></div>
           <div class="section-title">Offhand <span class="hint">E</span></div>
           <div id="offhand-list" class="offhands"></div>

@@ -56,7 +56,7 @@ const SKILLS: Record<BotLevel, Skill> = {
 };
 
 /** Preferred fighting distance per weapon (Revolver, Scatter, Longshot, Boomer, Pepper). */
-const RANGE = [11, 5, 20, 12, 10];
+const RANGE = [11, 5, 20, 12, 10, 8, 26, 12];
 
 interface Seen {
   x: number;
@@ -198,7 +198,7 @@ export class BotBrain {
       const ways = climbs(map, R);
       if (ways.length > 0 && Math.random() < sk.highGround) {
         const nearest = enemies.reduce((m, p) => Math.min(m, Math.hypot(p.x - me.x, p.y - me.y)), Infinity);
-        const longGun = me.weapon === 0 || me.weapon === 2 || me.weapon === 4;
+        const longGun = me.weapon === 0 || me.weapon === 2 || me.weapon === 4 || me.weapon === 6;
         const targetUp = target !== undefined && target.z > 1.2;
         if ((longGun && nearest > 9) || (targetUp && (!longGun || !visible))) {
           // Chasing: the way up nearest them. Otherwise: the way up nearest us.
