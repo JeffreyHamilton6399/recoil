@@ -215,7 +215,9 @@ export class BotBrain {
     // Capture the flag: run their flag home, chase down our thief, or (for
     // every other bot on the team) go and get their flag.
     let goal: { x: number; y: number } | null = null;
-    if (s.ctf && (s.phase === 'playing' || s.phase === 'lobby')) {
+    if (s.koth && s.hill && (s.phase === 'playing' || s.phase === 'lobby')) {
+      if (Math.hypot(s.hill.x - me.x, s.hill.y - me.y) > C.HILL_RADIUS * 0.5) goal = { x: s.hill.x, y: s.hill.y };
+    } else if (s.ctf && (s.phase === 'playing' || s.phase === 'lobby')) {
       const theirs = s.flags[1 - me.team];
       const mates = s.players.filter((p) => p.team === me.team && p.inRound).sort((a, b) => a.id - b.id);
       const rank = mates.findIndex((p) => p.id === me.id);

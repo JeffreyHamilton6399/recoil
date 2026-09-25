@@ -80,6 +80,8 @@ export interface View {
   flags?: ViewFlag[];
   /** Turrets: [yaw, pitch, knocked out (1) or not]. */
   turrets?: [number, number, number][];
+  /** King of the hill: where the hill is and who holds it (-1 nobody, -2 contested, else a team or player id). */
+  hill?: { x: number; y: number; z: number; owner: number; teams: boolean } | null;
 }
 
 /** A turret on the roof: the part that turns, and its glowing eye. */
@@ -652,6 +654,8 @@ export class Scene3D {
   private readonly rigs = new Map<PlayerId, Rig>();
   private readonly flagObjs: FlagObj[] = [];
   private turretObjs: TurretObj[] = [];
+  /** King of the hill: the glowing zone, its rim, and a beam to find it by. */
+  private hillObj: { group: THREE.Group; wall: THREE.Mesh; rim: THREE.Mesh; beam: THREE.Mesh } | null = null;
   /** Warning rings on the roof under falling bombs, by bullet id. */
   private readonly bombMarks = new Map<number, THREE.Mesh>();
   /** Grappling hook lines, by player. */
@@ -768,16 +772,16 @@ export class Scene3D {
 
     this.scene.add(new THREE.HemisphereLight('#a8b8ff', '#40285a', 0.85));
     this.sun = new THREE.DirectionalLight('#ffd2a8', 1.5);
-    this.sun.position.copy(SUN_DIR).multiplyScalar(80);
+    this.sun.position.copy(SUN_DIR).multiplyScalar(130);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     const sc = this.sun.shadow.camera;
-    sc.left = -54;
-    sc.right = 54;
-    sc.top = 54;
-    sc.bottom = -54;
+    sc.left = -80;
+    sc.right = 80;
+    sc.top = 80;
+    sc.bottom = -80;
     sc.near = 1;
-    sc.far = 220;
+    sc.far = 320;
     this.sun.shadow.bias = -0.0006;
     this.sun.shadow.normalBias = 0.03;
     this.scene.add(this.sun);
@@ -1297,6 +1301,49 @@ export class Scene3D {
     });
   }
 
+  /** King of the hill: a glowing ring of light, coloured by whoever holds it. */
+  private syncHill(view: View): void {
+    const hill = view.hill;
+    if (!hill) {
+      if (this.hillObj) this.hillObj.group.visible = false;
+      return;
+    }
+    if (!this.hillObj) {
+      const group = new THREE.Group();
+      const wall = new THREE.Mesh(
+        new THREE.CylinderGeometry(C.HILL_RADIUS, C.HILL_RADIUS, 3, 48, 1, true),
+        new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }),
+      );
+      wall.position.y = 1.5;
+      const rim = new THREE.Mesh(
+        new THREE.RingGeometry(C.HILL_RADIUS - 0.35, C.HILL_RADIUS, 64),
+        new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      rim.rotation.x = -Math.PI / 2;
+      rim.position.y = 0.05;
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.5, 0.5, 80, 12, 1, true),
+        new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.18, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
+      );
+      beam.position.y = 40;
+      group.add(wall, rim, beam);
+      this.scene.add(group);
+      this.hillObj = { group, wall, rim, beam };
+    }
+    const o = this.hillObj;
+    o.group.visible = true;
+    toThree(hill.x, hill.y, hill.z, o.group.position);
+    let color = '#ffffff';
+    if (hill.owner === -2) color = Math.sin(this.time * 12) > 0 ? '#ff3b4e' : '#ffffff';
+    else if (hill.owner >= 0) {
+      const r = hill.teams ? undefined : view.roster.find((q) => q.id === hill.owner);
+      color = hill.teams ? C.PLAYER_PALETTE[C.TEAM_COLORS[hill.owner]] : C.PLAYER_PALETTE[r?.color ?? 0];
+    }
+    for (const m of [o.wall, o.rim, o.beam]) (m.material as THREE.MeshBasicMaterial).color.set(color);
+    (o.wall.material as THREE.MeshBasicMaterial).opacity = 0.12 + 0.06 * Math.sin(this.time * 3);
+    o.rim.rotation.z = this.time * 0.3;
+  }
+
   /** A pulsing red ring on the roof under every falling bomb. */
   private syncBombMarks(view: View): void {
     const map = MAPS[view.mapIndex] ?? MAPS[0];
@@ -1476,7 +1523,11 @@ export class Scene3D {
       }
       const age = 0.8 - w.life;
       const pop = age < 0.12 ? age / 0.12 : 1 + (age - 0.12) * 0.25;
-      w.sprite.scale.set(w.size * pop, w.size * 0.3 * pop, 1);
+      // Words right in your face (a hit on you, a blast at your feet) would fill
+      // the screen, so they shrink with distance and never pass a set size.
+      const dist = w.sprite.position.distanceTo(this.camera.position);
+      const size = Math.min(w.size, 3.2, Math.max(0, dist - 1.5) * 0.28);
+      w.sprite.scale.set(size * pop, size * 0.3 * pop, 1);
       w.sprite.material.opacity = Math.min(1, w.life / 0.25);
       w.sprite.position.y += dt * 0.8;
       return true;
@@ -1722,6 +1773,9 @@ export class Scene3D {
       case 'sudden':
         this.addTrauma(0.35);
         return false;
+      case 'hill':
+        this.particles.burst(toThree(ev.x, ev.y, ev.z + 1), 60, new THREE.Color('#ffffff'), 10, 0.6, -2);
+        return false;
       case 'boom': {
         const at = toThree(ev.x, ev.y, ev.z);
         const isShock = ev.w === SHOCK_WEAPON;
@@ -1923,6 +1977,7 @@ export class Scene3D {
     this.syncPlayers(view, cam, dt);
     this.syncFlags(view, cam);
     this.syncTurrets(view, dt);
+    this.syncHill(view);
     this.syncBombMarks(view);
     this.syncRopes(view, cam);
     this.syncBullets(view);

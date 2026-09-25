@@ -8,7 +8,7 @@
 // The world is 3D: x and y are horizontal, z is up, and the roof is at z = 0.
 
 import * as C from './constants.js';
-import { MAPS, floorAt, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, scaledTurrets, spawnAt, spawnPoint, type MapDef } from './maps.js';
+import { MAPS, floorAt, hillSpots, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, scaledTurrets, spawnAt, spawnPoint, type MapDef } from './maps.js';
 import {
   FX_AIM,
   FX_AIR_JUMPED,
@@ -30,6 +30,7 @@ import {
   type Flag,
   type GameEvent,
   type GameState,
+  type Hill,
   type InputState,
   type PlayerId,
   type PlayerSnap,
@@ -202,7 +203,7 @@ function ctfSpawn(s: GameState, p: PlayerState): { x: number; y: number; yaw: nu
 }
 
 function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number): void {
-  const sp = s.ctf ? ctfSpawn(s, p) : spawnPoint(currentMap(s), index, count);
+  const sp = s.ctf || (s.koth && s.teams) ? ctfSpawn(s, p) : spawnPoint(currentMap(s), index, count);
   p.x = sp.x;
   p.y = sp.y;
   p.z = 0;
@@ -245,8 +246,38 @@ function placeAll(s: GameState): void {
     resetAtSpawn(s, p, i, n);
   });
   s.flags = s.ctf ? [0, 1].map((team) => ({ team, ...flagBase(currentMap(s), team), z: 0, carrier: -1 })) : [];
+  s.hill = s.koth ? newHill(s, 0) : null;
   s.turrets = (currentMap(s).turrets ?? []).map((_, i): Turret => ({ yaw: i * 1.7, pitch: 0, cd: 1, hp: C.TURRET_HP, down: 0, target: -1, retarget: 0 }));
   s.bombIn = 0;
+}
+
+/** King of the hill: the hill on spot i of the map's hill spots. */
+function newHill(s: GameState, i: number): Hill {
+  const spots = hillSpots(currentMap(s), s.arenaRadius);
+  const spot = ((i % spots.length) + spots.length) % spots.length;
+  return { ...spots[spot], owner: -1, moveIn: C.HILL_MOVE, spot };
+}
+
+/**
+ * King of the hill: whoever is the only one (or the only team) standing on
+ * the hill gets the time. Two sides on it at once is contested: nobody
+ * scores. The hill moves every HILL_MOVE seconds.
+ */
+function updateHill(s: GameState, dt: number, events: GameEvent[], scoring: boolean): void {
+  const hill = s.hill;
+  if (!hill) return;
+  hill.moveIn -= dt;
+  if (hill.moveIn <= 0) {
+    s.hill = newHill(s, hill.spot + 1);
+    events.push({ k: 'hill', x: s.hill.x, y: s.hill.y, z: s.hill.z });
+    return;
+  }
+  const on = s.players.filter(
+    (p) => p.inRound && !p.falling && Math.hypot(p.x - hill.x, p.y - hill.y) < C.HILL_RADIUS && p.z > hill.z - 0.6 && p.z < hill.z + 3.5,
+  );
+  const sides = new Set(on.map((p) => (s.teams ? p.team : p.id)));
+  hill.owner = sides.size === 0 ? -1 : sides.size > 1 ? -2 : [...sides][0];
+  if (scoring && hill.owner >= 0) s.hillScores[hill.owner] += dt;
 }
 
 /** Nothing solid between two points (the roof, blocks and ramps all block the view). */
@@ -488,6 +519,9 @@ export function createGame(seed: number): GameState {
     flags: [],
     turrets: [],
     bombIn: 0,
+    koth: false,
+    hill: null,
+    hillScores: new Array<number>(C.MAX_PLAYERS).fill(0),
     teamScores: [0, 0],
     roundTeam: null,
     matchTeam: null,
@@ -507,8 +541,8 @@ export function addPlayer(s: GameState, id: PlayerId, weapon = 0): void {
   s.players.push(p);
   s.players.sort((a, b) => a.id - b.id);
   if (s.phase === 'lobby') placeAll(s);
-  else if (s.ctf && (s.phase === 'countdown' || s.phase === 'playing')) {
-    // Capture the flag has respawns, so late arrivals jump straight in.
+  else if ((s.ctf || s.koth) && (s.phase === 'countdown' || s.phase === 'playing')) {
+    // Capture the flag and king of the hill have respawns, so late arrivals jump straight in.
     p.inRound = true;
     resetAtSpawn(s, p, 0, 1);
   }
@@ -554,9 +588,18 @@ export function setTeams(s: GameState, on: boolean): void {
   if (s.phase === 'lobby') placeAll(s);
 }
 
+/** Switches king of the hill on or off (between matches). It works with or without teams. */
+export function setKoth(s: GameState, on: boolean): void {
+  if (on) s.ctf = false;
+  if (s.koth === on) return;
+  s.koth = on;
+  if (s.phase === 'lobby') placeAll(s);
+}
+
 /** Switches capture the flag on or off (between matches). It's a team mode, so it turns teams on too. */
 export function setCtf(s: GameState, on: boolean): void {
   if (on && !s.teams) setTeams(s, true);
+  if (on) s.koth = false;
   if (s.ctf === on) return;
   s.ctf = on;
   if (s.phase === 'lobby') placeAll(s);
@@ -656,6 +699,7 @@ export function startRound(s: GameState): void {
 export function startMatch(s: GameState): void {
   s.scores.fill(0);
   s.teamScores = [0, 0];
+  s.hillScores.fill(0);
   s.matchWinner = null;
   s.matchTeam = null;
   startRound(s);
@@ -1098,7 +1142,7 @@ export function movePlayer(p: PlayerState, h: number, map: MapDef, arenaRadius: 
   if (p.grounded && p.z < 0.05) {
     for (const pad of scaledPads(map, arenaRadius)) {
       if (Math.hypot(p.x - pad.x, p.y - pad.y) >= pad.r) continue;
-      p.vz = C.PAD_SPEED;
+      p.vz = pad.v ?? C.PAD_SPEED;
       p.vx *= C.PAD_BOOST;
       p.vy *= C.PAD_BOOST;
       p.grounded = false;
@@ -1566,11 +1610,11 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
   if (playing) {
     s.playTime += dt;
     // Capture the flag keeps the whole roof: the bases stay put.
-    if (!s.ctf) s.arenaRadius = arenaRadiusAt(s.playTime);
+    if (!s.ctf && !s.koth) s.arenaRadius = arenaRadiusAt(s.playTime);
   }
   if (lobby || playing) updatePowerups(s, dt, events);
   if (lobby || playing) updateTurrets(s, dt, events);
-  if (playing && !s.ctf) updateBombs(s, dt, events);
+  if (playing && !s.ctf && !s.koth) updateBombs(s, dt, events);
 
   const h = dt / C.PHYSICS_SUBSTEPS;
   for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) integrate(s, h, events);
@@ -1593,7 +1637,7 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
     if (p.falling) {
       p.fallTime += dt;
       // Back on the roof after a moment in the warm-up and in capture the flag.
-      const wait = lobby ? C.LOBBY_RESPAWN_DELAY : playing && s.ctf ? C.CTF_RESPAWN_DELAY : -1;
+      const wait = lobby ? C.LOBBY_RESPAWN_DELAY : playing && (s.ctf || s.koth) ? C.CTF_RESPAWN_DELAY : -1;
       if (wait >= 0 && p.fallTime > C.FALL_DURATION + wait) {
         resetAtSpawn(s, p, p.spawnIndex, inRound.length);
         events.push({ k: 'respawn', p: p.id });
@@ -1607,8 +1651,38 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
   }
 
   if (s.ctf && (lobby || playing)) updateFlags(s, events, playing);
+  if (s.koth && (lobby || playing)) updateHill(s, dt, events, playing);
 
-  if (playing && s.ctf) {
+  if (playing && s.koth) {
+    // King of the hill: first to HILL_WIN seconds on the hill, or the most when time runs out.
+    const n = s.teams ? 2 : C.MAX_PLAYERS;
+    let best = -1;
+    let tie = false;
+    for (let i = 0; i < n; i++) {
+      if (!s.teams && !getPlayer(s, i)) continue;
+      if (best < 0 || s.hillScores[i] > s.hillScores[best]) {
+        best = i;
+        tie = false;
+      } else if (s.hillScores[i] === s.hillScores[best]) tie = true;
+    }
+    const won = best >= 0 && s.hillScores[best] >= C.HILL_WIN;
+    if (won || s.playTime >= C.HILL_TIME) {
+      const winner = best < 0 || (tie && !won) ? -1 : best;
+      if (s.teams) {
+        s.roundTeam = winner;
+        s.matchTeam = winner;
+        s.roundWinner = -1;
+        s.matchWinner = -1;
+      } else {
+        s.roundWinner = winner;
+        s.matchWinner = winner;
+        if (winner >= 0) s.scores[winner] = Math.min(C.WIN_SCORE, s.scores[winner] + 1);
+      }
+      s.phase = 'matchEnd';
+      s.phaseTime = 0;
+      events.push({ k: 'ko', w: s.teams ? -1 : winner });
+    }
+  } else if (playing && s.ctf) {
     // Capture the flag is one long round: first to CTF_CAPTURES, or the most captures when time runs out.
     const won = s.teamScores.findIndex((v) => v >= C.CTF_CAPTURES);
     if (won >= 0 || s.playTime >= C.CTF_TIME) {

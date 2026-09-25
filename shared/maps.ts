@@ -99,6 +99,11 @@ export interface TurretSpot {
   z?: number;
 }
 
+/** A jump pad; v is its launch speed (m/s) if it's stronger than usual. */
+export interface Pad extends Circle {
+  v?: number;
+}
+
 export interface MapDef {
   name: string;
   blurb: string;
@@ -112,7 +117,7 @@ export interface MapDef {
   /** Ramps up onto buildings and bridges. */
   ramps?: Ramp[];
   /** Jump pads: step on one to be launched into the air. */
-  pads: Circle[];
+  pads: Pad[];
   /** A block of separate buildings: only these rooftops (and bridges) are solid. */
   roofs?: Roof[];
   /** Automatic turrets that shoot at anyone in range. */
@@ -267,6 +272,34 @@ function slabWithHole(out: Block[], x0: number, x1: number, y0: number, y1: numb
   rect(hx1, x1, y0, y1); // east of the hole
   rect(hx0, hx1, y0, hy0); // south of the hole
   rect(hx0, hx1, hy1, y1); // north of the hole
+}
+
+/**
+ * A tall hollow building you can get into: doorways at street level on the
+ * `doors` sides ('n' +y, 's' -y, 'e' +x, 'w' -x), windows on every floor
+ * above, one tall open hall inside, and a skylight in the roof. A strong
+ * jump pad under the skylight shoots you up through it onto the roof.
+ */
+function building(x: number, y: number, w: number, d: number, h: number, doors: string): { blocks: Block[]; ramps: Ramp[]; pad: Pad } {
+  const blocks: Block[] = [];
+  const x0 = x - w / 2;
+  const x1 = x + w / 2;
+  const y0 = y - d / 2;
+  const y1 = y + d / 2;
+  const storey = 3;
+  const roofBase = h - 0.35;
+  const side = (z0: number, z1: number, ground: boolean): void => {
+    const kind = (dir: string): 'solid' | 'door' | 'window' => (ground ? (doors.includes(dir) ? 'door' : 'solid') : z1 - z0 >= 2 ? 'window' : 'solid');
+    wallRun(blocks, x, y1, w, true, kind('n'), z0, z1);
+    wallRun(blocks, x, y0, w, true, kind('s'), z0, z1);
+    wallRun(blocks, x1, y, d - WALL_T, false, kind('e'), z0, z1);
+    wallRun(blocks, x0, y, d - WALL_T, false, kind('w'), z0, z1);
+  };
+  side(0, Math.min(storey, roofBase), true);
+  for (let z = storey; z < roofBase - 0.01; z += storey) side(z, Math.min(z + storey, roofBase), false);
+  const hole = Math.min(w, d) * 0.32;
+  slabWithHole(blocks, x0 - WALL_T / 2, x1 + WALL_T / 2, y0 - WALL_T / 2, y1 + WALL_T / 2, [x - hole / 2, x + hole / 2, y - hole / 2, y + hole / 2], roofBase, h);
+  return { blocks, ramps: [], pad: { x, y, r: hole * 0.32, v: Math.sqrt(2 * C.GRAVITY * (h + 3)) } };
 }
 
 /**
@@ -856,6 +889,72 @@ export const MAPS: readonly MapDef[] = [
     ],
     theme: { top: '#8a8fa6', shade: '#6d7188', side: '#556b8f', sideShade: '#3d4f6d', surface: 'solar', bumper: '#ff3d8b' },
   },
+  (() => {
+    // Four hollow towers on the corners; two solid skyscrapers north and south.
+    const towers = [
+      building(-5.2, -5.2, 2.8, 2.8, 12, 'ne'),
+      building(5.2, 5.2, 2.8, 2.8, 12, 'sw'),
+      building(5.2, -5.2, 2.4, 2.4, 9, 'nw'),
+      building(-5.2, 5.2, 2.4, 2.4, 9, 'se'),
+    ];
+    return {
+      name: 'Skyscrapers',
+      blurb: 'Walk into the towers and ride the pads up through the roof. Bridges link the tops, 12 m up.',
+      shape: 'square' as const,
+      holes: [],
+      bumpers: [],
+      roofs: [{ x: -5.2, y: -5.2, w: 4.3, d: 4.3 }, { x: 0, y: -5.2, w: 4.3, d: 4.3, h: 12 }, { x: 5.2, y: -5.2, w: 4.3, d: 4.3 }, { x: -5.2, y: 0, w: 4.3, d: 4.3 }, { x: 0, y: 0, w: 4.3, d: 4.3 }, { x: 5.2, y: 0, w: 4.3, d: 4.3 }, { x: -5.2, y: 5.2, w: 4.3, d: 4.3 }, { x: 0, y: 5.2, w: 4.3, d: 4.3, h: 12 }, { x: 5.2, y: 5.2, w: 4.3, d: 4.3 }],
+      ...parts(
+        ...towers,
+        // High bridges from the tall corner towers to the skyscrapers...
+        { x: -2.975, y: -5.2, w: 1.75, d: 0.6, z: 11.65, h: 12 },
+        { x: 2.975, y: 5.2, w: 1.75, d: 0.6, z: 11.65, h: 12 },
+        // ...and ramps up to them from the shorter towers.
+        { x: 3.075, y: -4.6, w: 1.85, d: 0.6, h: 12, dir: 2, z: 9 },
+        { x: -3.075, y: 4.6, w: 1.85, d: 0.6, h: 12, dir: 0, z: 9 },
+        // Cover on the skyscraper tops and down on the street.
+        { x: 0.9, y: 5.9, w: 0.8, d: 0.8, z: 12, h: 13.1 },
+        { x: -0.9, y: -5.9, w: 0.8, d: 0.8, z: 12, h: 13.1 },
+        { x: 0, y: 0, w: 1.0, d: 1.0, h: 1.2 },
+        { x: 5.8, y: 1.3, w: 0.8, d: 0.8, h: 1.1 },
+        { x: -5.8, y: -1.3, w: 0.8, d: 0.8, h: 1.1 },
+      ),
+      turrets: [{ x: 0, y: 5.2, z: 12 }, { x: 0, y: -5.2, z: 12 }],
+      pads: [...towers.map((t) => t.pad), { x: 1.5, y: 1.5, r: 0.45 }, { x: -1.5, y: -1.5, r: 0.45 }],
+      theme: { top: '#7d8296', shade: '#62667a', side: '#3f5a8a', sideShade: '#2c4066', surface: 'tar' as const, bumper: '#ff3d8b' },
+    };
+  })(),
+  (() => {
+    // Warehouses you can run through, catwalks between their roofs, and a tall hall in the middle.
+    const halls = [
+      building(-4.4, 3.6, 3.6, 2.6, 6, 'se'),
+      building(4.4, -3.6, 3.6, 2.6, 6, 'nw'),
+      building(4.4, 3.6, 2.6, 3.0, 6, 'sw'),
+      building(-4.4, -3.6, 2.6, 3.0, 6, 'ne'),
+      building(0, 0, 2.4, 2.4, 15, 'nsew'),
+    ];
+    return {
+      name: 'Warehouses',
+      blurb: 'Big sheds to fight through, catwalks over the top, and a 15 m hall in the middle.',
+      shape: 'square' as const,
+      holes: [],
+      bumpers: [],
+      ...parts(
+        ...halls,
+        { x: 0, y: 3.6, w: 5.2, d: 0.5, z: 5.65, h: 6 },
+        { x: -0.25, y: -3.6, w: 5.7, d: 0.5, z: 5.65, h: 6 },
+        { x: -6.8, y: 0.6, w: 1.8, d: 0.8, h: 1.3 },
+        { x: 6.8, y: -0.6, w: 1.8, d: 0.8, h: 1.3 },
+        { x: -2.2, y: -6.6, w: 0.8, d: 1.8, h: 2.6 },
+        { x: 2.2, y: 6.6, w: 0.8, d: 1.8, h: 2.6 },
+        crate(3.0, 90, 0.8, 1.1),
+        crate(3.0, 270, 0.8, 1.1),
+      ),
+      turrets: [{ x: 0.8, y: 0.8, z: 15 }, { x: -0.8, y: -0.8, z: 15 }],
+      pads: [...halls.map((h) => h.pad), { x: -6.6, y: -6.6, r: 0.45 }, { x: 6.6, y: 6.6, r: 0.45 }],
+      theme: { top: '#8e8778', shade: '#716b5e', side: '#7a4f3e', sideShade: '#5a382c', surface: 'gravel' as const, bumper: '#ff3d8b' },
+    };
+  })(),
 ];
 /** Vertex radius and first vertex angle of the polygon shapes, relative to the arena radius. */
 export const POLY_SHAPES: Record<'hex' | 'diamond', { sides: number; scale: number; rot: number }> = {
@@ -998,7 +1097,27 @@ function clamp01(v: number): number {
 }
 
 /** Jump pads at the current arena size. */
-export const scaledPads = memo((map, s): readonly Circle[] => map.pads.map((p) => ({ x: p.x * s, y: p.y * s, r: p.r * s })));
+export const scaledPads = memo((map, s): readonly Pad[] => map.pads.map((p) => ({ x: p.x * s, y: p.y * s, r: p.r * s, v: p.v })));
+
+/**
+ * Places the king of the hill can be: the middle and eight spots around it,
+ * wherever there's roof you can walk to (not up on something too tall to
+ * reach, and not inside a wall).
+ */
+export const hillSpots = memo((map, s): readonly { x: number; y: number; z: number }[] => {
+  const R = s * MAP_DESIGN_RADIUS;
+  const out: { x: number; y: number; z: number }[] = [];
+  const cands: [number, number][] = [[0, 0], [0, 4.2], [4.2, 0], [0, -4.2], [-4.2, 0], [3.2, 3.2], [-3.2, -3.2], [3.2, -3.2], [-3.2, 3.2]];
+  for (const [dx, dy] of cands) {
+    const x = dx * s;
+    const y = dy * s;
+    const z = floorAt(map, R, x, y, 3.2);
+    if (z === -Infinity || z > 3.1 || inBlock(map, R, x, y, z + 0.9, C.PLAYER_RADIUS)) continue;
+    out.push({ x, y, z });
+  }
+  if (out.length === 0) out.push({ x: 0, y: 0, z: 0 });
+  return out;
+});
 
 /**
  * Height of whatever you would stand on at (x, y): the tallest block top no

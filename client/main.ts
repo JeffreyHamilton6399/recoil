@@ -10,7 +10,7 @@ import { FX_KNIFE, POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
 import { BOMB_OWNER, SHOCK_WEAPON, TURRET_OWNER, weaponDef } from '../shared/weapons.js';
 import type { GameEvent, InputState, PlayerId, PlayerSnap, PlayerState, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
 import { Sfx } from './audio.js';
-import { Hud, type TeamInfo } from './hud.js';
+import { Hud, type HudInfo, type TeamInfo } from './hud.js';
 import { Input } from './input.js';
 import { Net } from './net.js';
 import { Scene3D, type CameraView, type View, type ViewBullet, type ViewPlayer, type ViewPowerup } from './scene.js';
@@ -78,6 +78,7 @@ let roomNoJump = false;
 /** The room's team mode rule, and capture the flag. */
 let roomTeams = false;
 let roomCtf = false;
+let roomKoth = false;
 /** The roster as sent (own colours), for the lobby; `roster` has team colours in team mode. */
 let lobbyRoster: RosterEntry[] = [];
 /** Crosshair spread from firing, easing back to 0. */
@@ -168,9 +169,10 @@ const ui = new UI({
   onLeave: () => leaveToMenu(''),
   onStart: () => net.send({ t: 'start' }),
   onPickMap: (choice) => net.send({ t: 'map', choice }),
-  onNoJump: (on) => net.send({ t: 'rules', noJump: on, teams: roomTeams, ctf: roomCtf }),
-  onTeams: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: on, ctf: on && roomCtf }),
-  onCtf: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: on || roomTeams, ctf: on }),
+  onNoJump: (on) => net.send({ t: 'rules', noJump: on, teams: roomTeams, ctf: roomCtf, koth: roomKoth }),
+  onTeams: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: on, ctf: on && roomCtf, koth: roomKoth }),
+  onCtf: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: on || roomTeams, ctf: on, koth: false }),
+  onKoth: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: roomTeams, ctf: false, koth: on }),
   onPickTeam: (team) => net.send({ t: 'team', team }),
   onProfile: () => {
     if (roomCode && myId !== -1) net.send({ t: 'profile', name: ui.name, color: ui.color });
@@ -410,6 +412,7 @@ function handleMessage(msg: ServerMessage): void {
       roomNoJump = msg.noJump;
       roomTeams = msg.teams === true;
       roomCtf = msg.ctf === true;
+      roomKoth = msg.koth === true;
       refreshRoomUi();
       break;
     case 'error':
@@ -438,7 +441,7 @@ function refreshRoomUi(): void {
   hud.setVisible(true);
   ui.setLobby(
     phase === 'lobby'
-      ? { code: roomCode, roster: lobbyRoster, spectators, myId, pub: roomPub, mapChoice, startsIn, noJump: roomNoJump, teams: roomTeams, ctf: roomCtf, muted: [...voice.muted], speaking: [...voice.speaking] }
+      ? { code: roomCode, roster: lobbyRoster, spectators, myId, pub: roomPub, mapChoice, startsIn, noJump: roomNoJump, teams: roomTeams, ctf: roomCtf, koth: roomKoth, muted: [...voice.muted], speaking: [...voice.speaking] }
       : null,
   );
 }
@@ -703,7 +706,7 @@ function viewAt(time: number): View | null {
     phaseTime,
     arenaRadius: lerp(a.r, b.r, t),
     mapIndex: a.m,
-    shrinking: a.ph === 'playing' && a.r > C.ARENA_END_RADIUS + 1e-3 && !a.fl,
+    shrinking: a.ph === 'playing' && a.r > C.ARENA_END_RADIUS + 1e-3 && !a.fl && !a.kh,
     players,
     bullets,
     powerups,
@@ -711,6 +714,7 @@ function viewAt(time: number): View | null {
     myId,
     flags: b.fl?.map(([x, y, z, carrier]) => ({ x, y, z, carrier })),
     turrets: b.tu,
+    hill: b.kh ? { x: b.kh[0], y: b.kh[1], z: b.kh[2], owner: b.kh[3], teams: !!b.ts } : null,
   };
 }
 
@@ -904,6 +908,10 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
     case 'bomb':
       sfx.bombWhistle(scene.panFor(ev.x, ev.y, 0), 0.8);
       break;
+    case 'hill':
+      sfx.flagReturned();
+      hud.addFeed(['The ', ['hill', '#ffffff'], ' has moved! Follow the beam']);
+      break;
     case 'sudden':
       sfx.siren();
       hud.flashCenter('SUDDEN DEATH!', 'Bombs are falling. Watch for the red rings!', 3);
@@ -990,6 +998,7 @@ function frame(): void {
   let roundWinner: PlayerId | null = null;
   let matchWinner: PlayerId | null = null;
   let teamInfo: TeamInfo | null = null;
+  let hillInfo: HudInfo['hill'] = null;
 
   if (roomCode && clockOffset !== null && snaps.length > 0) {
     // Fixed-rate input ticks; several per frame if the tab fell behind.
@@ -1008,6 +1017,10 @@ function frame(): void {
     const latest = snaps[snaps.length - 1];
     roundWinner = latest.rw;
     matchWinner = latest.mw;
+    hillInfo =
+      latest.kh && latest.ks
+        ? { scores: latest.ks, teams: !!latest.ts, timeLeft: latest.ph === 'playing' ? C.HILL_TIME - latest.pt : C.HILL_TIME, owner: latest.kh[3] }
+        : null;
     teamInfo = latest.ts
       ? {
           scores: latest.ts,
@@ -1115,7 +1128,7 @@ function frame(): void {
   // The loadout panel while you're out of a round.
   const phase = snaps[snaps.length - 1]?.ph ?? 'lobby';
   // (Capture the flag has respawns, so a fall there doesn't count.)
-  spectating = !!roomCode && myId !== -1 && phase !== 'lobby' && (!pred || (!roomCtf && pred.falling && pred.fallTime > C.FALL_DURATION * 0.5));
+  spectating = !!roomCode && myId !== -1 && phase !== 'lobby' && (!pred || (!roomCtf && !roomKoth && pred.falling && pred.fallTime > C.FALL_DURATION * 0.5));
   if (spectating && !wasSpectating) input.releaseMouse();
   wasSpectating = spectating;
   ui.setLoadout(spectating);
@@ -1130,6 +1143,7 @@ function frame(): void {
         roundWinner,
         matchWinner,
         teams: teamInfo,
+        hill: hillInfo,
         weapon: pred?.weapon ?? 0,
         spread,
         rush,

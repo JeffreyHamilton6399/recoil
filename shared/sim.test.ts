@@ -40,6 +40,9 @@ import { BotBrain } from './bot.js';
 import { SHOCK_WEAPON, WEAPONS } from './weapons.js';
 import type { GameState, InputState, PlayerId, PlayerState } from './types.js';
 
+/** Walks across a map take longer the bigger the maps are (they were laid out at 38 m). */
+const SIZE = C.ARENA_START_RADIUS / 38;
+
 /** Small seeded PRNG for test inputs, so failures are reproducible. */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -270,7 +273,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   setMapChoice(s, 0);
   place(0, 0);
   const ev: string[] = [];
-  for (let i = 0; i < 200 && !p.falling; i++) {
+  for (let i = 0; i < 400 && !p.falling; i++) {
     for (const e of step(s, new Map([[0, { ...NO_INPUT, yaw: 0.3, forward: 1 }]]))) ev.push(e.k);
   }
   assert.ok(p.falling && ev.includes('fall'), 'running off the edge is a fall');
@@ -414,7 +417,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
     p.y = y;
     p.z = 0;
     p.yaw = yaw;
-    for (let i = 0; i < ticks; i++) step(s, new Map([[0, { ...NO_INPUT, forward: 1, yaw, pitch: 0, ...extra }]]));
+    for (let i = 0; i < Math.ceil(ticks * SIZE); i++) step(s, new Map([[0, { ...NO_INPUT, forward: 1, yaw, pitch: 0, ...extra }]]));
     return p;
   };
   const S = mapScale(C.ARENA_START_RADIUS);
@@ -636,7 +639,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
     Object.assign(p, { x: dx * S, y: dy * S, vx: 0, vy: 0, vz: 0, grounded: true, falling: false });
     p.z = floorAt(MAPS[idx], g.arenaRadius, p.x, p.y, onFloor + 0.05);
     let top = p.z;
-    for (let i = 0; i < ticks; i++) {
+    for (let i = 0; i < Math.ceil(ticks * SIZE); i++) {
       step(g, new Map([[0, { ...NO_INPUT, yaw, forward: 1 }]]));
       top = Math.max(top, p.z);
     }

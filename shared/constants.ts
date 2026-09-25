@@ -47,9 +47,9 @@ export const PLAYER_COLOR_NAMES: readonly string[] = ['Red', 'Blue', 'Green', 'Y
 // ---------------------------------------------------------------------------
 
 /** Arena radius at the start of every round. */
-export const ARENA_START_RADIUS = 38;
+export const ARENA_START_RADIUS = 56;
 /** Smallest the arena ever gets. */
-export const ARENA_END_RADIUS = 10;
+export const ARENA_END_RADIUS = 14;
 /** Seconds of active play it takes to shrink from start to end radius. */
 export const ARENA_SHRINK_TIME = 95;
 /** Square maps have a half-width of radius * this. */
@@ -72,7 +72,7 @@ export const PLAYER_HEIGHT = 1.8;
 /** Camera and gun height above the feet. */
 export const EYE_HEIGHT = 1.55;
 /** Players spawn evenly spaced on a ring of this radius. */
-export const SPAWN_DISTANCE = 19;
+export const SPAWN_DISTANCE = 28;
 /** Running speed on the roof. */
 export const MOVE_SPEED = 7.5;
 /** How fast you reach running speed (units per second squared). */
@@ -201,7 +201,7 @@ export const WIN_SCORE = 5;
 export const TEAM_NAMES: readonly string[] = ['Red', 'Blue'];
 export const TEAM_COLORS: readonly number[] = [0, 1];
 /** Turrets: reach (m), turn rate (rad/s), seconds between shots, hit points, and seconds out of action once knocked out. */
-export const TURRET_RANGE = 30;
+export const TURRET_RANGE = 42;
 export const TURRET_TURN = 2.4;
 export const TURRET_COOLDOWN = 1.15;
 export const TURRET_HP = 45;
@@ -216,7 +216,7 @@ export const BOMB_EVERY_MIN = 0.35;
 /** Bombs drop from this height (m). */
 export const BOMB_HEIGHT = 55;
 /** Grappling hook (Q): reach (m), pull (m/s²), top reeling speed (m/s), longest hold (s), and the wait after letting go (s). */
-export const GRAPPLE_RANGE = 34;
+export const GRAPPLE_RANGE = 50;
 export const GRAPPLE_PULL = 62;
 export const GRAPPLE_MAX_SPEED = 30;
 export const GRAPPLE_TIME = 1.8;
@@ -234,7 +234,12 @@ export const CTF_CAPTURES = 3;
 export const CTF_TIME = 300;
 export const CTF_RESPAWN_DELAY = 2.5;
 /** How close you need to be to grab a flag, or to bring one home (m). */
-export const FLAG_RADIUS = 1.4;
+export const FLAG_RADIUS = 3.2;
+/** King of the hill: the hill's radius (m), seconds on it to win, the time limit, and how often it moves (s). */
+export const HILL_RADIUS = 6;
+export const HILL_WIN = 60;
+export const HILL_TIME = 300;
+export const HILL_MOVE = 45;
 
 // ---------------------------------------------------------------------------
 // Networking

@@ -137,6 +137,16 @@ export interface Bullet {
   hits?: PlayerId[];
 }
 
+export interface Hill {
+  x: number;
+  y: number;
+  z: number;
+  owner: number;
+  moveIn: number;
+  /** Which of the map's hill spots it's on. */
+  spot: number;
+}
+
 /** A turret's state (where it stands comes from the map). */
 export interface Turret {
   yaw: number;
@@ -205,6 +215,8 @@ export type GameEvent =
   | { k: 'tdown'; i: number; x: number; y: number; z: number }
   /** Sudden death has started: bombs from the sky. */
   | { k: 'sudden' }
+  /** King of the hill: the hill moved to (x, y, z). */
+  | { k: 'hill'; x: number; y: number; z: number }
   /** A bomb has been dropped towards (x, y). */
   | { k: 'bomb'; x: number; y: number }
   /** w is the round winner, or -1 if nobody survived. */
@@ -231,6 +243,12 @@ export interface GameState {
   flags: Flag[];
   /** The map's turrets. */
   turrets: Turret[];
+  /** Room rule: king of the hill (stand on the hill to score; respawns on). */
+  koth: boolean;
+  /** King of the hill: where the hill is, who holds it (-1 nobody, -2 contested, else a team or player), and seconds until it moves. */
+  hill: Hill | null;
+  /** King of the hill: seconds on the hill, by team (in team mode) or by player id. */
+  hillScores: number[];
   /** Sudden death: seconds until the next bomb. */
   bombIn: number;
   /** Team mode: round wins for Red and Blue (captures in capture the flag). */
@@ -313,6 +331,9 @@ export interface Snapshot {
   ts?: number[];
   tw?: number | null;
   tm?: number | null;
+  /** King of the hill: the hill [x, y, z, owner], and seconds held by team or player. */
+  kh?: [number, number, number, number];
+  ks?: number[];
   /** Turrets: [yaw, pitch, knocked out (1) or not (0)]. */
   tu?: [number, number, number][];
   /** Capture the flag only: [x, y, z, carrier] for Red's and Blue's flags. */
@@ -347,7 +368,7 @@ export type ClientMessage =
   /** Host of a private room picks the map (-1 = random). */
   | { t: 'map'; choice: number }
   /** Host of a private room sets the room's rules. */
-  | { t: 'rules'; noJump: boolean; teams: boolean; ctf: boolean }
+  | { t: 'rules'; noJump: boolean; teams: boolean; ctf: boolean; koth: boolean }
   /** Team mode: switch to team 0 (Red) or 1 (Blue), in the lobby. */
   | { t: 'team'; team: number }
   | { t: 'profile'; name: string; color: number }
@@ -386,6 +407,8 @@ export type ServerMessage =
       teams: boolean;
       /** The room's capture the flag rule. */
       ctf: boolean;
+      /** The room's king of the hill rule. */
+      koth: boolean;
       /** Public rooms: seconds until the match starts automatically, or -1. */
       startsIn: number;
     }

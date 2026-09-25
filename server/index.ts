@@ -10,7 +10,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import { BOT_LEVEL_NAMES, BotBrain, isBotLevel, type BotLevel } from '../shared/bot.js';
-import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, setOffhand, setCtf, setTeam, setTeams, setWeapon, startMatch, step } from '../shared/sim.js';
+import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, setOffhand, setCtf, setKoth, setTeam, setTeams, setWeapon, startMatch, step } from '../shared/sim.js';
 import { OFFHANDS, WEAPONS, isOffhand, isWeapon } from '../shared/weapons.js';
 import {
   POWERUP_KINDS,
@@ -298,6 +298,7 @@ function handleMessage(client: Client, msg: ClientMessage): void {
         room.state.noJump = msg.noJump;
         setTeams(room.state, msg.teams || msg.ctf);
         setCtf(room.state, msg.ctf);
+        setKoth(room.state, msg.koth && !msg.ctf);
       }
       break;
     }
@@ -470,7 +471,7 @@ function parseMessage(data: RawData): ClientMessage | null {
         ? { t: 'map', choice: m.choice }
         : null;
     case 'rules':
-      return typeof m.noJump === 'boolean' ? { t: 'rules', noJump: m.noJump, teams: m.teams === true, ctf: m.ctf === true } : null;
+      return typeof m.noJump === 'boolean' ? { t: 'rules', noJump: m.noJump, teams: m.teams === true, ctf: m.ctf === true, koth: m.koth === true } : null;
     case 'team':
       return m.team === 0 || m.team === 1 ? { t: 'team', team: m.team } : null;
     case 'profile':
@@ -634,6 +635,7 @@ function tickRoom(room: Room, now: number): void {
     noJump: state.noJump,
     teams: state.teams,
     ctf: state.ctf,
+    koth: state.koth,
     startsIn,
   } satisfies ServerMessage);
   if (rosterMsg !== room.lastRoster) {
@@ -661,6 +663,10 @@ function tickRoom(room: Room, now: number): void {
     snap.tm = state.matchTeam;
   }
   if (state.ctf) snap.fl = state.flags.map((f) => [f.x, f.y, f.z, f.carrier]);
+  if (state.hill) {
+    snap.kh = [state.hill.x, state.hill.y, state.hill.z, state.hill.owner];
+    snap.ks = state.teams ? state.hillScores.slice(0, 2) : state.hillScores;
+  }
   if (state.turrets.length > 0) snap.tu = state.turrets.map((t) => [t.yaw, t.pitch, t.down > 0 ? 1 : 0]);
   const data = JSON.stringify(snap, compactReplacer);
   for (const c of clients) sendRaw(c, data);

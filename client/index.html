@@ -1206,6 +1206,9 @@
         letter-spacing: 0.04em;
         font-variant-numeric: tabular-nums;
       }
+      #scorebar .sb.holding {
+        box-shadow: 0 0 0 2px #fff, 0 0 14px rgba(255, 255, 255, 0.5);
+      }
       #round-clock.hidden {
         display: none;
       }
@@ -1773,6 +1776,10 @@
         <label id="rule-teams" class="rule hidden">
           <input type="checkbox" id="chk-teams" />
           <span><b>Teams</b> Red vs Blue, no friendly fire. Last team standing wins</span>
+        </label>
+        <label id="rule-koth" class="rule hidden">
+          <input type="checkbox" id="chk-koth" />
+          <span><b>King of the hill</b> Hold the glowing hill alone to score. First to 60 s, respawns on. Works with teams</span>
         </label>
         <label id="rule-ctf" class="rule hidden">
           <input type="checkbox" id="chk-ctf" />

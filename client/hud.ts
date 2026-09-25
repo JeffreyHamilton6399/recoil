@@ -43,6 +43,8 @@ export interface HudInfo {
   matchWinner: PlayerId | null;
   /** Team mode info, or null when it's everyone for themselves. */
   teams: TeamInfo | null;
+  /** King of the hill: seconds on the hill by team (team mode) or player, the time left, and who holds it. */
+  hill: { scores: number[]; teams: boolean; timeLeft: number; owner: number } | null;
   /** Your weapon, and how ready it is to fire again (0..1). */
   weapon: number;
   ready: number;
@@ -253,7 +255,7 @@ export class Hud {
       }
     }
 
-    this.updateScorebar(view, info.teams);
+    this.updateScorebar(view, info.teams, info.hill);
     this.updateBanners(info);
 
     // Click-to-play hint for mouse players.
@@ -263,15 +265,39 @@ export class Hud {
     if (showHint) this.lockHint.textContent = view.phase === 'lobby' ? 'Click to warm up · Esc frees the mouse' : 'Click to play';
   }
 
-  private updateScorebar(view: View, teams: TeamInfo | null): void {
+  private updateScorebar(view: View, teams: TeamInfo | null, hill: HudInfo['hill']): void {
     const inMatch = view.phase !== 'lobby';
     const outIds = new Set(view.players.filter((p) => p.fallTime >= 0).map((p) => p.id));
     const inRound = new Set(view.players.map((p) => p.id));
-    const key = inMatch ? JSON.stringify([view.roster, [...outIds], [...inRound], view.myId, teams?.scores, teams?.flags]) : '';
+    const hillKey = hill ? [hill.scores.map((v) => Math.floor(v)), hill.owner] : null;
+    const key = inMatch ? JSON.stringify([view.roster, [...outIds], [...inRound], view.myId, teams?.scores, teams?.flags, hillKey]) : '';
     if (key === this.lastScoreKey) return;
     this.lastScoreKey = key;
     this.scorebar.textContent = '';
     if (!inMatch) return;
+    if (hill) {
+      // King of the hill: seconds on the hill out of HILL_WIN, per team or per player.
+      const rows = hill.teams
+        ? [0, 1].map((t) => ({ id: t, name: `${C.TEAM_NAMES[t]}: ${view.roster.filter((r) => r.team === t).map((r) => r.name).join(', ') || '—'}`, color: C.PLAYER_PALETTE[C.TEAM_COLORS[t]], me: view.roster.some((r) => r.team === t && r.id === view.myId) }))
+        : view.roster.map((r) => ({ id: r.id, name: r.name, color: C.PLAYER_PALETTE[r.color] ?? C.PLAYER_PALETTE[0], me: r.id === view.myId }));
+      for (const row of rows) {
+        const item = document.createElement('div');
+        item.className = 'sb';
+        item.classList.toggle('me', row.me);
+        item.classList.toggle('holding', hill.owner === row.id);
+        const dot = document.createElement('span');
+        dot.className = 'pdot';
+        dot.style.setProperty('--c', row.color);
+        const name = document.createElement('span');
+        name.textContent = row.name;
+        const pts = document.createElement('span');
+        pts.className = 'pts';
+        pts.textContent = `⛰ ${Math.floor(hill.scores[row.id] ?? 0)}/${C.HILL_WIN}`;
+        item.append(dot, name, pts);
+        this.scorebar.append(item);
+      }
+      return;
+    }
     if (teams) {
       // Team mode: one line per team, its players' names and the team's points.
       for (const team of [0, 1]) {
@@ -324,7 +350,11 @@ export class Hud {
     let mode = '';
     if (view.phase === 'playing') {
       const t = view.phaseTime;
-      if (info.teams?.flags) {
+      if (info.hill) {
+        const left = Math.max(0, info.hill.timeLeft);
+        text = `⛰ ${fmt(left)} left`;
+        mode = left <= 30 ? 'warn' : '';
+      } else if (info.teams?.flags) {
         const left = Math.max(0, info.teams.timeLeft ?? 0);
         text = `⚑ ${fmt(left)} left`;
         mode = left <= 30 ? 'warn' : '';
@@ -438,6 +468,16 @@ export class Hud {
       ctx.arc(X(b.x), Y(b.y), weaponDef(BOMB_WEAPON).splash * k, 0, Math.PI * 2);
       ctx.stroke();
     }
+    // The hill.
+    if (view.hill) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.lineWidth = 2 * dpr;
+      ctx.beginPath();
+      ctx.arc(X(view.hill.x), Y(view.hill.y), Math.max(4 * dpr, C.HILL_RADIUS * k), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
     // Flags.
     view.flags?.forEach((f, team) => {
       ctx.fillStyle = C.PLAYER_PALETTE[C.TEAM_COLORS[team]];
@@ -498,16 +538,25 @@ export class Hud {
         if (this.flash && this.clockTime < this.flash.until) {
           center = this.flash.text;
           sub = this.flash.sub;
-        } else if (view.phaseTime < C.FIGHT_BANNER_TIME) center = flags ? 'CAPTURE THE FLAG!' : 'FIGHT!';
+        } else if (view.phaseTime < C.FIGHT_BANNER_TIME) center = info.hill ? 'KING OF THE HILL!' : flags ? 'CAPTURE THE FLAG!' : 'FIGHT!';
         else if (me && me.fallTime >= 0) {
           center = 'KNOCKED OFF!';
           small = true;
-          sub = flags ? 'Back in a moment' : 'Watching until the next round';
+          sub = flags || info.hill ? 'Back in a moment' : 'Watching until the next round';
         } else if (view.myId === -1) {
           sub = 'The room is full, so you are watching';
+        } else if (info.hill && view.hill) {
+          const mine = info.hill.teams ? myTeam : view.myId;
+          const h = view.hill;
+          const onIt = me !== undefined && Math.hypot(me.x - h.x, me.y - h.y) < C.HILL_RADIUS;
+          if (info.hill.owner === -2 && onIt) sub = 'CONTESTED! Knock them off the hill';
+          else if (info.hill.owner === mine && mine >= 0) sub = info.hill.teams ? 'Your team holds the hill!' : 'You hold the hill!';
+          else if (info.hill.owner >= 0) sub = 'Someone else holds the hill. Go get them!';
+          else sub = 'Get to the hill (follow the beam)';
         } else if (flags && myTeam >= 0) {
           const left = Math.max(0, Math.ceil(info.teams?.timeLeft ?? Infinity));
-          if (flags[1 - myTeam] === view.myId) sub = `You have the ${C.TEAM_NAMES[1 - myTeam]} flag! Bring it home`;
+          if (flags[1 - myTeam] === view.myId && flags[myTeam] >= 0) sub = 'You have their flag, but yours is gone: get it back before you can score';
+          else if (flags[1 - myTeam] === view.myId) sub = `You have the ${C.TEAM_NAMES[1 - myTeam]} flag! Run it to your flag`;
           else if (flags[myTeam] >= 0) sub = 'Your flag has been taken! Knock them off';
           else if (left <= 30) sub = `${left}s left`;
         }
