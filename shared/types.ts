@@ -121,6 +121,15 @@ export interface Bullet {
   age: number;
 }
 
+/** Capture the flag: a team's flag, at home (carrier -1) or carried. */
+export interface Flag {
+  team: number;
+  x: number;
+  y: number;
+  z: number;
+  carrier: PlayerId | -1;
+}
+
 export interface Powerup {
   id: number;
   kind: PowerupKind;
@@ -156,6 +165,8 @@ export type GameEvent =
   | { k: 'jump'; p: PlayerId }
   | { k: 'spawn'; u: PowerupKind; x: number; y: number }
   | { k: 'pickup'; p: PlayerId; u: PowerupKind; x: number; y: number }
+  /** Capture the flag: someone took team t's flag, brought it home (cap), or it went back to its base. */
+  | { k: 'flag'; a: 'take' | 'cap' | 'back'; t: number; p: PlayerId }
   /** w is the round winner, or -1 if nobody survived. */
   | { k: 'ko'; w: PlayerId };
 
@@ -174,7 +185,11 @@ export interface GameState {
   noJump: boolean;
   /** Room rule, set by the host: two teams, Red and Blue, instead of everyone for themselves. */
   teams: boolean;
-  /** Team mode: round wins for Red and Blue. */
+  /** Room rule: capture the flag (a team mode with respawns, played to CTF_CAPTURES). */
+  ctf: boolean;
+  /** Capture the flag: Red's and Blue's flags. */
+  flags: Flag[];
+  /** Team mode: round wins for Red and Blue (captures in capture the flag). */
   teamScores: number[];
   /** Team mode: the team that won the round just finished (-1 for nobody, null during play), and the match. */
   roundTeam: number | null;
@@ -249,6 +264,8 @@ export interface Snapshot {
   ts?: number[];
   tw?: number | null;
   tm?: number | null;
+  /** Capture the flag only: [x, y, z, carrier] for Red's and Blue's flags. */
+  fl?: [number, number, number, number][];
 }
 
 export interface RosterEntry {
@@ -279,7 +296,7 @@ export type ClientMessage =
   /** Host of a private room picks the map (-1 = random). */
   | { t: 'map'; choice: number }
   /** Host of a private room sets the room's rules. */
-  | { t: 'rules'; noJump: boolean; teams: boolean }
+  | { t: 'rules'; noJump: boolean; teams: boolean; ctf: boolean }
   /** Team mode: switch to team 0 (Red) or 1 (Blue), in the lobby. */
   | { t: 'team'; team: number }
   | { t: 'profile'; name: string; color: number }
@@ -316,6 +333,8 @@ export type ServerMessage =
       noJump: boolean;
       /** The room's team mode rule. */
       teams: boolean;
+      /** The room's capture the flag rule. */
+      ctf: boolean;
       /** Public rooms: seconds until the match starts automatically, or -1. */
       startsIn: number;
     }

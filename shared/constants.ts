@@ -200,6 +200,12 @@ export const WIN_SCORE = 5;
 /** Team mode: the two teams' names and colours (indices into PLAYER_PALETTE). */
 export const TEAM_NAMES: readonly string[] = ['Red', 'Blue'];
 export const TEAM_COLORS: readonly number[] = [0, 1];
+/** Capture the flag: captures to win, the time limit (s), and the wait before you're back after a fall (s). */
+export const CTF_CAPTURES = 3;
+export const CTF_TIME = 300;
+export const CTF_RESPAWN_DELAY = 2.5;
+/** How close you need to be to grab a flag, or to bring one home (m). */
+export const FLAG_RADIUS = 1.4;
 
 // ---------------------------------------------------------------------------
 // Networking

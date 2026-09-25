@@ -8,7 +8,7 @@
 // The world is 3D: x and y are horizontal, z is up, and the roof is at z = 0.
 
 import * as C from './constants.js';
-import { MAPS, floorAt, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, spawnPoint, type MapDef } from './maps.js';
+import { MAPS, floorAt, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, spawnAt, spawnPoint, type MapDef } from './maps.js';
 import {
   FX_AIM,
   FX_FIRE_HELD,
@@ -23,6 +23,7 @@ import {
   FX_TRIPLE,
   POWERUP_KINDS,
   type Bullet,
+  type Flag,
   type GameEvent,
   type GameState,
   type InputState,
@@ -168,8 +169,25 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
   };
 }
 
+/** Capture the flag: each team's side of the roof (Red towards -x, Blue towards +x). */
+const teamAngle = (team: number): number => Math.PI + team * Math.PI;
+
+/** Capture the flag: where team t's flag stands (its base). */
+export function flagBase(map: MapDef, team: number): { x: number; y: number } {
+  const sp = spawnAt(map, teamAngle(team));
+  return { x: sp.x, y: sp.y };
+}
+
+/** Capture the flag: spread out beside your team's flag, never on it. */
+function ctfSpawn(s: GameState, p: PlayerState): { x: number; y: number; yaw: number } {
+  const mates = s.players.filter((q) => q.team === p.team).sort((a, b) => a.id - b.id);
+  const k = Math.max(0, mates.indexOf(p));
+  const off = (k % 2 === 0 ? 1 : -1) * 0.22 * (Math.floor(k / 2) + 1);
+  return spawnAt(currentMap(s), teamAngle(p.team) + off);
+}
+
 function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number): void {
-  const sp = spawnPoint(currentMap(s), index, count);
+  const sp = s.ctf ? ctfSpawn(s, p) : spawnPoint(currentMap(s), index, count);
   p.x = sp.x;
   p.y = sp.y;
   p.z = 0;
@@ -207,6 +225,55 @@ function placeAll(s: GameState): void {
     p.inRound = true;
     resetAtSpawn(s, p, i, n);
   });
+  s.flags = s.ctf ? [0, 1].map((team) => ({ team, ...flagBase(currentMap(s), team), z: 0, carrier: -1 })) : [];
+}
+
+/** Capture the flag: a flag goes back to its base. */
+function homeFlag(s: GameState, f: Flag): void {
+  const base = flagBase(currentMap(s), f.team);
+  f.x = base.x;
+  f.y = base.y;
+  f.z = 0;
+  f.carrier = -1;
+}
+
+/**
+ * Capture the flag: grab the other team's flag by touching it, and bring it
+ * to your own flag (while yours is at home) to score. If the carrier falls,
+ * the flag goes straight home. Captures only count in a match.
+ */
+function updateFlags(s: GameState, events: GameEvent[], scoring: boolean): void {
+  for (const f of s.flags) {
+    if (f.carrier >= 0) {
+      const c = getPlayer(s, f.carrier);
+      if (!c || !c.inRound || c.falling || c.team === f.team) {
+        events.push({ k: 'flag', a: 'back', t: f.team, p: f.carrier });
+        homeFlag(s, f);
+        continue;
+      }
+      f.x = c.x;
+      f.y = c.y;
+      f.z = c.z;
+      const own = s.flags[c.team];
+      if (own && own.carrier < 0 && Math.hypot(c.x - own.x, c.y - own.y) < C.FLAG_RADIUS && Math.abs(c.z - own.z) < 1.5) {
+        events.push({ k: 'flag', a: 'cap', t: f.team, p: c.id });
+        homeFlag(s, f);
+        if (scoring) {
+          s.teamScores[c.team]++;
+          s.scores[c.id]++;
+        }
+      }
+    } else {
+      for (const p of s.players) {
+        if (!p.inRound || p.falling || p.team === f.team) continue;
+        if (Math.hypot(p.x - f.x, p.y - f.y) < C.FLAG_RADIUS && Math.abs(p.z - f.z) < 1.5) {
+          f.carrier = p.id;
+          events.push({ k: 'flag', a: 'take', t: f.team, p: p.id });
+          break;
+        }
+      }
+    }
+  }
 }
 
 export function createGame(seed: number): GameState {
@@ -229,6 +296,8 @@ export function createGame(seed: number): GameState {
     rng: seed >>> 0 || 1,
     noJump: false,
     teams: false,
+    ctf: false,
+    flags: [],
     teamScores: [0, 0],
     roundTeam: null,
     matchTeam: null,
@@ -248,6 +317,11 @@ export function addPlayer(s: GameState, id: PlayerId, weapon = 0): void {
   s.players.push(p);
   s.players.sort((a, b) => a.id - b.id);
   if (s.phase === 'lobby') placeAll(s);
+  else if (s.ctf && (s.phase === 'countdown' || s.phase === 'playing')) {
+    // Capture the flag has respawns, so late arrivals jump straight in.
+    p.inRound = true;
+    resetAtSpawn(s, p, 0, 1);
+  }
 }
 
 export function removePlayer(s: GameState, id: PlayerId): void {
@@ -280,9 +354,21 @@ function balanceTeams(s: GameState): void {
 
 /** Switches team mode on or off (between matches). Turning it on splits everyone evenly. */
 export function setTeams(s: GameState, on: boolean): void {
-  if (s.teams === on) return;
+  if (!on) s.ctf = false;
+  if (s.teams === on) {
+    if (s.phase === 'lobby') placeAll(s);
+    return;
+  }
   s.teams = on;
   if (on) s.players.forEach((p, i) => (p.team = i % 2));
+  if (s.phase === 'lobby') placeAll(s);
+}
+
+/** Switches capture the flag on or off (between matches). It's a team mode, so it turns teams on too. */
+export function setCtf(s: GameState, on: boolean): void {
+  if (on && !s.teams) setTeams(s, true);
+  if (s.ctf === on) return;
+  s.ctf = on;
   if (s.phase === 'lobby') placeAll(s);
 }
 
@@ -1160,7 +1246,8 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
 
   if (playing) {
     s.playTime += dt;
-    s.arenaRadius = arenaRadiusAt(s.playTime);
+    // Capture the flag keeps the whole roof: the bases stay put.
+    if (!s.ctf) s.arenaRadius = arenaRadiusAt(s.playTime);
   }
   if (lobby || playing) updatePowerups(s, dt, events);
 
@@ -1184,7 +1271,9 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
   for (const p of inRound) {
     if (p.falling) {
       p.fallTime += dt;
-      if (lobby && p.fallTime > C.FALL_DURATION + C.LOBBY_RESPAWN_DELAY) {
+      // Back on the roof after a moment in the warm-up and in capture the flag.
+      const wait = lobby ? C.LOBBY_RESPAWN_DELAY : playing && s.ctf ? C.CTF_RESPAWN_DELAY : -1;
+      if (wait >= 0 && p.fallTime > C.FALL_DURATION + wait) {
         resetAtSpawn(s, p, p.spawnIndex, inRound.length);
         events.push({ k: 'respawn', p: p.id });
       }
@@ -1196,7 +1285,23 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
     }
   }
 
-  if (playing && s.teams) {
+  if (s.ctf && (lobby || playing)) updateFlags(s, events, playing);
+
+  if (playing && s.ctf) {
+    // Capture the flag is one long round: first to CTF_CAPTURES, or the most captures when time runs out.
+    const won = s.teamScores.findIndex((v) => v >= C.CTF_CAPTURES);
+    if (won >= 0 || s.playTime >= C.CTF_TIME) {
+      const [red, blue] = s.teamScores;
+      const team = won >= 0 ? won : red === blue ? -1 : red > blue ? 0 : 1;
+      s.roundTeam = team;
+      s.matchTeam = team;
+      s.roundWinner = -1;
+      s.matchWinner = -1;
+      s.phase = 'matchEnd';
+      s.phaseTime = 0;
+      events.push({ k: 'ko', w: -1 });
+    }
+  } else if (playing && s.teams) {
     // Team mode: the round is over once only one team is left standing.
     const standing = new Set(inRound.filter((p) => !p.falling).map((p) => p.team));
     if (standing.size <= 1) {

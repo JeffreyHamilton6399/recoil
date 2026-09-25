@@ -27,6 +27,8 @@ export interface UiHandlers {
   onNoJump(on: boolean): void;
   /** Host: team mode on or off. */
   onTeams(on: boolean): void;
+  /** Host: capture the flag on or off. */
+  onCtf(on: boolean): void;
   /** Team mode: join team 0 (Red) or 1 (Blue). */
   onPickTeam(team: number): void;
   /** Name or colour changed. */
@@ -67,6 +69,8 @@ export interface LobbyInfo {
   noJump: boolean;
   /** The room's team mode rule. */
   teams: boolean;
+  /** The room's capture the flag rule. */
+  ctf: boolean;
   /** Players you've muted, and who is talking right now. */
   muted: PlayerId[];
   speaking: PlayerId[];
@@ -107,6 +111,8 @@ export class UI {
   private readonly teamsRule = el('rule-teams');
   private readonly teamsBox = el<HTMLInputElement>('chk-teams');
   private readonly teamPick = el('team-pick');
+  private readonly ctfRule = el('rule-ctf');
+  private readonly ctfBox = el<HTMLInputElement>('chk-ctf');
   private readonly teamBtns = [el<HTMLButtonElement>('btn-team-red'), el<HTMLButtonElement>('btn-team-blue')];
   private readonly weaponsSection = el('weapons-section');
   private readonly offhandList = el('offhand-list');
@@ -182,6 +188,7 @@ export class UI {
     this.startBtn.addEventListener('click', () => handlers.onStart());
     this.noJumpBox.addEventListener('change', () => handlers.onNoJump(this.noJumpBox.checked));
     this.teamsBox.addEventListener('change', () => handlers.onTeams(this.teamsBox.checked));
+    this.ctfBox.addEventListener('change', () => handlers.onCtf(this.ctfBox.checked));
     this.teamBtns.forEach((b, team) => b.addEventListener('click', () => handlers.onPickTeam(team)));
     el('btn-lobby-leave').addEventListener('click', () => handlers.onLeave());
     el('btn-leave').addEventListener('click', () => {
@@ -694,6 +701,10 @@ export class UI {
     this.teamsBox.disabled = !isHost;
     this.teamsBox.checked = info.teams;
     this.teamPick.classList.toggle('hidden', !info.teams || info.myId === -1);
+    this.ctfRule.classList.toggle('hidden', info.pub || (!isHost && !info.ctf));
+    this.ctfRule.classList.toggle('readonly', !isHost);
+    this.ctfBox.disabled = !isHost;
+    this.ctfBox.checked = info.ctf;
     this.teamBtns.forEach((b, team) => {
       const count = info.roster.filter((r) => r.team === team).length;
       b.textContent = `${me?.team === team ? '✓ ' : 'Join '}${C.TEAM_NAMES[team]} (${count})`;

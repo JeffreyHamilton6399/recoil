@@ -28,6 +28,7 @@ import {
   playerSnap,
   removePlayer,
   setMapChoice,
+  setCtf,
   setOffhand,
   setTeam,
   setTeams,
@@ -691,6 +692,68 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   while (g.phase === 'roundEnd') step(g, new Map());
   assert.deepEqual(g.players.map((p) => p.team).sort(), [0, 1], 'teams rebalanced');
   console.log('ok 15 - team mode');
+}
+
+// 16. Capture the flag: grab their flag, bring it home to score, lose it
+//     if you're knocked off, respawn after a fall, and win at CTF_CAPTURES.
+{
+  const g = createGame(91);
+  for (let id = 0; id < 4; id++) addPlayer(g, id, 0);
+  setMapChoice(g, MAPS.findIndex((m) => m.name === 'Twin Bases'));
+  setCtf(g, true);
+  assert.ok(g.teams && g.flags.length === 2, 'capture the flag turns teams on and puts out two flags');
+  startMatch(g);
+  while (g.phase !== 'playing') step(g, new Map());
+  const red = g.players.find((p) => p.team === 0)!;
+  const [redFlag, blueFlag] = g.flags;
+  assert.ok(redFlag.x < 0 && blueFlag.x > 0, 'Red defends the -x side, Blue the +x side');
+  const moveTo = (p: PlayerState, x: number, y: number): void => {
+    Object.assign(p, { x, y, z: 0, vx: 0, vy: 0, vz: 0, grounded: true });
+    step(g, new Map());
+  };
+  const capture = (): void => {
+    moveTo(red, blueFlag.x, blueFlag.y);
+    assert.equal(blueFlag.carrier, red.id, 'touching their flag picks it up');
+    moveTo(red, redFlag.x, redFlag.y);
+  };
+  capture();
+  assert.deepEqual(g.teamScores, [1, 0], 'bringing it home scores');
+  assert.equal(blueFlag.carrier, -1, 'and the flag goes back');
+  // Knocked off with the flag: it goes home, and you're back after a moment.
+  moveTo(red, blueFlag.x, blueFlag.y);
+  Object.assign(red, { z: -3, grounded: false });
+  step(g, new Map());
+  assert.ok(red.falling && blueFlag.carrier === -1, 'the flag goes home when its carrier falls');
+  for (let i = 0; i < Math.ceil((C.FALL_DURATION + C.CTF_RESPAWN_DELAY) / C.TICK_DT) + 2; i++) step(g, new Map());
+  assert.ok(!red.falling && red.inRound, 'fallen players respawn in capture the flag');
+  assert.ok(red.x < 0, 'on their own side');
+  capture();
+  capture();
+  assert.equal(g.phase, 'matchEnd');
+  assert.equal(g.matchTeam, 0, 'Red wins at three captures');
+  console.log('ok 16 - capture the flag');
+}
+
+// 17. Blocks of buildings: the gaps between rooftops are a drop, the bridges
+//     aren't, and you can run and jump across a gap.
+{
+  const map = MAPS.find((m) => m.name === 'City Blocks')!;
+  const R = C.ARENA_START_RADIUS;
+  const S = mapScale(R);
+  assert.ok(isOffMap(map, R, 2.6 * S, 0), 'the gap between buildings is a drop');
+  assert.ok(!isOffMap(map, R, 2.6 * S, 1.2 * S), 'the bridge is solid');
+  const g = createGame(5);
+  addPlayer(g, 0);
+  setMapChoice(g, MAPS.indexOf(map));
+  const p = g.players[0];
+  Object.assign(p, { x: -1.5 * S, y: -1.7 * S, z: 0, vx: 0, vy: 0, vz: 0, grounded: true, yaw: 0 });
+  // Sprint east and jump at the edge of the middle roof.
+  for (let i = 0; i < 90 && p.x < 4 * S; i++) {
+    const nearEdge = p.x > 2.15 * S - 1.2 && p.x < 2.15 * S;
+    step(g, new Map([[0, { ...NO_INPUT, yaw: 0, forward: 1, sprint: true, jump: nearEdge }]]));
+  }
+  assert.ok(p.x > 3.05 * S && !p.falling && p.z > -0.1, `jumped the gap (x=${(p.x / S).toFixed(2)}, z=${p.z.toFixed(2)})`);
+  console.log('ok 17 - gaps between buildings, bridges, and a running jump across');
 }
 
 console.log('all simulation tests passed');

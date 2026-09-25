@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import * as C from '../shared/constants.js';
 import { MAPS, mapScale, scaledBumpers, type MapDef } from '../shared/maps.js';
-import { clamp } from '../shared/sim.js';
+import { clamp, flagBase } from '../shared/sim.js';
 import { FX_GROUNDED, FX_SHIELD, type GameEvent, type PlayerId, type PowerupKind, type RosterEntry } from '../shared/types.js';
 import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
 import { FONT, INK, POWERUP_STYLE, arenaOutline, makeSurfaceCanvas } from './art.js';
@@ -74,6 +74,23 @@ export interface View {
   myId: PlayerId | -1;
   /** Players talking on voice chat right now. */
   speaking?: ReadonlySet<PlayerId>;
+  /** Capture the flag: Red's and Blue's flags (carrier -1 when at home). */
+  flags?: ViewFlag[];
+}
+
+export interface ViewFlag {
+  x: number;
+  y: number;
+  z: number;
+  carrier: PlayerId | -1;
+}
+
+/** A capture-the-flag flag: pole and cloth, a light beam to find it by, and its base ring. */
+interface FlagObj {
+  group: THREE.Group;
+  cloth: THREE.Mesh;
+  beam: THREE.Mesh;
+  base: THREE.Mesh;
 }
 
 /** Where the camera is: your own eyes, or circling the roof. */
@@ -615,6 +632,7 @@ export class Scene3D {
   private pads: Pads | null = null;
 
   private readonly rigs = new Map<PlayerId, Rig>();
+  private readonly flagObjs: FlagObj[] = [];
   private readonly bullets = new Map<number, BulletObj>();
   private readonly bulletPool = new Map<string, BulletObj[]>();
   private casings: Casing[] = [];
@@ -894,14 +912,28 @@ export class Scene3D {
     const outline = arenaOutline(map, R);
 
     // The tower: the roof outline with its holes, extruded down to the street.
-    const shape = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
-    for (const h of map.holes) {
-      const path = new THREE.Path();
-      path.absarc(h.x * S, h.y * S, h.r * S, 0, Math.PI * 2, true);
-      shape.holes.push(path);
+    // A block of buildings is one tower per rooftop, and thin slabs for the bridges.
+    const rect = (x0: number, y0: number, x1: number, y1: number): THREE.Vector2[] => [
+      new THREE.Vector2(x0, y0),
+      new THREE.Vector2(x1, y0),
+      new THREE.Vector2(x1, y1),
+      new THREE.Vector2(x0, y1),
+    ];
+    const pieces: { shape: THREE.Shape; depth: number }[] = [];
+    if (map.roofs) {
+      for (const r of map.roofs) {
+        const shape = new THREE.Shape(rect((r.x - r.w / 2) * S, (r.y - r.d / 2) * S, (r.x + r.w / 2) * S, (r.y + r.d / 2) * S));
+        pieces.push({ shape, depth: r.bridge ? 0.6 : TOWER_DEPTH });
+      }
+    } else {
+      const shape = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
+      for (const h of map.holes) {
+        const path = new THREE.Path();
+        path.absarc(h.x * S, h.y * S, h.r * S, 0, Math.PI * 2, true);
+        shape.holes.push(path);
+      }
+      pieces.push({ shape, depth: TOWER_DEPTH });
     }
-    const geo = new THREE.ExtrudeGeometry(shape, { depth: TOWER_DEPTH, bevelEnabled: false, curveSegments: 40 });
-    geo.translate(0, 0, -TOWER_DEPTH);
 
     const surface = new THREE.CanvasTexture(makeSurfaceCanvas(map, 1024));
     surface.colorSpace = THREE.SRGBColorSpace;
@@ -924,17 +956,45 @@ export class Scene3D {
 
     const roof = new THREE.Group();
     roof.rotation.x = -Math.PI / 2; // shape (x, y) -> world (x, -z); extrusion -> up
-    const tower = new THREE.Mesh(geo, [topMat, sideMat]);
-    tower.receiveShadow = true;
-    roof.add(tower);
+    for (const { shape, depth } of pieces) {
+      const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 40 });
+      geo.translate(0, 0, -depth);
+      const tower = new THREE.Mesh(geo, [topMat, sideMat]);
+      tower.receiveShadow = true;
+      roof.add(tower);
+    }
 
-    // Hazard stripe around the edge and around every hole.
+    // Hazard stripe around the edge (of every rooftop) and around every hole.
     this.edgeMat = new THREE.MeshBasicMaterial({ color: '#ffd93d', transparent: true, opacity: 0.9, depthWrite: false });
-    const ring = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
-    ring.holes.push(new THREE.Path(arenaOutline(map, R - 0.45).map(([x, y]) => new THREE.Vector2(x, y)).reverse()));
-    const edge = new THREE.Mesh(new THREE.ShapeGeometry(ring, 40), this.edgeMat);
-    edge.position.z = 0.02;
-    roof.add(edge);
+    const stripe = (shape: THREE.Shape): void => {
+      const edge = new THREE.Mesh(new THREE.ShapeGeometry(shape, 40), this.edgeMat ?? undefined);
+      edge.position.z = 0.02;
+      roof.add(edge);
+    };
+    if (map.roofs) {
+      const e = 0.45;
+      for (const r of map.roofs) {
+        const [x0, y0, x1, y1] = [(r.x - r.w / 2) * S, (r.y - r.d / 2) * S, (r.x + r.w / 2) * S, (r.y + r.d / 2) * S];
+        if (r.bridge) {
+          // Just the two open sides: the ends run onto the rooftops.
+          if (r.w > r.d) {
+            stripe(new THREE.Shape(rect(x0, y0, x1, y0 + e)));
+            stripe(new THREE.Shape(rect(x0, y1 - e, x1, y1)));
+          } else {
+            stripe(new THREE.Shape(rect(x0, y0, x0 + e, y1)));
+            stripe(new THREE.Shape(rect(x1 - e, y0, x1, y1)));
+          }
+          continue;
+        }
+        const ring = new THREE.Shape(rect(x0, y0, x1, y1));
+        ring.holes.push(new THREE.Path(rect(x0 + e, y0 + e, x1 - e, y1 - e).reverse()));
+        stripe(ring);
+      }
+    } else {
+      const ring = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
+      ring.holes.push(new THREE.Path(arenaOutline(map, R - 0.45).map(([x, y]) => new THREE.Vector2(x, y)).reverse()));
+      stripe(ring);
+    }
     for (const h of map.holes) {
       const hr = new THREE.Mesh(new THREE.RingGeometry(h.r * S, h.r * S + 0.4, 40), this.edgeMat);
       hr.position.set(h.x * S, h.y * S, 0.02);
@@ -1134,6 +1194,65 @@ export class Scene3D {
         }
       }
       this.bullets.delete(id);
+    }
+  }
+
+  private makeFlag(team: number): FlagObj {
+    const color = C.PLAYER_PALETTE[C.TEAM_COLORS[team]];
+    const group = new THREE.Group();
+    const pole = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 2.5, 8), toon('#e8e4f2')), 1.3);
+    pole.position.y = 1.25;
+    group.add(pole);
+    const cloth = outlined(new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.6, 0.04), toon(color)), 1.06);
+    cloth.geometry.translate(0.475, 0, 0);
+    cloth.position.y = 2.15;
+    group.add(cloth);
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.3, 60, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
+    );
+    beam.position.y = 30;
+    group.add(beam);
+    group.add(glowSprite(color, 2));
+    const base = new THREE.Mesh(
+      new THREE.RingGeometry(C.FLAG_RADIUS - 0.18, C.FLAG_RADIUS, 40),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false }),
+    );
+    base.rotation.x = -Math.PI / 2;
+    this.scene.add(group, base);
+    return { group, cloth, beam, base };
+  }
+
+  /** Capture the flag: flags at their bases, or on their carrier's back. */
+  private syncFlags(view: View, cam: CameraView): void {
+    const flags = view.flags ?? [];
+    for (let team = 0; team < 2; team++) {
+      const f = flags[team];
+      let obj = this.flagObjs[team];
+      if (!f) {
+        if (obj) obj.group.visible = obj.base.visible = false;
+        continue;
+      }
+      obj ??= this.flagObjs[team] = this.makeFlag(team);
+      const home = flagBase(MAPS[view.mapIndex] ?? MAPS[0], team);
+      obj.base.visible = true;
+      toThree(home.x, home.y, 0.03, obj.base.position);
+      let { x, y, z } = f;
+      let lean = 0;
+      const carrier = f.carrier >= 0 ? view.players.find((p) => p.id === f.carrier) : undefined;
+      if (carrier) {
+        // Strapped to the carrier's back, leaning with their run.
+        x = carrier.x - Math.cos(carrier.yaw) * 0.35;
+        y = carrier.y - Math.sin(carrier.yaw) * 0.35;
+        z = carrier.z + 0.6;
+        lean = 0.25;
+      }
+      // Your own flag-carrying back is out of view in first person.
+      obj.group.visible = !(carrier && carrier.id === view.myId && cam.kind === 'first');
+      toThree(x, y, z, obj.group.position);
+      obj.group.rotation.set(0, carrier ? -carrier.yaw + Math.PI : 0, lean);
+      obj.cloth.rotation.y = Math.sin(this.time * 4 + team) * 0.35;
+      (obj.beam.material as THREE.MeshBasicMaterial).opacity = carrier ? 0.32 + 0.12 * Math.sin(this.time * 10) : 0.2;
     }
   }
 
@@ -1590,6 +1709,7 @@ export class Scene3D {
     }
 
     this.syncPlayers(view, cam, dt);
+    this.syncFlags(view, cam);
     this.syncBullets(view);
     this.syncPowerups(view);
     this.particles.update(dt);

@@ -77,6 +77,19 @@ export interface Ramp {
   z?: number;
 }
 
+/**
+ * A separate rooftop, for maps that are a block of buildings with gaps
+ * between them (design units, like a Block). Anywhere not on a rooftop is a
+ * drop to the street. A bridge is a narrow walkway across a gap.
+ */
+export interface Roof {
+  x: number;
+  y: number;
+  w: number;
+  d: number;
+  bridge?: boolean;
+}
+
 export interface MapDef {
   name: string;
   blurb: string;
@@ -91,8 +104,13 @@ export interface MapDef {
   ramps?: Ramp[];
   /** Jump pads: step on one to be launched into the air. */
   pads: Circle[];
+  /** A block of separate buildings: only these rooftops (and bridges) are solid. */
+  roofs?: Roof[];
   theme: MapTheme;
 }
+
+/** A bridge across a gap between two rooftops. */
+const bridge = (x: number, y: number, w: number, d: number): Roof => ({ x, y, w, d, bridge: true });
 
 const polar = (r: number, deg: number, size: number): Circle => {
   const a = (deg * Math.PI) / 180;
@@ -492,6 +510,133 @@ export const MAPS: readonly MapDef[] = [
     pads: [pad(3.6, 45), pad(3.6, 225)],
     theme: { top: '#c9c3b6', shade: '#a59e8f', side: '#5a6a8a', sideShade: '#3f4d6b', surface: 'paving', bumper: '#ff3d8b' },
   },
+  {
+    name: 'City Blocks',
+    blurb: 'Nine rooftops and the gaps between them. Jump across, or take a bridge.',
+    shape: 'square',
+    holes: [],
+    bumpers: [],
+    roofs: [
+      { x: -5.2, y: -5.2, w: 4.3, d: 4.3 },
+      { x: 0, y: -5.2, w: 4.3, d: 4.3 },
+      { x: 5.2, y: -5.2, w: 4.3, d: 4.3 },
+      { x: -5.2, y: 0, w: 4.3, d: 4.3 },
+      { x: 0, y: 0, w: 4.3, d: 4.3 },
+      { x: 5.2, y: 0, w: 4.3, d: 4.3 },
+      { x: -5.2, y: 5.2, w: 4.3, d: 4.3 },
+      { x: 0, y: 5.2, w: 4.3, d: 4.3 },
+      { x: 5.2, y: 5.2, w: 4.3, d: 4.3 },
+      // Bridges from the middle out, and a few round the outside. The other gaps are a running jump.
+      bridge(2.6, 1.2, 1.2, 0.5),
+      bridge(-2.6, -1.2, 1.2, 0.5),
+      bridge(-1.2, 2.6, 0.5, 1.2),
+      bridge(1.2, -2.6, 0.5, 1.2),
+      bridge(2.6, 5.2, 1.2, 0.5),
+      bridge(-2.6, -5.2, 1.2, 0.5),
+      bridge(5.2, -2.6, 0.5, 1.2),
+      bridge(-5.2, 2.6, 0.5, 1.2),
+    ],
+    ...parts(
+      tower(0, 0, 2.4, 2.4, 'new'),
+      // Rooftop sheds and water towers on the corners, crates to hide behind.
+      ...hut(-5.6, 5.6, 1.6, 1.4, 'e'),
+      ...hut(5.6, -5.6, 1.6, 1.4, 'w'),
+      ...pergola(5.4, 5.4, 1.6, 1.6),
+      ...pergola(-5.4, -5.4, 1.6, 1.6),
+      ramp(5.4, 3.7, 0.6, 1.8, 1),
+      ramp(-5.4, -3.7, 0.6, 1.8, 3),
+      crate(5.2, 0, 0.8, 1.1),
+      crate(5.2, 180, 0.8, 1.1),
+      crate(5.6, 90, 0.7, 1.1),
+      crate(5.6, 270, 0.7, 1.1),
+    ),
+    pads: [pad(7.3, 45), pad(7.3, 225)],
+    theme: { top: '#8d8a9e', shade: '#6f6c80', side: '#4f5d80', sideShade: '#384463', surface: 'tar', bumper: '#ff3d8b' },
+  },
+  {
+    name: 'Skyline',
+    blurb: 'Wide gaps between tall buildings. Blast across with recoil, or climb to the high bridges.',
+    shape: 'square',
+    holes: [],
+    bumpers: [],
+    roofs: [
+      { x: 0, y: 0, w: 4.0, d: 4.6 },
+      { x: -5.4, y: 0, w: 3.6, d: 6.2 },
+      { x: 5.4, y: 0, w: 3.6, d: 6.2 },
+      { x: 0, y: 5.6, w: 5.6, d: 2.4 },
+      { x: 0, y: -5.6, w: 5.6, d: 2.4 },
+      { x: -5.8, y: 5.8, w: 2.2, d: 2.2 },
+      { x: 5.8, y: 5.8, w: 2.2, d: 2.2 },
+      { x: -5.8, y: -5.8, w: 2.2, d: 2.2 },
+      { x: 5.8, y: -5.8, w: 2.2, d: 2.2 },
+      // One narrow walkway to each side building; everything else is a leap.
+      bridge(-2.8, 1.8, 1.8, 0.5),
+      bridge(2.8, -1.8, 1.8, 0.5),
+    ],
+    ...parts(
+      // High bridges: ramps up from the middle roof, across the gap, down onto the far roof.
+      ramp(0, 1.25, 0.7, 1.9, 1),
+      slab(0, 3.3, 0.7, 2.2),
+      ramp(0, 5.35, 0.7, 1.9, 3),
+      ramp(0, -1.25, 0.7, 1.9, 3),
+      slab(0, -3.3, 0.7, 2.2),
+      ramp(0, -5.35, 0.7, 1.9, 1),
+      // Lookouts on the side buildings.
+      ...pergola(-5.6, -2.0, 1.6, 1.6),
+      ...pergola(5.6, 2.0, 1.6, 1.6),
+      ramp(-5.6, -0.3, 0.6, 1.8, 3),
+      ramp(5.6, 0.3, 0.6, 1.8, 1),
+      crate(1.9, 0, 0.8, 1.1),
+      crate(1.9, 180, 0.8, 1.1),
+    ),
+    // Pads by the gaps: run onto one to leap to the next building.
+    pads: [
+      { x: -1.5, y: -1.6, r: 0.5 },
+      { x: 1.5, y: 1.6, r: 0.5 },
+      { x: -5.8, y: 5.8, r: 0.5 },
+      { x: 5.8, y: -5.8, r: 0.5 },
+      { x: 5.8, y: 5.8, r: 0.5 },
+      { x: -5.8, y: -5.8, r: 0.5 },
+    ],
+    theme: { top: '#b4b9c9', shade: '#9096a8', side: '#3d4f7a', sideShade: '#2b3a5c', surface: 'plate', bumper: '#ff3d8b' },
+  },
+  {
+    name: 'Twin Bases',
+    blurb: 'Two big bases, three islands between them. Made for capture the flag.',
+    shape: 'square',
+    holes: [],
+    bumpers: [],
+    roofs: [
+      { x: -5.3, y: 0, w: 4.2, d: 7.0 },
+      { x: 5.3, y: 0, w: 4.2, d: 7.0 },
+      { x: 0, y: 0, w: 2.6, d: 2.6 },
+      { x: 0, y: 4.6, w: 2.6, d: 2.4 },
+      { x: 0, y: -4.6, w: 2.6, d: 2.4 },
+      // The direct route: a narrow bridge each side, and bridges between the islands.
+      bridge(-2.3, 0, 2.2, 0.5),
+      bridge(2.3, 0, 2.2, 0.5),
+      bridge(0, 2.4, 0.5, 1.4),
+      bridge(0, -2.4, 0.5, 1.4),
+    ],
+    ...parts(
+      tower(-6.0, 2.0, 2.2, 2.2, 'nwe'),
+      tower(6.0, -2.0, 2.2, 2.2, 'nwe'),
+      ...hut(-6.0, -2.3, 1.6, 1.4, 'n'),
+      ...hut(6.0, 2.3, 1.6, 1.4, 'n'),
+      crate(1.0, 90, 0.7, 1.1),
+      crate(1.0, 270, 0.7, 1.1),
+      crate(4.6, 90, 0.7, 1.1),
+      crate(4.6, 270, 0.7, 1.1),
+    ),
+    // Pads at the front of each base: run onto one to fly to the islands.
+    pads: [
+      { x: -3.8, y: 2.6, r: 0.5 },
+      { x: -3.8, y: -2.6, r: 0.5 },
+      { x: 3.8, y: 2.6, r: 0.5 },
+      { x: 3.8, y: -2.6, r: 0.5 },
+    ],
+    theme: { top: '#7f8a78', shade: '#646e5e', side: '#6a5a4a', sideShade: '#4c4034', surface: 'gravel', bumper: '#ff3d8b' },
+  },
 ];
 /** Vertex radius and first vertex angle of the polygon shapes, relative to the arena radius. */
 export const POLY_SHAPES: Record<'hex' | 'diamond', { sides: number; scale: number; rot: number }> = {
@@ -533,6 +678,7 @@ export function isOffMap(map: MapDef, arenaRadius: number, x: number, y: number)
     }
   }
   const s = mapScale(arenaRadius);
+  if (map.roofs && !map.roofs.some((r) => Math.abs(x - r.x * s) <= (r.w * s) / 2 && Math.abs(y - r.y * s) <= (r.d * s) / 2)) return true;
   for (const hole of map.holes) {
     if (Math.hypot(x - hole.x * s, y - hole.y * s) < hole.r * s) return true;
   }
@@ -663,17 +809,31 @@ function spawnIsSafe(map: MapDef, arenaRadius: number, x: number, y: number): bo
  */
 export function spawnPoint(map: MapDef, index: number, count: number): { x: number; y: number; yaw: number } {
   const n = Math.max(1, count);
-  const base = Math.PI + (index / n) * Math.PI * 2;
+  return spawnAt(map, Math.PI + (index / n) * Math.PI * 2);
+}
+
+/** The safe spot on the spawn ring nearest the given angle, facing the centre. */
+export function spawnAt(map: MapDef, base: number): { x: number; y: number; yaw: number } {
   const R = C.ARENA_START_RADIUS;
-  for (const dr of [0, -2, 2, -4, 4, -6]) {
-    for (const da of [0, 0.12, -0.12, 0.25, -0.25, 0.4, -0.4]) {
-      const a = base + da;
-      const r = C.SPAWN_DISTANCE + dr;
-      const x = Math.cos(a) * r;
-      const y = Math.sin(a) * r;
-      if (spawnIsSafe(map, R, x, y)) return { x, y, yaw: Math.atan2(-y, -x) };
+  const tries = (drs: number[], das: number[]): { x: number; y: number; yaw: number } | null => {
+    for (const dr of drs) {
+      for (const da of das) {
+        const a = base + da;
+        const r = C.SPAWN_DISTANCE + dr;
+        const x = Math.cos(a) * r;
+        const y = Math.sin(a) * r;
+        if (spawnIsSafe(map, R, x, y)) return { x, y, yaw: Math.atan2(-y, -x) };
+      }
     }
-  }
+    return null;
+  };
+  const near = tries([0, -2, 2, -4, 4, -6], [0, 0.12, -0.12, 0.25, -0.25, 0.4, -0.4]);
+  if (near) return near;
+  // Buildings with gaps between them: look further round the ring.
+  const wide: number[] = [];
+  for (let da = 0.5; da <= Math.PI; da += 0.1) wide.push(da, -da);
+  const far = tries([0, -3, 3, -6, 6, -9], wide);
+  if (far) return far;
   const x = Math.cos(base) * C.SPAWN_DISTANCE;
   const y = Math.sin(base) * C.SPAWN_DISTANCE;
   return { x, y, yaw: base + Math.PI };

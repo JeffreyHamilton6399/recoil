@@ -11,7 +11,7 @@
 import * as C from './constants.js';
 import { floorAt, inBlock, isOffMap, type MapDef } from './maps.js';
 import { clearLine, climbs, findPath, navGrid, type Climb, type NavGrid } from './nav.js';
-import { NO_INPUT, allies, angleDiff, clamp, currentMap, phaseRules, wrapAngle } from './sim.js';
+import { NO_INPUT, allies, angleDiff, flagBase, clamp, currentMap, phaseRules, wrapAngle } from './sim.js';
 import type { GameState, InputState, PlayerId, PlayerState } from './types.js';
 import { weaponDef } from './weapons.js';
 
@@ -127,7 +127,13 @@ export class BotBrain {
     // ---- Target ---------------------------------------------------------
     this.retargetIn -= dt;
     let target = enemies.find((p) => p.id === this.targetId);
-    if (!target || this.retargetIn <= 0) {
+    // Capture the flag: whoever has our flag is the one to stop.
+    const ownFlag = s.ctf ? s.flags[me.team] : undefined;
+    const thief = ownFlag && ownFlag.carrier >= 0 ? enemies.find((p) => p.id === ownFlag.carrier) : undefined;
+    if (thief) {
+      target = thief;
+      this.targetId = thief.id;
+    } else if (!target || this.retargetIn <= 0) {
       target = this.pickTarget(me, enemies, map, R) ?? undefined;
       this.targetId = target?.id ?? -1;
       this.retargetIn = 0.6 + Math.random() * 0.8;
@@ -206,9 +212,25 @@ export class BotBrain {
     }
     this.modeFor += dt;
 
+    // Capture the flag: run their flag home, chase down our thief, or (for
+    // every other bot on the team) go and get their flag.
+    let goal: { x: number; y: number } | null = null;
+    if (s.ctf && (s.phase === 'playing' || s.phase === 'lobby')) {
+      const theirs = s.flags[1 - me.team];
+      const mates = s.players.filter((p) => p.team === me.team && p.inRound).sort((a, b) => a.id - b.id);
+      const rank = mates.findIndex((p) => p.id === me.id);
+      if (theirs?.carrier === me.id) goal = flagBase(map, me.team);
+      else if (thief) goal = { x: thief.x, y: thief.y };
+      else if (theirs && theirs.carrier < 0 && (rank % 2 === 0 || mates.length <= 2)) goal = { x: theirs.x, y: theirs.y };
+    }
+
     if (!me.grounded) {
       // In the air (jumping or knocked back): steer home if we're drifting out.
       if (danger || fromCentre > R * 0.5) [wx, wy] = unit(-me.x, -me.y);
+    } else if (goal && !up) {
+      this.mode = 'fight';
+      [wx, wy] = this.goto(grid, me, goal.x, goal.y, dt);
+      sprint = true;
     } else if (danger && !up) {
       this.mode = 'fight';
       [wx, wy] = this.goto(grid, me, 0, 0, dt);

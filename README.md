@@ -17,11 +17,16 @@ first to 5 round wins takes the match.
 - **Team mode:** the host of a private game can split the room into Red and
   Blue (1v1 duels up to 4v4). Teammates can't hit each other, and the last
   team standing wins the round. Everyone picks a side in the lobby.
+- **Capture the flag:** a team mode with respawns. Grab the other team's flag
+  and bring it to your own while yours is safe at home. Knock the carrier off
+  and the flag goes home. First to 3 captures, or the most after 5 minutes.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
-- **14 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
+- **17 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
   Vent Farm, Chimneys, Hex Plaza, Billboard, Sky Garden, Split Level, Parking
-  Deck, Solar Farm, Downtown and High Rise. Downtown and High Rise have
+  Deck, Solar Farm, Downtown, High Rise, City Blocks, Skyline and Twin Bases.
+  City Blocks, Skyline and Twin Bases are blocks of separate buildings: jump
+  the gaps, blast across with recoil, or take the bridges. Downtown and High Rise have
   two-storey towers to walk into: stairs up to the second floor, again up to
   a roof deck, and sky bridges between them. Arenas can be circles, squares, hexagons, or diamonds,
   with open vents to fall through, bouncy pillars, obstacles and jump pads.

@@ -75,8 +75,9 @@ let spectating = false;
 let wasSpectating = false;
 /** The room's no-jump rule (from the roster). */
 let roomNoJump = false;
-/** The room's team mode rule. */
+/** The room's team mode rule, and capture the flag. */
 let roomTeams = false;
+let roomCtf = false;
 /** The roster as sent (own colours), for the lobby; `roster` has team colours in team mode. */
 let lobbyRoster: RosterEntry[] = [];
 /** Crosshair spread from firing, easing back to 0. */
@@ -167,8 +168,9 @@ const ui = new UI({
   onLeave: () => leaveToMenu(''),
   onStart: () => net.send({ t: 'start' }),
   onPickMap: (choice) => net.send({ t: 'map', choice }),
-  onNoJump: (on) => net.send({ t: 'rules', noJump: on, teams: roomTeams }),
-  onTeams: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: on }),
+  onNoJump: (on) => net.send({ t: 'rules', noJump: on, teams: roomTeams, ctf: roomCtf }),
+  onTeams: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: on, ctf: on && roomCtf }),
+  onCtf: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: on || roomTeams, ctf: on }),
   onPickTeam: (team) => net.send({ t: 'team', team }),
   onProfile: () => {
     if (roomCode && myId !== -1) net.send({ t: 'profile', name: ui.name, color: ui.color });
@@ -407,6 +409,7 @@ function handleMessage(msg: ServerMessage): void {
       startsIn = msg.startsIn;
       roomNoJump = msg.noJump;
       roomTeams = msg.teams === true;
+      roomCtf = msg.ctf === true;
       refreshRoomUi();
       break;
     case 'error':
@@ -435,7 +438,7 @@ function refreshRoomUi(): void {
   hud.setVisible(true);
   ui.setLobby(
     phase === 'lobby'
-      ? { code: roomCode, roster: lobbyRoster, spectators, myId, pub: roomPub, mapChoice, startsIn, noJump: roomNoJump, teams: roomTeams, muted: [...voice.muted], speaking: [...voice.speaking] }
+      ? { code: roomCode, roster: lobbyRoster, spectators, myId, pub: roomPub, mapChoice, startsIn, noJump: roomNoJump, teams: roomTeams, ctf: roomCtf, muted: [...voice.muted], speaking: [...voice.speaking] }
       : null,
   );
 }
@@ -692,12 +695,13 @@ function viewAt(time: number): View | null {
     phaseTime,
     arenaRadius: lerp(a.r, b.r, t),
     mapIndex: a.m,
-    shrinking: a.ph === 'playing' && a.r > C.ARENA_END_RADIUS + 1e-3,
+    shrinking: a.ph === 'playing' && a.r > C.ARENA_END_RADIUS + 1e-3 && !a.fl,
     players,
     bullets,
     powerups,
     roster,
     myId,
+    flags: b.fl?.map(([x, y, z, carrier]) => ({ x, y, z, carrier })),
   };
 }
 
@@ -878,6 +882,22 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
     case 'pickup':
       sfx.pickup(ev.u, scene.panFor(ev.x, ev.y, C.POWERUP_HEIGHT));
       break;
+    case 'flag': {
+      const myTeam = roster.find((r) => r.id === myId)?.team ?? -1;
+      const byTeam = roster.find((r) => r.id === ev.p)?.team ?? -1;
+      const flagName: [string, string] = [`${C.TEAM_NAMES[ev.t]} flag`, C.PLAYER_PALETTE[C.TEAM_COLORS[ev.t]]];
+      if (ev.a === 'take') {
+        sfx.flagTaken(byTeam === myTeam);
+        hud.addFeed([[nameOf(ev.p), colorOf(ev.p)], ' took the ', flagName, '!']);
+      } else if (ev.a === 'cap') {
+        sfx.flagCaptured(byTeam === myTeam);
+        hud.addFeed([[nameOf(ev.p), colorOf(ev.p)], ' captured the ', flagName, '!']);
+      } else {
+        sfx.flagReturned();
+        hud.addFeed(['The ', flagName, ' is back home']);
+      }
+      break;
+    }
     case 'ko': {
       const tw = snaps[snaps.length - 1]?.tw;
       const myTeam = roster.find((r) => r.id === myId)?.team ?? -1;
@@ -947,7 +967,16 @@ function frame(): void {
     const latest = snaps[snaps.length - 1];
     roundWinner = latest.rw;
     matchWinner = latest.mw;
-    teamInfo = latest.ts ? { scores: latest.ts, round: latest.tw ?? null, match: latest.tm ?? null } : null;
+    teamInfo = latest.ts
+      ? {
+          scores: latest.ts,
+          round: latest.tw ?? null,
+          match: latest.tm ?? null,
+          target: latest.fl ? C.CTF_CAPTURES : C.WIN_SCORE,
+          flags: latest.fl?.map((f) => f[3]),
+          timeLeft: latest.fl && latest.ph === 'playing' ? C.CTF_TIME - latest.pt : undefined,
+        }
+      : null;
     // Fire effects and sounds when the interpolated time reaches them.
     while (pendingEvents.length > 0 && pendingEvents[0].time <= renderTime + 1e-6) {
       const item = pendingEvents.shift();
@@ -1043,7 +1072,8 @@ function frame(): void {
   input.sensitivity = scene.zoom * userSensitivity;
   // The loadout panel while you're out of a round.
   const phase = snaps[snaps.length - 1]?.ph ?? 'lobby';
-  spectating = !!roomCode && myId !== -1 && phase !== 'lobby' && (!pred || (pred.falling && pred.fallTime > C.FALL_DURATION * 0.5));
+  // (Capture the flag has respawns, so a fall there doesn't count.)
+  spectating = !!roomCode && myId !== -1 && phase !== 'lobby' && (!pred || (!roomCtf && pred.falling && pred.fallTime > C.FALL_DURATION * 0.5));
   if (spectating && !wasSpectating) input.releaseMouse();
   wasSpectating = spectating;
   ui.setLoadout(spectating);

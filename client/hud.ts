@@ -24,6 +24,11 @@ export interface TeamInfo {
   scores: number[];
   round: number | null;
   match: number | null;
+  /** Points to win (round wins, or captures). */
+  target: number;
+  /** Capture the flag: who carries each team's flag (-1 at home), and seconds left. */
+  flags?: number[];
+  timeLeft?: number;
 }
 
 export interface HudInfo {
@@ -218,7 +223,7 @@ export class Hud {
     const inMatch = view.phase !== 'lobby';
     const outIds = new Set(view.players.filter((p) => p.fallTime >= 0).map((p) => p.id));
     const inRound = new Set(view.players.map((p) => p.id));
-    const key = inMatch ? JSON.stringify([view.roster, [...outIds], [...inRound], view.myId, teams?.scores]) : '';
+    const key = inMatch ? JSON.stringify([view.roster, [...outIds], [...inRound], view.myId, teams?.scores, teams?.flags]) : '';
     if (key === this.lastScoreKey) return;
     this.lastScoreKey = key;
     this.scorebar.textContent = '';
@@ -235,11 +240,12 @@ export class Hud {
         dot.className = 'pdot';
         dot.style.setProperty('--c', C.PLAYER_PALETTE[C.TEAM_COLORS[team]]);
         const name = document.createElement('span');
-        name.textContent = `${C.TEAM_NAMES[team]}: ${members.map((r) => r.name).join(', ') || '—'}`;
+        const taken = (teams.flags?.[team] ?? -1) >= 0 ? ' · flag taken!' : '';
+        name.textContent = `${C.TEAM_NAMES[team]}: ${members.map((r) => r.name).join(', ') || '—'}${taken}`;
         const score = teams.scores[team] ?? 0;
         const pts = document.createElement('span');
         pts.className = 'pts';
-        pts.textContent = '●'.repeat(Math.min(score, C.WIN_SCORE)) + '○'.repeat(Math.max(0, C.WIN_SCORE - score));
+        pts.textContent = (teams.flags ? '⚑' : '●').repeat(Math.min(score, teams.target)) + '○'.repeat(Math.max(0, teams.target - score));
         item.append(dot, name, pts);
         this.scorebar.append(item);
       }
@@ -275,16 +281,23 @@ export class Hud {
         center = String(Math.max(1, Math.ceil(C.COUNTDOWN_TIME - view.phaseTime)));
         sub = `${MAPS[view.mapIndex]?.name ?? ''} · ${MAPS[view.mapIndex]?.blurb ?? ''}`;
         break;
-      case 'playing':
-        if (view.phaseTime < C.FIGHT_BANNER_TIME) center = 'FIGHT!';
+      case 'playing': {
+        const flags = info.teams?.flags;
+        if (view.phaseTime < C.FIGHT_BANNER_TIME) center = flags ? 'CAPTURE THE FLAG!' : 'FIGHT!';
         else if (me && me.fallTime >= 0) {
           center = 'KNOCKED OFF!';
           small = true;
-          sub = 'Watching until the next round';
+          sub = flags ? 'Back in a moment' : 'Watching until the next round';
         } else if (view.myId === -1) {
           sub = 'The room is full, so you are watching';
+        } else if (flags && myTeam >= 0) {
+          const left = Math.max(0, Math.ceil(info.teams?.timeLeft ?? Infinity));
+          if (flags[1 - myTeam] === view.myId) sub = `You have the ${C.TEAM_NAMES[1 - myTeam]} flag! Bring it home`;
+          else if (flags[myTeam] >= 0) sub = 'Your flag has been taken! Knock them off';
+          else if (left <= 30) sub = `${left}s left`;
         }
         break;
+      }
       case 'roundEnd':
         if (info.teams) {
           const t = info.teams.round;
@@ -299,8 +312,8 @@ export class Hud {
         break;
       case 'matchEnd':
         if (info.teams) {
-          const t = info.teams.match ?? 0;
-          center = `${C.TEAM_NAMES[t].toUpperCase()} TEAM TAKES IT!`;
+          const t = info.teams.match ?? -1;
+          center = t < 0 ? "IT'S A DRAW!" : `${C.TEAM_NAMES[t].toUpperCase()} TEAM TAKES IT!`;
           small = true;
           sub = t === myTeam ? 'Champions of the rooftops!' : 'Back to the lobby soon';
           break;

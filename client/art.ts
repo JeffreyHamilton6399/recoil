@@ -86,22 +86,30 @@ export function makeMapThumb(index: number, px: number): HTMLCanvasElement {
   const R = MAP_DESIGN_RADIUS;
   const k = px / (2 * (R + 1.4));
   ctx.setTransform(k, 0, 0, k, px / 2, px / 2);
-  const outline = arenaOutline(map, R);
+  // The roof outline, or every rooftop and bridge for a block of buildings.
+  const outlines: [number, number][][] = map.roofs
+    ? map.roofs.map((r) => [
+        [r.x - r.w / 2, r.y - r.d / 2],
+        [r.x + r.w / 2, r.y - r.d / 2],
+        [r.x + r.w / 2, r.y + r.d / 2],
+        [r.x - r.w / 2, r.y + r.d / 2],
+      ])
+    : [arenaOutline(map, R)];
 
   // Drop shadow and building side.
   ctx.fillStyle = 'rgba(12,2,30,0.55)';
   ctx.beginPath();
-  tracePolygon(ctx, outline.map(([x, y]) => [x + 0.5, y + 1.2]));
+  for (const o of outlines) tracePolygon(ctx, o.map(([x, y]) => [x + 0.5, y + 1.2]));
   ctx.fill();
   ctx.fillStyle = map.theme.side;
   ctx.beginPath();
-  tracePolygon(ctx, outline.map(([x, y]) => [x, y + 0.5]));
+  for (const o of outlines) tracePolygon(ctx, o.map(([x, y]) => [x, y + 0.5]));
   ctx.fill();
 
   // Roof surface, clipped to the outline, with holes punched out.
   ctx.save();
   ctx.beginPath();
-  tracePolygon(ctx, outline);
+  for (const o of outlines) tracePolygon(ctx, o);
   ctx.clip();
   ctx.fillStyle = map.theme.top;
   ctx.fillRect(-R * 1.5, -R * 1.5, R * 3, R * 3);
@@ -117,9 +125,11 @@ export function makeMapThumb(index: number, px: number): HTMLCanvasElement {
   ctx.lineJoin = 'round';
   ctx.strokeStyle = INK;
   ctx.lineWidth = 0.18;
-  ctx.beginPath();
-  tracePolygon(ctx, outline);
-  ctx.stroke();
+  for (const o of outlines) {
+    ctx.beginPath();
+    tracePolygon(ctx, o);
+    ctx.stroke();
+  }
   for (const b of scaledBumpers(map, R)) {
     ctx.fillStyle = map.theme.bumper;
     ctx.beginPath();

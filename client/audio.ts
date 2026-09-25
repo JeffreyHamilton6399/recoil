@@ -503,6 +503,23 @@ export class Sfx {
     notes.forEach((f, i) => this.pluck(f, 0.22, 0.16, 0, 0.1 + i * 0.09));
   }
 
+  /** Capture the flag: a flag was grabbed (good = by your team). */
+  flagTaken(good: boolean): void {
+    const notes = good ? [587, 880] : [880, 587, 880, 587];
+    notes.forEach((f, i) => this.tone(good ? 'triangle' : 'square', f, f, 0.12, good ? 0.16 : 0.07, 0, i * 0.13, 0.2));
+  }
+
+  /** Capture the flag: a capture (good = your team scored). */
+  flagCaptured(good: boolean): void {
+    const notes = good ? [523, 659, 784, 1047, 1319] : [587, 494, 392, 294];
+    notes.forEach((f, i) => this.pluck(f, 0.3, 0.2, 0, i * 0.1));
+  }
+
+  /** Capture the flag: a flag went back to its base. */
+  flagReturned(): void {
+    this.tone('sine', 780, 520, 0.25, 0.14, 0, 0, 0.3);
+  }
+
   /** Each power-up has its own little jingle. */
   pickup(kind: PowerupKind, pan: number): void {
     switch (kind) {
