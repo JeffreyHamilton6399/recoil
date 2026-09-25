@@ -637,6 +637,123 @@ export const MAPS: readonly MapDef[] = [
     ],
     theme: { top: '#7f8a78', shade: '#646e5e', side: '#6a5a4a', sideShade: '#4c4034', surface: 'gravel', bumper: '#ff3d8b' },
   },
+  {
+    name: 'Crane Yard',
+    blurb: 'A building site. Hook the crane, climb the scaffold, fly the gap.',
+    shape: 'square',
+    holes: [],
+    bumpers: [],
+    roofs: [
+      { x: -3.3, y: 0, w: 7.8, d: 13.4 },
+      { x: 5.2, y: 0, w: 4.4, d: 13.4 },
+      bridge(1.8, -5.0, 2.6, 0.5),
+    ],
+    ...parts(
+      // Scaffold: two open floors on posts, a ramp to the first.
+      { x: -5.8, y: -5.05, w: 0.14, d: 0.14, h: 6.15 },
+      { x: -3.4, y: -5.05, w: 0.14, d: 0.14, h: 6.15 },
+      { x: -5.8, y: -2.55, w: 0.14, d: 0.14, h: 6.15 },
+      { x: -3.4, y: -2.55, w: 0.14, d: 0.14, h: 6.15 },
+      { x: -4.6, y: -3.8, w: 2.6, d: 2.6, z: 2.6, h: 2.95 },
+      { x: -4.6, y: -3.8, w: 2.6, d: 2.6, z: 6.15, h: 6.5 },
+      ramp(-4.6, -1.6, 0.6, 1.8, 3),
+      // The tower crane: a mast, and a jib high over the gap to hook and walk along.
+      { x: -1.2, y: 3.5, w: 0.5, d: 0.5, h: 10.6 },
+      { x: 2.3, y: 3.5, w: 7.5, d: 0.4, z: 10.6, h: 11 },
+      { x: -2.9, y: 3.5, w: 2.6, d: 0.4, z: 10.6, h: 11 },
+      { x: -3.6, y: 3.5, w: 0.9, d: 0.8, z: 8.6, h: 10.6 },
+      // A container hanging from the jib.
+      { x: 4.4, y: 3.5, w: 1.3, d: 0.6, z: 5.2, h: 6.5 },
+      // Stacked containers to climb.
+      { x: -5.6, y: 5.3, w: 1.8, d: 0.8, h: 1.3 },
+      { x: -5.6, y: 4.4, w: 1.8, d: 0.8, h: 2.6 },
+      { x: -3.6, y: 5.6, w: 0.8, d: 1.8, h: 1.3 },
+      tower(5.2, -3.8, 2.4, 2.4, 'nw'),
+      { x: 5.6, y: 4.6, w: 1.6, d: 0.8, h: 1.3 },
+      { x: 4.4, y: 1.8, w: 0.8, d: 0.8, h: 1.1 },
+      { x: -1.6, y: -1.2, w: 0.8, d: 0.8, h: 1.1 },
+    ),
+    // Pads by the edge of the site: run on to fly the gap.
+    pads: [
+      { x: -0.3, y: 0.2, r: 0.5 },
+      { x: 3.8, y: -1.0, r: 0.5 },
+      { x: -6.6, y: -1.4, r: 0.5 },
+    ],
+    theme: { top: '#b8a07a', shade: '#957f5c', side: '#7a6a58', sideShade: '#5a4c3e', surface: 'plywood', bumper: '#ffb13d' },
+  },
+  {
+    name: 'Sky Islands',
+    blurb: 'Six floating rooftops round a tower. Hop the stepping stones, or hook the pylons.',
+    shape: 'circle',
+    holes: [],
+    bumpers: [],
+    roofs: [
+      { x: 0, y: 0, w: 3.6, d: 3.6 },
+      { x: 5.3, y: 0, w: 2.4, d: 2.4 },
+      { x: 2.65, y: 4.59, w: 2.4, d: 2.4 },
+      { x: -2.65, y: 4.59, w: 2.4, d: 2.4 },
+      { x: -5.3, y: 0, w: 2.4, d: 2.4 },
+      { x: -2.65, y: -4.59, w: 2.4, d: 2.4 },
+      { x: 2.65, y: -4.59, w: 2.4, d: 2.4 },
+      bridge(2.85, 0, 2.6, 0.5),
+      bridge(-2.85, 0, 2.6, 0.5),
+    ],
+    ...parts(
+      tower(0, 0, 2.4, 2.4, 'new'),
+      { x: 3, y: 5.196, w: 0.45, d: 0.45, h: 7.5 },
+      { x: -3, y: 5.196, w: 0.45, d: 0.45, h: 7.5 },
+      { x: -3, y: -5.196, w: 0.45, d: 0.45, h: 7.5 },
+      { x: 3, y: -5.196, w: 0.45, d: 0.45, h: 7.5 },
+      { x: 4.59, y: 2.65, w: 1.1, d: 1.1, z: -0.8, h: 0.25 },
+      { x: 0, y: 5.3, w: 1.1, d: 1.1, z: -0.8, h: 0.25 },
+      { x: -4.59, y: 2.65, w: 1.1, d: 1.1, z: -0.8, h: 0.25 },
+      { x: -4.59, y: -2.65, w: 1.1, d: 1.1, z: -0.8, h: 0.25 },
+      { x: 0, y: -5.3, w: 1.1, d: 1.1, z: -0.8, h: 0.25 },
+      { x: 4.59, y: -2.65, w: 1.1, d: 1.1, z: -0.8, h: 0.25 },
+    ),
+    pads: [
+      { x: 1.45, y: 1.45, r: 0.4 },
+      { x: -1.45, y: 1.45, r: 0.4 },
+      { x: 1.45, y: -1.45, r: 0.4 },
+      { x: -1.45, y: -1.45, r: 0.4 },
+    ],
+    theme: { top: '#3a3563', shade: '#2c2850', side: '#4a3f7a', sideShade: '#342c5a', surface: 'neon', bumper: '#ff3d8b' },
+  },
+  {
+    name: 'Canyon Run',
+    blurb: 'Two long blocks and a canyon. Cross high, cross low, or launch over.',
+    shape: 'square',
+    holes: [],
+    bumpers: [],
+    roofs: [
+      { x: -4.6, y: 0, w: 6, d: 15.4 },
+      { x: 4.6, y: 0, w: 6, d: 15.4 },
+      bridge(0, 5.6, 3.6, 0.6),
+    ],
+    ...parts(
+      // The high crossing: up a long ramp, over a girder, down the other side.
+      ramp(-3.6, -4.2, 3.8, 0.7, 0, 4.5),
+      slab(0, -4.2, 3.4, 0.7, 4.5),
+      ramp(3.6, -4.2, 3.8, 0.7, 2, 4.5),
+      tower(-5.4, 4.2, 2.4, 2.4, 'new'),
+      tower(5.4, 4.2, 2.4, 2.4, 'new'),
+      // Pylons on the canyon rim to hook.
+      { x: -1.95, y: 2.2, w: 0.4, d: 0.4, h: 8 },
+      { x: 1.95, y: -1.6, w: 0.4, d: 0.4, h: 8 },
+      { x: -4.2, y: -1.8, w: 0.8, d: 0.8, h: 1.1 },
+      { x: 4.2, y: 1.8, w: 0.8, d: 0.8, h: 1.1 },
+      { x: -6.4, y: -6.4, w: 1.2, d: 1.2, h: 2.2 },
+      { x: 6.4, y: -6.4, w: 1.2, d: 1.2, h: 2.2 },
+      { x: -3.0, y: -6.8, w: 1.6, d: 0.7, h: 1.3 },
+      { x: 3.0, y: -6.8, w: 1.6, d: 0.7, h: 1.3 },
+    ),
+    // Pads at the rim: sprint onto one to clear the canyon.
+    pads: [
+      { x: -2.35, y: 0, r: 0.45 },
+      { x: 2.35, y: 0, r: 0.45 },
+    ],
+    theme: { top: '#6e7b8c', shade: '#56616f', side: '#8a5a4a', sideShade: '#663f33', surface: 'parking', bumper: '#ff3d8b' },
+  },
 ];
 /** Vertex radius and first vertex angle of the polygon shapes, relative to the arena radius. */
 export const POLY_SHAPES: Record<'hex' | 'diamond', { sides: number; scale: number; rot: number }> = {
@@ -685,11 +802,24 @@ export function isOffMap(map: MapDef, arenaRadius: number, x: number, y: number)
   return false;
 }
 
-/** Bumpers at the current arena size. */
-export function scaledBumpers(map: MapDef, arenaRadius: number): Circle[] {
-  const s = mapScale(arenaRadius);
-  return map.bumpers.map((b) => ({ x: b.x * s, y: b.y * s, r: b.r * s }));
+/**
+ * Keeps the last scaled copy of a map feature per map. Physics asks for them
+ * many times a tick, and the arena size changes at most once a tick, so this
+ * saves rebuilding the same arrays over and over. Treat the result as read-only.
+ */
+function memo<T>(build: (map: MapDef, s: number) => T): (map: MapDef, arenaRadius: number) => T {
+  const cache = new WeakMap<MapDef, { R: number; value: T }>();
+  return (map, arenaRadius) => {
+    const hit = cache.get(map);
+    if (hit && hit.R === arenaRadius) return hit.value;
+    const value = build(map, mapScale(arenaRadius));
+    cache.set(map, { R: arenaRadius, value });
+    return value;
+  };
 }
+
+/** Bumpers at the current arena size. */
+export const scaledBumpers = memo((map, s): readonly Circle[] => map.bumpers.map((b) => ({ x: b.x * s, y: b.y * s, r: b.r * s })));
 
 export interface Box {
   minX: number;
@@ -703,17 +833,16 @@ export interface Box {
 }
 
 /** Blocks at the current arena size, as boxes in world units. */
-export function scaledBlocks(map: MapDef, arenaRadius: number): Box[] {
-  const s = mapScale(arenaRadius);
-  return map.blocks.map((b) => ({
+export const scaledBlocks = memo((map, s): readonly Box[] =>
+  map.blocks.map((b) => ({
     minX: (b.x - b.w / 2) * s,
     maxX: (b.x + b.w / 2) * s,
     minY: (b.y - b.d / 2) * s,
     maxY: (b.y + b.d / 2) * s,
     top: b.h,
     bottom: b.z ?? 0,
-  }));
-}
+  })),
+);
 
 export interface RampBox {
   minX: number;
@@ -727,9 +856,8 @@ export interface RampBox {
 }
 
 /** Ramps at the current arena size, in world units. */
-export function scaledRamps(map: MapDef, arenaRadius: number): RampBox[] {
-  const s = mapScale(arenaRadius);
-  return (map.ramps ?? []).map((r) => ({
+export const scaledRamps = memo((map, s): readonly RampBox[] =>
+  (map.ramps ?? []).map((r) => ({
     minX: (r.x - r.w / 2) * s,
     maxX: (r.x + r.w / 2) * s,
     minY: (r.y - r.d / 2) * s,
@@ -737,8 +865,8 @@ export function scaledRamps(map: MapDef, arenaRadius: number): RampBox[] {
     h: r.h,
     dir: r.dir,
     base: r.z ?? 0,
-  }));
-}
+  })),
+);
 
 /** Height of a ramp's surface at (x, y) (clamped to its footprint). */
 export function rampHeight(r: RampBox, x: number, y: number): number {
@@ -753,10 +881,7 @@ function clamp01(v: number): number {
 }
 
 /** Jump pads at the current arena size. */
-export function scaledPads(map: MapDef, arenaRadius: number): Circle[] {
-  const s = mapScale(arenaRadius);
-  return map.pads.map((p) => ({ x: p.x * s, y: p.y * s, r: p.r * s }));
-}
+export const scaledPads = memo((map, s): readonly Circle[] => map.pads.map((p) => ({ x: p.x * s, y: p.y * s, r: p.r * s })));
 
 /**
  * Height of whatever you would stand on at (x, y): the tallest block top no

@@ -416,6 +416,10 @@ export class BotBrain {
       aim = false;
     }
 
+    // Someone up high and in sight: hook up to them (and hold on while it reels us in).
+    const hookUp = canMove && !!seen && !!target && seen.z > me.z + 2.5 && dist < C.GRAPPLE_RANGE - 4 && aimErr < 0.15 && sk.highGround > 0.3;
+    const grapple = hookUp || (me.grappleT >= 0 && me.grappleT < 1.1);
+
     return {
       forward: Math.round(forward * 100) / 100,
       strafe: Math.round(strafe * 100) / 100,
@@ -427,6 +431,7 @@ export class BotBrain {
       offhand,
       knife,
       recoil: false,
+      grapple,
       yaw: this.yaw,
       pitch: this.pitch,
     };

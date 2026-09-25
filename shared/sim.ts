@@ -11,7 +11,11 @@ import * as C from './constants.js';
 import { MAPS, floorAt, inBlock, isOffMap, rampHeight, scaledBlocks, scaledBumpers, scaledPads, scaledRamps, spawnAt, spawnPoint, type MapDef } from './maps.js';
 import {
   FX_AIM,
+  FX_AIR_JUMPED,
   FX_FIRE_HELD,
+  FX_GRAPPLE_HELD,
+  FX_JUMP_HELD,
+  FX_SPEED,
   FX_SLIDE_LOCK,
   FX_GROUNDED,
   FX_MEGA,
@@ -45,6 +49,7 @@ export const NO_INPUT: InputState = Object.freeze({
   offhand: false,
   knife: false,
   recoil: false,
+  grapple: false,
   yaw: 0,
   pitch: 0,
 });
@@ -118,7 +123,7 @@ export function runSpeed(p: PlayerState, input: InputState): number {
   const move = p.knifeOut ? C.KNIFE_MOVE_MULT : weaponDef(p.weapon).moveMult;
   if (p.aiming) return C.MOVE_SPEED * move * C.AIM_MOVE_MULT;
   const sprint = input.sprint && input.forward > 0 ? C.SPRINT_MULT : 1;
-  return C.MOVE_SPEED * move * sprint;
+  return C.MOVE_SPEED * move * sprint * (p.speed > 0 ? C.SPEED_MULT : 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +171,15 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
     recoilMode: false,
     offUse: false,
     team: 0,
+    grappleX: 0,
+    grappleY: 0,
+    grappleZ: 0,
+    grappleT: -1,
+    grappleCd: 0,
+    grappleHeld: false,
+    jumpHeld: false,
+    airJumped: false,
+    speed: 0,
   };
 }
 
@@ -215,6 +229,10 @@ function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number
   p.shield = 0;
   p.offCd = 0;
   p.offUse = false;
+  p.grappleT = -1;
+  p.grappleCd = 0;
+  p.airJumped = false;
+  p.speed = 0;
 }
 
 /** Puts every player in the round, evenly spaced on the spawn ring (teams side by side). */
@@ -480,11 +498,91 @@ export function startMatch(s: GameState): void {
  * applied here; the caller spawns the bullets. Jumps, slides and climbs are
  * reported in `events` when given.
  */
-export function controlPlayer(p: PlayerState, input: InputState, dt: number, rules: Rules, events?: GameEvent[]): boolean {
+/**
+ * Where a grappling hook fired from (x, y, z) along d would bite: the first
+ * roof, block or ramp within reach, or null if it hits nothing.
+ */
+export function hookRay(map: MapDef, arenaRadius: number, x: number, y: number, z: number, d: Vec3): Vec3 | null {
+  for (let t = 1; t <= C.GRAPPLE_RANGE; t += 0.3) {
+    const px = x + d.x * t;
+    const py = y + d.y * t;
+    const pz = z + d.z * t;
+    if (pz < -1.5) return null;
+    if (pz <= 0 && !isOffMap(map, arenaRadius, px, py)) return { x: px, y: py, z: 0 };
+    if (inBlock(map, arenaRadius, px, py, pz)) return { x: px, y: py, z: pz };
+  }
+  return null;
+}
+
+/**
+ * The grappling hook: a fresh press fires it along your aim; hold the button
+ * to be reeled in (it carries some of your weight), let go to fly on with
+ * the speed you've built up.
+ */
+function grapple(p: PlayerState, input: InputState, dt: number, canMove: boolean, map: MapDef | undefined, arenaRadius: number, events?: GameEvent[]): void {
+  p.grappleCd = Math.max(0, p.grappleCd - dt);
+  const press = input.grapple && !p.grappleHeld;
+  p.grappleHeld = input.grapple;
+  if (p.grappleT >= 0) {
+    p.grappleT += dt;
+    const dx = p.grappleX - p.x;
+    const dy = p.grappleY - p.y;
+    const dz = p.grappleZ - (p.z + 1);
+    const dist = Math.hypot(dx, dy, dz) || 1e-6;
+    if (!input.grapple || !canMove || p.grappleT > C.GRAPPLE_TIME || dist < C.GRAPPLE_LET_GO) {
+      p.grappleT = -1;
+      p.grappleCd = C.GRAPPLE_COOLDOWN;
+      return;
+    }
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const uz = dz / dist;
+    const along = p.vx * ux + p.vy * uy + p.vz * uz;
+    if (along < C.GRAPPLE_MAX_SPEED) {
+      const a = Math.min(C.GRAPPLE_PULL * dt, C.GRAPPLE_MAX_SPEED - along);
+      p.vx += ux * a;
+      p.vy += uy * a;
+      p.vz += uz * a;
+    }
+    p.vz += C.GRAVITY * 0.6 * dt;
+    if (p.grounded && uz > 0.05) {
+      p.grounded = false;
+      p.vz = Math.max(p.vz, 3);
+      p.slide = 0;
+    }
+    // Swinging on the rope gives you your double jump back.
+    p.airJumped = false;
+  } else if (press && canMove && p.grappleCd <= 0 && map) {
+    const eyeZ = p.z + (p.slide > 0 ? C.SLIDE_EYE_HEIGHT : C.EYE_HEIGHT);
+    const hit = hookRay(map, arenaRadius, p.x, p.y, eyeZ, aimDir(p.yaw, p.pitch));
+    if (hit) {
+      p.grappleX = hit.x;
+      p.grappleY = hit.y;
+      p.grappleZ = hit.z;
+      p.grappleT = 0;
+      events?.push({ k: 'hook', p: p.id, x: hit.x, y: hit.y, z: hit.z });
+    } else p.grappleCd = 0.25;
+  }
+}
+
+export function controlPlayer(
+  p: PlayerState,
+  input: InputState,
+  dt: number,
+  rules: Rules,
+  events?: GameEvent[],
+  map?: MapDef,
+  arenaRadius: number = C.ARENA_START_RADIUS,
+): boolean {
   const { canMove, canFire } = rules;
   // With the no-jump rule, the jump button does nothing: recoil is the way up.
   const jump = input.jump && !rules.noJump;
-  if (p.falling) return false;
+  const jumpPress = jump && !p.jumpHeld;
+  p.jumpHeld = jump;
+  if (p.falling) {
+    p.grappleT = -1;
+    return false;
+  }
   const w = weaponDef(p.weapon);
 
   p.aiming = input.aim && canMove;
@@ -537,6 +635,8 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, rul
     p.offCd = C.SHOCK_COOLDOWN;
   }
   p.offHeld = input.offhand;
+
+  grapple(p, input, dt, canMove, map, arenaRadius, events);
 
   // Crouch while moving on the ground slides: tap it, or hold it through a
   // landing. One slide per hold; letting go (or jumping) re-arms it, so you
@@ -600,6 +700,7 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, rul
   }
 
   if (p.grounded) {
+    p.airJumped = false;
     const speed = Math.hypot(p.vx, p.vy);
     if (p.slide > 0) {
       // Sliding: keep your speed a while, steer a little.
@@ -643,6 +744,16 @@ export function controlPlayer(p: PlayerState, input: InputState, dt: number, rul
       events?.push({ k: 'jump', p: p.id });
     }
   } else {
+    if (jumpPress && !p.airJumped && p.grappleT < 0) {
+      // Double jump: once in the air, with a nudge towards where you steer.
+      p.airJumped = true;
+      p.vz = Math.max(p.vz, C.AIR_JUMP_SPEED);
+      if (wishing) {
+        p.vx += wx * C.AIR_JUMP_NUDGE;
+        p.vy += wy * C.AIR_JUMP_NUDGE;
+      }
+      events?.push({ k: 'jump', p: p.id, air: true });
+    }
     const drag = Math.exp(-C.AIR_DRAG * dt);
     p.vx *= drag;
     p.vy *= drag;
@@ -946,6 +1057,9 @@ function applyPowerup(p: PlayerState, kind: PowerupKind): void {
     case 'heal':
       p.damage = 0;
       break;
+    case 'speed':
+      p.speed = C.SPEED_TIME;
+      break;
   }
 }
 
@@ -1237,11 +1351,12 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
   for (const p of s.players) {
     if (!p.inRound) continue;
     const input = inputs.get(p.id) ?? { ...NO_INPUT, yaw: p.yaw, pitch: p.pitch };
-    if (controlPlayer(p, input, dt, rules, events)) spawnBullets(s, p, events);
+    if (controlPlayer(p, input, dt, rules, events, currentMap(s), s.arenaRadius)) spawnBullets(s, p, events);
     if (p.offUse) useOffhand(s, p, events);
     p.rapid = Math.max(0, p.rapid - dt);
     p.triple = Math.max(0, p.triple - dt);
     p.shield = Math.max(0, p.shield - dt);
+    p.speed = Math.max(0, p.speed - dt);
   }
 
   if (playing) {
@@ -1375,7 +1490,11 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     (p.aiming ? FX_AIM : 0) |
     (p.offHeld ? FX_OFF_HELD : 0) |
     (p.knifeOut ? FX_KNIFE : 0) |
-    (p.recoilMode ? FX_RECOIL : 0);
+    (p.recoilMode ? FX_RECOIL : 0) |
+    (p.grappleHeld ? FX_GRAPPLE_HELD : 0) |
+    (p.jumpHeld ? FX_JUMP_HELD : 0) |
+    (p.airJumped ? FX_AIR_JUMPED : 0) |
+    (p.speed > 0 ? FX_SPEED : 0);
   return [
     p.id,
     round3(p.x),
@@ -1396,6 +1515,11 @@ export function playerSnap(p: PlayerState): PlayerSnap {
     round3(p.slideCd),
     p.offhand,
     round3(p.offCd),
+    round3(p.grappleX),
+    round3(p.grappleY),
+    round3(p.grappleZ),
+    p.grappleT >= 0 ? round3(p.grappleT) : -1,
+    round3(p.grappleCd),
   ];
 }
 
@@ -1431,6 +1555,15 @@ export function playerFromSnap(s: PlayerSnap): PlayerState {
   p.offHeld = (fx & FX_OFF_HELD) !== 0;
   p.knifeOut = (fx & FX_KNIFE) !== 0;
   p.recoilMode = (fx & FX_RECOIL) !== 0;
+  p.grappleHeld = (fx & FX_GRAPPLE_HELD) !== 0;
+  p.jumpHeld = (fx & FX_JUMP_HELD) !== 0;
+  p.airJumped = (fx & FX_AIR_JUMPED) !== 0;
+  p.speed = fx & FX_SPEED ? 1 : 0;
+  p.grappleX = s[19];
+  p.grappleY = s[20];
+  p.grappleZ = s[21];
+  p.grappleT = s[22];
+  p.grappleCd = s[23];
   p.inRound = true;
   return p;
 }

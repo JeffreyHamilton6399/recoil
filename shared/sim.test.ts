@@ -85,6 +85,7 @@ function randomInput(rand: () => number): InputState {
     offhand: rand() < 0.05,
     knife: rand() < 0.3,
     recoil: rand() < 0.3,
+    grapple: rand() < 0.3,
     yaw: (rand() * 2 - 1) * Math.PI,
     pitch: (rand() * 2 - 1) * 1.2,
   };
@@ -288,7 +289,7 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   for (let i = 0; i < 300 && !server.falling; i++) {
     const input = { ...randomInput(rand), firing: false };
     step(s, new Map([[0, input]]));
-    controlPlayer(local, input, C.TICK_DT, phaseRules(s.phase));
+    controlPlayer(local, input, C.TICK_DT, phaseRules(s.phase), undefined, map, s.arenaRadius);
     for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) movePlayer(local, C.TICK_DT / C.PHYSICS_SUBSTEPS, map, s.arenaRadius);
     maxErr = Math.max(maxErr, Math.hypot(local.x - server.x, local.y - server.y, local.z - server.z));
   }
@@ -754,6 +755,55 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   }
   assert.ok(p.x > 3.05 * S && !p.falling && p.z > -0.1, `jumped the gap (x=${(p.x / S).toFixed(2)}, z=${p.z.toFixed(2)})`);
   console.log('ok 17 - gaps between buildings, bridges, and a running jump across');
+}
+
+// 18. Movement extras: the grappling hook reels you up onto a tower, a
+//     double jump goes higher than a single one, and Speed makes you faster.
+{
+  const g = createGame(8);
+  addPlayer(g, 0);
+  setMapChoice(g, MAPS.findIndex((m) => m.name === 'Downtown'));
+  const p = g.players[0];
+  const S = mapScale(g.arenaRadius);
+  // Stand west of the west tower and hook its roof deck.
+  const tx = -4.6 * S;
+  Object.assign(p, { x: tx - 22, y: 0, z: 0, vx: 0, vy: 0, vz: 0, grounded: true });
+  const pitch = Math.atan2(5.9 - C.EYE_HEIGHT, 22 - 4.6);
+  let hooked = false;
+  let top = 0;
+  for (let i = 0; i < 90; i++) {
+    const ev = step(g, new Map([[0, { ...NO_INPUT, yaw: 0, pitch, grapple: i < 60, forward: i >= 30 ? 1 : 0 }]]));
+    if (ev.some((e) => e.k === 'hook')) hooked = true;
+    top = Math.max(top, p.z);
+  }
+  assert.ok(hooked, 'the hook bites into the tower');
+  assert.ok(top > 4, `the rope pulls you up the tower (${top.toFixed(2)} m)`);
+
+  // Single jump vs double jump, from flat roof.
+  const peak = (double: boolean): number => {
+    Object.assign(p, { x: 0, y: -6 * S, z: 0, vx: 0, vy: 0, vz: 0, grounded: true, airJumped: false, jumpHeld: false, grappleT: -1 });
+    let best = 0;
+    for (let i = 0; i < 50; i++) {
+      const jump = i === 0 || (double && i === 12);
+      step(g, new Map([[0, { ...NO_INPUT, yaw: 0, jump }]]));
+      best = Math.max(best, p.z);
+    }
+    return best;
+  };
+  const single = peak(false);
+  const twice = peak(true);
+  assert.ok(twice > single + 0.8, `double jump goes higher (${twice.toFixed(2)} vs ${single.toFixed(2)} m)`);
+
+  // Speed power-up: run for a second with and without it.
+  const run = (fast: boolean): number => {
+    Object.assign(p, { x: -3 * S, y: -6 * S, z: 0, vx: 0, vy: 0, vz: 0, grounded: true, speed: fast ? C.SPEED_TIME : 0 });
+    for (let i = 0; i < 30; i++) step(g, new Map([[0, { ...NO_INPUT, yaw: 0, forward: 1 }]]));
+    return p.x + 3 * S;
+  };
+  const slow = run(false);
+  const fast = run(true);
+  assert.ok(fast > slow * 1.25, `Speed makes you faster (${fast.toFixed(1)} vs ${slow.toFixed(1)} m)`);
+  console.log(`ok 18 - grapple up to ${top.toFixed(1)} m, double jump ${twice.toFixed(2)} m vs ${single.toFixed(2)} m, speed ${fast.toFixed(1)} vs ${slow.toFixed(1)} m`);
 }
 
 console.log('all simulation tests passed');

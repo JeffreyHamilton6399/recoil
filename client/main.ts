@@ -478,8 +478,8 @@ function onSnapshot(s: Snapshot): void {
 
 /** Runs one tick of your own movement, exactly as the server will. Jumps, slides, climbs and pads land in `events`. */
 function advance(p: PlayerState, inp: InputState, snap: Snapshot, events?: GameEvent[]): boolean {
-  const fired = controlPlayer(p, inp, C.TICK_DT, phaseRules(snap.ph, roomNoJump), events);
   const map = MAPS[snap.m] ?? MAPS[0];
+  const fired = controlPlayer(p, inp, C.TICK_DT, phaseRules(snap.ph, roomNoJump), events, map, snap.r);
   const h = C.TICK_DT / C.PHYSICS_SUBSTEPS;
   for (let n = 0; n < C.PHYSICS_SUBSTEPS; n++) movePlayer(p, h, map, snap.r, events);
   return fired;
@@ -549,6 +549,7 @@ function clientTick(): void {
     o: inp.offhand,
     h: inp.knife,
     m: inp.recoil,
+    q: inp.grapple,
     a: inp.yaw,
     b: inp.pitch,
   });
@@ -576,7 +577,12 @@ function clientTick(): void {
   }
   // Your own moves sound right away; the server's copies of these events are skipped.
   for (const ev of events) {
-    if (ev.k === 'jump') sfx.jump(0);
+    if (ev.k === 'jump') {
+      if (ev.air) {
+        sfx.airJump(0);
+        scene.slideDust(pred.x, pred.y, pred.z);
+      } else sfx.jump(0);
+    } else if (ev.k === 'hook') sfx.hook(scene.panFor(ev.x, ev.y, ev.z));
     else if (ev.k === 'slide') {
       sfx.slide(0);
       scene.slideDust(pred.x, pred.y, pred.z);
@@ -612,6 +618,7 @@ function toViewPlayer(p: PlayerSnap): ViewPlayer {
     weapon: p[14],
     sliding: p[15] > 0,
     knife: (p[11] & FX_KNIFE) !== 0,
+    hook: p[22] >= 0 ? { x: p[19], y: p[20], z: p[21] } : null,
   };
 }
 
@@ -633,6 +640,7 @@ function lerpPlayer(a: PlayerSnap, b: PlayerSnap, t: number): ViewPlayer {
     weapon: b[14],
     sliding: b[15] > 0,
     knife: (b[11] & FX_KNIFE) !== 0,
+    hook: b[22] >= 0 ? { x: b[19], y: b[20], z: b[21] } : null,
   };
 }
 
@@ -870,10 +878,16 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
       lastHitBy.delete(ev.p);
       break;
     }
+    case 'hook':
+      if (ev.p !== myId) sfx.hook(scene.panFor(ev.x, ev.y, ev.z));
+      break;
     case 'jump':
       if (ev.p !== myId) {
         const p = view.players.find((q) => q.id === ev.p);
-        if (p) sfx.jump(scene.panFor(p.x, p.y, p.z), 0.5);
+        if (p) {
+          if (ev.air) sfx.airJump(scene.panFor(p.x, p.y, p.z), 0.5);
+          else sfx.jump(scene.panFor(p.x, p.y, p.z), 0.5);
+        }
       }
       break;
     case 'spawn':
@@ -1005,6 +1019,7 @@ function frame(): void {
         weapon: pred.weapon,
         sliding: pred.slide > 0,
         knife: pred.knifeOut,
+        hook: pred.grappleT >= 0 ? { x: pred.grappleX, y: pred.grappleY, z: pred.grappleZ } : null,
       };
       view.players = view.players.map((p) => (p.id === myId && me ? me : p));
       const out = pred.falling && pred.fallTime > C.FALL_DURATION * 0.7;

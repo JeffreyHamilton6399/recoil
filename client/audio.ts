@@ -503,6 +503,19 @@ export class Sfx {
     notes.forEach((f, i) => this.pluck(f, 0.22, 0.16, 0, 0.1 + i * 0.09));
   }
 
+  /** Grappling hook: the line zips out and the hook bites (pan: where it bit). */
+  hook(pan: number): void {
+    this.noiseBurst('highpass', 3000, 6000, 0.7, 0.12, 0.1, 0, 0.002, 0, 0.1);
+    this.tone('triangle', 1900, 1200, 0.06, 0.12, pan, 0.07, 0.25);
+    this.noiseBurst('bandpass', 2200, 1400, 4, 0.08, 0.1, pan, 0.001, 0.07, 0.25);
+  }
+
+  /** A double jump: a puff of air under your feet. */
+  airJump(pan: number, volume = 1): void {
+    this.noiseBurst('lowpass', 1800, 400, 0.7, 0.2, 0.16 * volume, pan, 0.005, 0, 0.1);
+    this.tone('sine', 300, 620, 0.12, 0.1 * volume, pan, 0, 0.1);
+  }
+
   /** Capture the flag: a flag was grabbed (good = by your team). */
   flagTaken(good: boolean): void {
     const notes = good ? [587, 880] : [880, 587, 880, 587];
@@ -539,6 +552,10 @@ export class Sfx {
         break;
       case 'heal':
         [1047, 1319, 1568, 2093].forEach((f, i) => this.pluck(f, 0.16, 0.09, pan, i * 0.05));
+        break;
+      case 'speed':
+        this.noiseBurst('bandpass', 900, 4200, 1.2, 0.35, 0.12, pan, 0.02, 0, 0.2);
+        [660, 990, 1320].forEach((f, i) => this.pluck(f, 0.1, 0.08, pan, 0.08 + i * 0.04));
         break;
     }
   }

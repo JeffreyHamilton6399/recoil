@@ -17,6 +17,7 @@ export const POWERUP_STYLE: Record<PowerupKind, { color: string; label: string }
   mega: { color: '#ff8a3d', label: 'MEGA SHOT' },
   shield: { color: '#7fd8ff', label: 'SHIELD' },
   heal: { color: '#ff6fc1', label: 'HEAL' },
+  speed: { color: '#b86bff', label: 'SPEED' },
 };
 
 /** Arena outline as a polygon (counter-clockwise), in the same units as R. */

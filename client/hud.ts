@@ -6,7 +6,7 @@
 
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
-import { FX_MEGA, FX_RAPID, FX_SHIELD, FX_TRIPLE, type PlayerId, type RosterEntry } from '../shared/types.js';
+import { FX_MEGA, FX_SPEED, FX_RAPID, FX_SHIELD, FX_TRIPLE, type PlayerId, type RosterEntry } from '../shared/types.js';
 import { OFFHANDS, weaponDef } from '../shared/weapons.js';
 import { POWERUP_STYLE } from './art.js';
 import type { View, ViewPlayer } from './scene.js';
@@ -206,6 +206,7 @@ export class Hud {
         add(FX_RAPID, 'rapid');
         add(FX_TRIPLE, 'triple');
         add(FX_MEGA, 'mega');
+        add(FX_SPEED, 'speed');
       }
     }
 

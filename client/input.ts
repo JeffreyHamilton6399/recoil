@@ -1,11 +1,11 @@
 // Keyboard, mouse and touch input for first-person play.
 // Keyboard: WASD or arrows to move, Space to jump, Shift to sprint, Ctrl or
 // C to slide, E or G for the offhand (pull out the knife, or throw the
-// shock grenade), R for recoil mode. Mouse: look (with pointer lock), left
+// shock grenade), Q for the grappling hook (hold to reel in), R for recoil mode. Mouse: look (with pointer lock), left
 // button to fire or slash, right button to aim down sights, the wheel to
 // swap between gun and knife.
 // Touch: a move stick on the left (push it all the way to sprint), drag
-// anywhere else to look, and FIRE / JUMP / SLIDE / AIM / E / RECOIL buttons.
+// anywhere else to look, and FIRE / JUMP / SLIDE / AIM / E / HOOK / RECOIL buttons.
 //
 // Ctrl+W would close the tab mid-slide, so playing with the mouse goes
 // fullscreen with the game's keys locked (Chrome and Edge), where the game
@@ -19,7 +19,7 @@ import * as C from '../shared/constants.js';
 import { clamp, wrapAngle } from '../shared/sim.js';
 import type { InputState } from '../shared/types.js';
 
-type Key = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'fire' | 'sprint' | 'crouch' | 'aim' | 'offhand';
+type Key = 'forward' | 'back' | 'left' | 'right' | 'jump' | 'fire' | 'sprint' | 'crouch' | 'aim' | 'offhand' | 'grapple';
 
 const KEYS: Record<string, Key> = {
   KeyW: 'forward',
@@ -37,7 +37,7 @@ const KEYS: Record<string, Key> = {
   KeyC: 'crouch',
   ControlLeft: 'crouch',
   ControlRight: 'crouch',
-  KeyQ: 'aim',
+  KeyQ: 'grapple',
   KeyE: 'offhand',
   KeyG: 'offhand',
 };
@@ -57,6 +57,7 @@ export interface TouchElements {
   aim: HTMLElement;
   recoil: HTMLElement;
   offhand: HTMLElement;
+  hook: HTMLElement;
 }
 
 export class Input {
@@ -86,6 +87,9 @@ export class Input {
   private touchJump = new Set<number>();
   private touchSlide = new Set<number>();
   private touchOff = new Set<number>();
+  private touchHook = new Set<number>();
+  /** The hook key went down since the last tick (so a quick tap still fires it). */
+  private hookLatch = false;
   /** Presses since the last sample, so a tap shorter than a tick still counts. */
   private fireLatch = false;
   private jumpLatch = false;
@@ -111,6 +115,7 @@ export class Input {
       if (key === 'jump') this.jumpLatch = true;
       if (key === 'fire') this.fireLatch = true;
       if (key === 'crouch') this.crouchLatch = true;
+      if (key === 'grapple') this.hookLatch = true;
       if (key === 'offhand') {
         this.offLatch = true;
         this.onOffhandPress();
@@ -290,6 +295,7 @@ export class Input {
       knife: false,
       recoil: false,
       offhand: this.held('offhand') || this.touchOff.size > 0 || this.offLatch,
+      grapple: this.held('grapple') || this.touchHook.size > 0 || this.hookLatch,
       yaw: Math.round(this.yaw * 10000) / 10000,
       pitch: Math.round(this.pitch * 10000) / 10000,
     };
@@ -297,6 +303,7 @@ export class Input {
     this.jumpLatch = false;
     this.crouchLatch = false;
     this.offLatch = false;
+    this.hookLatch = false;
     return s;
   }
 
@@ -307,6 +314,7 @@ export class Input {
     this.touchFire.clear();
     this.touchJump.clear();
     this.touchSlide.clear();
+    this.touchHook.clear();
     this.stickId = null;
     this.lookId = null;
     this.stick = { x: 0, y: 0 };
@@ -399,6 +407,7 @@ export class Input {
     button(fire, this.touchFire, () => (this.fireLatch = true));
     button(jump, this.touchJump, () => (this.jumpLatch = true));
     button(slide, this.touchSlide, () => (this.crouchLatch = true));
+    button(this.touch.hook, this.touchHook, () => (this.hookLatch = true));
     button(offhand, this.touchOff, () => {
       this.offLatch = true;
       this.onOffhandPress();

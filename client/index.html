@@ -1440,6 +1440,13 @@
         right: calc(max(18px, env(safe-area-inset-right)) + 216px);
         bottom: calc(max(24px, env(safe-area-inset-bottom)) + 170px);
       }
+      #t-hook {
+        width: 58px;
+        height: 58px;
+        font-size: 12px;
+        right: calc(max(18px, env(safe-area-inset-right)) + 76px);
+        bottom: calc(max(24px, env(safe-area-inset-bottom)) + 250px);
+      }
       #t-recoil.pressed {
         background: var(--yellow);
       }
@@ -1583,7 +1590,8 @@
 
         <dl class="help">
           <dt>Move</dt><dd><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></dd>
-          <dt>Jump</dt><dd><kbd>Space</kbd></dd>
+          <dt>Jump</dt><dd><kbd>Space</kbd>, again in the air to double jump</dd>
+          <dt>Grappling hook</dt><dd>Hold <kbd>Q</kbd> to reel in, let go to fly</dd>
           <dt>Sprint · Slide</dt><dd><kbd>Shift</kbd> · <kbd>Ctrl</kbd></dd>
           <dt>Fire · Aim</dt><dd>Left · right mouse</dd>
           <dt>Offhand</dt><dd><kbd>E</kbd> pull out the knife, or throw the grenade</dd>
@@ -1672,6 +1680,7 @@
       <div id="t-slide" class="tbtn" role="button" aria-label="Slide">SLIDE</div>
       <div id="t-aim" class="tbtn" role="button" aria-label="Aim down sights">AIM</div>
       <div id="t-off" class="tbtn" role="button" aria-label="Offhand: pull out the knife, or throw the grenade">E</div>
+      <div id="t-hook" class="tbtn" role="button" aria-label="Grappling hook: hold to reel in">HOOK</div>
       <div id="t-recoil" class="tbtn" role="button" aria-label="Recoil mode: shots throw you backwards">RCL</div>
       <div id="t-fire" class="tbtn fire" role="button" aria-label="Fire">FIRE</div>
     </div>

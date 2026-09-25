@@ -6,8 +6,8 @@ export type PlayerId = number;
 
 export type Phase = 'lobby' | 'countdown' | 'playing' | 'roundEnd' | 'matchEnd';
 
-export type PowerupKind = 'rapid' | 'triple' | 'mega' | 'shield' | 'heal';
-export const POWERUP_KINDS: readonly PowerupKind[] = ['rapid', 'triple', 'mega', 'shield', 'heal'];
+export type PowerupKind = 'rapid' | 'triple' | 'mega' | 'shield' | 'heal' | 'speed';
+export const POWERUP_KINDS: readonly PowerupKind[] = ['rapid', 'triple', 'mega', 'shield', 'heal', 'speed'];
 
 /** One tick of a player's controls. */
 export interface InputState {
@@ -28,6 +28,8 @@ export interface InputState {
   knife: boolean;
   /** Recoil mode: your shots throw you backwards, hard, to fly around or back to the roof. */
   recoil: boolean;
+  /** Grappling hook: a fresh press fires it, holding reels you in. */
+  grapple: boolean;
   /** Look direction in radians. Yaw 0 faces +x, and yaw grows counter-clockwise seen from above. */
   yaw: number;
   /** Radians above the horizon (negative looks down). */
@@ -100,6 +102,18 @@ export interface PlayerState {
   recoilMode: boolean;
   /** Team mode: 0 (Red) or 1 (Blue). Ignored otherwise. */
   team: number;
+  /** Grappling hook: where it's stuck, seconds attached (-1 when not), the wait before the next one, and the button last tick. */
+  grappleX: number;
+  grappleY: number;
+  grappleZ: number;
+  grappleT: number;
+  grappleCd: number;
+  grappleHeld: boolean;
+  /** The jump button last tick (a double jump needs a fresh press), and the double jump is used up. */
+  jumpHeld: boolean;
+  airJumped: boolean;
+  /** Seconds of the Speed power-up left. */
+  speed: number;
 }
 
 export interface Bullet {
@@ -162,7 +176,9 @@ export type GameEvent =
   | { k: 'bump'; p: PlayerId; q: PlayerId; x: number; y: number; z: number; f: number }
   | { k: 'fall'; p: PlayerId; x: number; y: number }
   | { k: 'respawn'; p: PlayerId }
-  | { k: 'jump'; p: PlayerId }
+  | { k: 'jump'; p: PlayerId; air?: boolean }
+  /** A grappling hook bit into something at (x, y, z). */
+  | { k: 'hook'; p: PlayerId; x: number; y: number; z: number }
   | { k: 'spawn'; u: PowerupKind; x: number; y: number }
   | { k: 'pickup'; p: PlayerId; u: PowerupKind; x: number; y: number }
   /** Capture the flag: someone took team t's flag, brought it home (cap), or it went back to its base. */
@@ -225,16 +241,21 @@ export const FX_AIM = 128;
 export const FX_OFF_HELD = 256;
 export const FX_KNIFE = 512;
 export const FX_RECOIL = 1024;
+export const FX_GRAPPLE_HELD = 2048;
+export const FX_JUMP_HELD = 4096;
+export const FX_AIR_JUMPED = 8192;
+export const FX_SPEED = 16384;
 
 /**
  * [id, x, y, z, vx, vy, vz, yaw, pitch, damage,
  *  fallTime (-1 while standing), fx bits, cooldown, input ack,
- *  weapon, slide seconds left, slide cooldown, offhand, offhand cooldown]
+ *  weapon, slide seconds left, slide cooldown, offhand, offhand cooldown,
+ *  hook x, hook y, hook z, seconds hooked (-1 when not), hook cooldown]
  */
 export type PlayerSnap = [
   number, number, number, number, number, number, number, number, number,
   number, number, number, number, number, number, number, number, number,
-  number,
+  number, number, number, number, number, number,
 ];
 
 /** [id, owner, x, y, z, radius, weapon] */
@@ -309,7 +330,7 @@ export type ClientMessage =
   | { t: 'addBot'; d: number }
   | { t: 'removeBot'; id: PlayerId }
   /** One tick of input: sequence number, forward, strafe, jump, fire, sprint, crouch, aim, offhand, yaw, pitch. */
-  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; z: boolean; o: boolean; h: boolean; m: boolean; a: number; b: number }
+  | { t: 'input'; s: number; f: number; r: number; j: boolean; x: boolean; k: boolean; c: boolean; z: boolean; o: boolean; h: boolean; m: boolean; q: boolean; a: number; b: number }
   | { t: 'ping'; c: number }
   /** Voice chat switched on or off. */
   | { t: 'voice'; on: boolean }

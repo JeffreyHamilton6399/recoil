@@ -91,6 +91,7 @@ export class UI {
     aim: el('t-aim'),
     offhand: el('t-off'),
     recoil: el('t-recoil'),
+    hook: el('t-hook'),
   };
 
   private readonly menu = el('menu');

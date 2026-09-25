@@ -5,9 +5,29 @@
 // them as the roof shrinks.
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Block, MapDef, Ramp } from '../shared/maps.js';
 import { INK } from './art.js';
-import { glowSprite, outlined, toon } from './toon.js';
+import { OUTLINE, glowSprite, outlined, toon } from './toon.js';
+
+/** Outlines are the shape grown by this much about its own centre, drawn inside out in ink. */
+const OUTLINE_GROW = 1.02;
+
+/**
+ * Merges many static shapes of one look into a single mesh plus a single
+ * outline mesh, so a map full of walls and floors costs two draw calls per
+ * kind instead of two per piece.
+ */
+function merged(bodies: THREE.BufferGeometry[], outlines: THREE.BufferGeometry[], material: THREE.Material): THREE.Group {
+  const group = new THREE.Group();
+  if (bodies.length === 0) return group;
+  const body = new THREE.Mesh(mergeGeometries(bodies), material);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  group.add(body, new THREE.Mesh(mergeGeometries(outlines), OUTLINE));
+  for (const g of [...bodies, ...outlines]) g.dispose();
+  return group;
+}
 
 type Kind = 'crate' | 'unit' | 'tank' | 'wall' | 'slab' | 'ramp';
 
@@ -136,17 +156,18 @@ function blockTexture(kind: Kind): THREE.CanvasTexture {
 /** All the blocks on a map, at full arena size. S converts design units to metres. */
 export function buildBlocks(map: MapDef, S: number): THREE.Group {
   const group = new THREE.Group();
+  const byKind = new Map<Kind, { bodies: THREE.BufferGeometry[]; outlines: THREE.BufferGeometry[] }>();
   for (const b of map.blocks) {
     const kind = kindOf(b);
     const bottom = b.z ?? 0;
     const tall = b.h - bottom;
-    const mesh = outlined(new THREE.Mesh(new THREE.BoxGeometry(b.w * S, tall, b.d * S), toon(KIND_COLOR[kind], blockTexture(kind))), 1.02);
-    // Box outlines scale from the centre; keep them thin on long walls.
-    mesh.position.set(b.x * S, bottom + tall / 2, -b.y * S);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    group.add(mesh);
+    const [x, y, z] = [b.x * S, bottom + tall / 2, -b.y * S];
+    let lists = byKind.get(kind);
+    if (!lists) byKind.set(kind, (lists = { bodies: [], outlines: [] }));
+    lists.bodies.push(new THREE.BoxGeometry(b.w * S, tall, b.d * S).translate(x, y, z));
+    lists.outlines.push(new THREE.BoxGeometry(b.w * S * OUTLINE_GROW, tall * OUTLINE_GROW, b.d * S * OUTLINE_GROW).translate(x, y, z));
   }
+  for (const [kind, { bodies, outlines }] of byKind) group.add(merged(bodies, outlines, toon(KIND_COLOR[kind], blockTexture(kind))));
   return group;
 }
 
@@ -172,15 +193,10 @@ function rampGeometry(r: Ramp, S: number): THREE.BufferGeometry {
 
 /** All the ramps on a map, at full arena size. */
 export function buildRamps(map: MapDef, S: number): THREE.Group {
-  const group = new THREE.Group();
-  for (const r of map.ramps ?? []) {
-    const mesh = outlined(new THREE.Mesh(rampGeometry(r, S), toon(KIND_COLOR.ramp, blockTexture('ramp'))), 1.02);
-    mesh.position.set(r.x * S, 0, -r.y * S);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    group.add(mesh);
-  }
-  return group;
+  const ramps = map.ramps ?? [];
+  const bodies = ramps.map((r) => rampGeometry(r, S).translate(r.x * S, 0, -r.y * S));
+  const outlines = ramps.map((r) => rampGeometry(r, S).scale(OUTLINE_GROW, OUTLINE_GROW, OUTLINE_GROW).translate(r.x * S, 0, -r.y * S));
+  return merged(bodies, outlines, toon(KIND_COLOR.ramp, blockTexture('ramp')));
 }
 
 export interface Pads {

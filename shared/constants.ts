@@ -200,6 +200,20 @@ export const WIN_SCORE = 5;
 /** Team mode: the two teams' names and colours (indices into PLAYER_PALETTE). */
 export const TEAM_NAMES: readonly string[] = ['Red', 'Blue'];
 export const TEAM_COLORS: readonly number[] = [0, 1];
+/** Grappling hook (Q): reach (m), pull (m/s²), top reeling speed (m/s), longest hold (s), and the wait after letting go (s). */
+export const GRAPPLE_RANGE = 34;
+export const GRAPPLE_PULL = 62;
+export const GRAPPLE_MAX_SPEED = 30;
+export const GRAPPLE_TIME = 1.8;
+export const GRAPPLE_COOLDOWN = 1.1;
+/** Let go on your own this close to the hook (m). */
+export const GRAPPLE_LET_GO = 1.6;
+/** Double jump: upward speed, and a nudge towards where you're steering (m/s). */
+export const AIR_JUMP_SPEED = 7.2;
+export const AIR_JUMP_NUDGE = 3;
+/** Speed power-up: seconds, and how much faster you run. */
+export const SPEED_TIME = 8;
+export const SPEED_MULT = 1.4;
 /** Capture the flag: captures to win, the time limit (s), and the wait before you're back after a fall (s). */
 export const CTF_CAPTURES = 3;
 export const CTF_TIME = 300;

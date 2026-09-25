@@ -22,17 +22,19 @@ first to 5 round wins takes the match.
   and the flag goes home. First to 3 captures, or the most after 5 minutes.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
-- **17 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
+- **20 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
   Vent Farm, Chimneys, Hex Plaza, Billboard, Sky Garden, Split Level, Parking
-  Deck, Solar Farm, Downtown, High Rise, City Blocks, Skyline and Twin Bases.
-  City Blocks, Skyline and Twin Bases are blocks of separate buildings: jump
+  Deck, Solar Farm, Downtown, High Rise, City Blocks, Skyline, Twin Bases,
+  Crane Yard, Sky Islands and Canyon Run. The last six are blocks of separate buildings: jump
   the gaps, blast across with recoil, or take the bridges. Downtown and High Rise have
   two-storey towers to walk into: stairs up to the second floor, again up to
   a roof deck, and sky bridges between them. Arenas can be circles, squares, hexagons, or diamonds,
   with open vents to fall through, bouncy pillars, obstacles and jump pads.
 - **Movement:** run, sprint, slide (tap Ctrl while moving; jump out of a
   slide to keep the speed), aim down sights (the Longshot has a scope), and climb any ledge up to 2.7 m by jumping into it.
-  Jump pads launch you into the air.
+  Jump pads launch you into the air. Press jump again in the air to double
+  jump, and hold `Q` to fire a grappling hook and be reeled in (let go to
+  fly on with the speed).
 - **Five weapons**, picked in the lobby (click a card or press 1 to 5):
   - **Revolver:** every click is a solid shove. The all-rounder.
   - **Scatter:** a pump shotgun. Brutal up close.
@@ -41,7 +43,7 @@ first to 5 round wins takes the match.
   - **Pepper:** an SMG. Hold the trigger for a stream of little pokes.
 - **Obstacles on every map:** crates, AC units, water tanks and brick walls to
   climb, stand on and hide behind.
-- **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, and Heal.
+- **Power-ups:** Rapid Fire, Triple Shot, Mega Shot, Shield, Heal, and Speed.
 - **Hand-drawn toon look, all made in code with three.js:** a post-processing
   pass inks the whole frame like a comic panel. Outlines come from depth and
   colour edges and "boil" at 12 fps like redrawn animation, with pencil

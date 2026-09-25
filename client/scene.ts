@@ -38,6 +38,8 @@ export interface ViewPlayer {
   sliding: boolean;
   /** Holding the knife instead of the gun. */
   knife: boolean;
+  /** Where their grappling hook is stuck, if it is. */
+  hook?: { x: number; y: number; z: number } | null;
 }
 
 export interface ViewBullet {
@@ -633,6 +635,8 @@ export class Scene3D {
 
   private readonly rigs = new Map<PlayerId, Rig>();
   private readonly flagObjs: FlagObj[] = [];
+  /** Grappling hook lines, by player. */
+  private readonly ropes = new Map<PlayerId, { line: THREE.Mesh; claw: THREE.Mesh }>();
   private readonly bullets = new Map<number, BulletObj>();
   private readonly bulletPool = new Map<string, BulletObj[]>();
   private casings: Casing[] = [];
@@ -1197,6 +1201,44 @@ export class Scene3D {
     }
   }
 
+  /** Grappling hook lines: from the hand (or just under your view) to the hook. */
+  private syncRopes(view: View, cam: CameraView): void {
+    const seen = new Set<PlayerId>();
+    for (const p of view.players) {
+      if (!p.hook || p.fallTime >= 0) continue;
+      seen.add(p.id);
+      let rope = this.ropes.get(p.id);
+      if (!rope) {
+        const line = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1, 6, 1, true), new THREE.MeshBasicMaterial({ color: INK }));
+        line.geometry.translate(0, 0.5, 0);
+        const claw = outlined(new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), toon('#c9c4d8')), 1.2);
+        this.scene.add(line, claw);
+        rope = { line, claw };
+        this.ropes.set(p.id, rope);
+      }
+      const from = new THREE.Vector3();
+      if (p.id === view.myId && cam.kind === 'first') from.set(0.22, -0.28, -0.45).applyMatrix4(this.camera.matrixWorld);
+      else {
+        // The off hand, a little in front of the chest.
+        toThree(p.x + Math.cos(p.yaw) * 0.3, p.y + Math.sin(p.yaw) * 0.3, p.z + 1.3, from);
+      }
+      const to = toThree(p.hook.x, p.hook.y, p.hook.z);
+      const d = to.clone().sub(from);
+      rope.line.position.copy(from);
+      rope.line.scale.set(1, d.length(), 1);
+      rope.line.quaternion.setFromUnitVectors(UP, d.normalize());
+      rope.claw.position.copy(to);
+      rope.claw.rotation.y += 0.2;
+    }
+    for (const [id, rope] of this.ropes) {
+      if (seen.has(id)) continue;
+      this.scene.remove(rope.line, rope.claw);
+      disposeTree(rope.line);
+      disposeTree(rope.claw);
+      this.ropes.delete(id);
+    }
+  }
+
   private makeFlag(team: number): FlagObj {
     const color = C.PLAYER_PALETTE[C.TEAM_COLORS[team]];
     const group = new THREE.Group();
@@ -1710,6 +1752,7 @@ export class Scene3D {
 
     this.syncPlayers(view, cam, dt);
     this.syncFlags(view, cam);
+    this.syncRopes(view, cam);
     this.syncBullets(view);
     this.syncPowerups(view);
     this.particles.update(dt);
