@@ -25,6 +25,10 @@ export interface UiHandlers {
   onPickMap(choice: number): void;
   /** Host switched the no-jump rule. */
   onNoJump(on: boolean): void;
+  /** Host: team mode on or off. */
+  onTeams(on: boolean): void;
+  /** Team mode: join team 0 (Red) or 1 (Blue). */
+  onPickTeam(team: number): void;
   /** Name or colour changed. */
   onProfile(): void;
   /** Picked a weapon. */
@@ -61,6 +65,8 @@ export interface LobbyInfo {
   startsIn: number;
   /** The room's no-jump rule. */
   noJump: boolean;
+  /** The room's team mode rule. */
+  teams: boolean;
   /** Players you've muted, and who is talking right now. */
   muted: PlayerId[];
   speaking: PlayerId[];
@@ -98,6 +104,10 @@ export class UI {
   private readonly weaponList = el('weapon-list');
   private readonly noJumpRule = el('rule-nojump');
   private readonly noJumpBox = el<HTMLInputElement>('chk-nojump');
+  private readonly teamsRule = el('rule-teams');
+  private readonly teamsBox = el<HTMLInputElement>('chk-teams');
+  private readonly teamPick = el('team-pick');
+  private readonly teamBtns = [el<HTMLButtonElement>('btn-team-red'), el<HTMLButtonElement>('btn-team-blue')];
   private readonly weaponsSection = el('weapons-section');
   private readonly offhandList = el('offhand-list');
   private readonly loadout = el('loadout');
@@ -171,6 +181,8 @@ export class UI {
     this.copyBtn.addEventListener('click', () => void this.copyLink(this.copyBtn));
     this.startBtn.addEventListener('click', () => handlers.onStart());
     this.noJumpBox.addEventListener('change', () => handlers.onNoJump(this.noJumpBox.checked));
+    this.teamsBox.addEventListener('change', () => handlers.onTeams(this.teamsBox.checked));
+    this.teamBtns.forEach((b, team) => b.addEventListener('click', () => handlers.onPickTeam(team)));
     el('btn-lobby-leave').addEventListener('click', () => handlers.onLeave());
     el('btn-leave').addEventListener('click', () => {
       this.setPause(false);
@@ -570,9 +582,10 @@ export class UI {
     this.lobbyCode.textContent = info.code;
     this.lobbyUrl.textContent = this.shareUrl;
 
-    // Player list.
+    // Player list (team mode: Red first, then Blue).
     this.playerList.textContent = '';
-    for (const r of info.roster) {
+    const listed = info.teams ? [...info.roster].sort((a, b) => a.team - b.team || a.id - b.id) : info.roster;
+    for (const r of listed) {
       const li = document.createElement('li');
       li.classList.toggle('offline', !r.online);
       li.classList.toggle('me', r.id === info.myId);
@@ -583,6 +596,13 @@ export class UI {
       name.className = 'pname';
       name.textContent = r.name + (r.id === info.myId ? ' (you)' : '');
       li.append(dot, name);
+      if (info.teams && r.team >= 0) {
+        const tag = document.createElement('span');
+        tag.className = 'ptag team';
+        tag.style.setProperty('--c', C.PLAYER_PALETTE[C.TEAM_COLORS[r.team]]);
+        tag.textContent = C.TEAM_NAMES[r.team];
+        li.appendChild(tag);
+      }
       if (r.host) {
         const host = document.createElement('span');
         host.className = 'ptag host';
@@ -668,6 +688,17 @@ export class UI {
     this.noJumpRule.classList.toggle('readonly', !isHost);
     this.noJumpBox.disabled = !isHost;
     this.noJumpBox.checked = info.noJump;
+    // Team mode: the host switches it; everyone picks a side.
+    this.teamsRule.classList.toggle('hidden', info.pub || (!isHost && !info.teams));
+    this.teamsRule.classList.toggle('readonly', !isHost);
+    this.teamsBox.disabled = !isHost;
+    this.teamsBox.checked = info.teams;
+    this.teamPick.classList.toggle('hidden', !info.teams || info.myId === -1);
+    this.teamBtns.forEach((b, team) => {
+      const count = info.roster.filter((r) => r.team === team).length;
+      b.textContent = `${me?.team === team ? '✓ ' : 'Join '}${C.TEAM_NAMES[team]} (${count})`;
+      b.classList.toggle('selected', me?.team === team);
+    });
     this.botControls.classList.toggle('hidden', !isHost || info.roster.length >= C.MAX_PLAYERS);
     this.startBtn.disabled = !enough;
     this.startBtn.textContent = enough ? `Start match (${online} players)` : 'Start match';

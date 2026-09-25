@@ -14,6 +14,9 @@ first to 5 round wins takes the match.
   match.
 - **No-jump rule:** the host of a private game can switch off jumping, so
   recoil mode (`R`) is the only way up.
+- **Team mode:** the host of a private game can split the room into Red and
+  Blue (1v1 duels up to 4v4). Teammates can't hit each other, and the last
+  team standing wins the round. Everyone picks a side in the lobby.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
 - **14 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,

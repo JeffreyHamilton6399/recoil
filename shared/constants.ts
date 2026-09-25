@@ -197,6 +197,9 @@ export const ROUND_END_TIME = 2.5;
 export const MATCH_END_TIME = 7;
 /** Round wins needed to take the match. */
 export const WIN_SCORE = 5;
+/** Team mode: the two teams' names and colours (indices into PLAYER_PALETTE). */
+export const TEAM_NAMES: readonly string[] = ['Red', 'Blue'];
+export const TEAM_COLORS: readonly number[] = [0, 1];
 
 // ---------------------------------------------------------------------------
 // Networking

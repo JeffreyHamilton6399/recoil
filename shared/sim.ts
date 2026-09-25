@@ -164,6 +164,7 @@ export function createPlayer(id: PlayerId, weapon = 0): PlayerState {
     knifeOut: false,
     recoilMode: false,
     offUse: false,
+    team: 0,
   };
 }
 
@@ -198,10 +199,11 @@ function resetAtSpawn(s: GameState, p: PlayerState, index: number, count: number
   p.offUse = false;
 }
 
-/** Puts every player in the round, evenly spaced on the spawn ring. */
+/** Puts every player in the round, evenly spaced on the spawn ring (teams side by side). */
 function placeAll(s: GameState): void {
   const n = s.players.length;
-  s.players.forEach((p, i) => {
+  const order = s.teams ? [...s.players].sort((a, b) => a.team - b.team || a.id - b.id) : s.players;
+  order.forEach((p, i) => {
     p.inRound = true;
     resetAtSpawn(s, p, i, n);
   });
@@ -226,6 +228,10 @@ export function createGame(seed: number): GameState {
     powerupTimer: C.POWERUP_FIRST_DELAY,
     rng: seed >>> 0 || 1,
     noJump: false,
+    teams: false,
+    teamScores: [0, 0],
+    roundTeam: null,
+    matchTeam: null,
   };
 }
 
@@ -237,6 +243,8 @@ export function getPlayer(s: GameState, id: PlayerId): PlayerState | undefined {
 export function addPlayer(s: GameState, id: PlayerId, weapon = 0): void {
   if (getPlayer(s, id)) return;
   const p = createPlayer(id, WEAPONS[weapon] ? weapon : 0);
+  // Team mode: join whichever team is short.
+  p.team = teamSize(s, 1) < teamSize(s, 0) ? 1 : 0;
   s.players.push(p);
   s.players.sort((a, b) => a.id - b.id);
   if (s.phase === 'lobby') placeAll(s);
@@ -246,6 +254,44 @@ export function removePlayer(s: GameState, id: PlayerId): void {
   s.players = s.players.filter((p) => p.id !== id);
   s.scores[id] = 0;
   if (s.phase === 'lobby') placeAll(s);
+}
+
+/** Are these two on the same team (team mode only)? */
+export function allies(s: GameState, a: PlayerState, b: PlayerState): boolean {
+  return s.teams && a.id !== b.id && a.team === b.team;
+}
+
+function teamSize(s: GameState, team: number): number {
+  return s.players.filter((p) => p.team === team).length;
+}
+
+/** Evens the teams out, moving the newest players across as needed. */
+function balanceTeams(s: GameState): void {
+  for (;;) {
+    const red = teamSize(s, 0);
+    const blue = teamSize(s, 1);
+    if (Math.abs(red - blue) <= 1) return;
+    const from = red > blue ? 0 : 1;
+    const mover = [...s.players].reverse().find((p) => p.team === from);
+    if (!mover) return;
+    mover.team = 1 - from;
+  }
+}
+
+/** Switches team mode on or off (between matches). Turning it on splits everyone evenly. */
+export function setTeams(s: GameState, on: boolean): void {
+  if (s.teams === on) return;
+  s.teams = on;
+  if (on) s.players.forEach((p, i) => (p.team = i % 2));
+  if (s.phase === 'lobby') placeAll(s);
+}
+
+/** Team mode: moves a player to a team, in the lobby. */
+export function setTeam(s: GameState, id: PlayerId, team: number): void {
+  const p = getPlayer(s, id);
+  if (!p || !s.teams || s.phase !== 'lobby' || (team !== 0 && team !== 1) || p.team === team) return;
+  p.team = team;
+  placeAll(s);
 }
 
 /** Picks a weapon. In the lobby it's yours right away; mid-match, from your next spawn. */
@@ -285,6 +331,8 @@ export function enterLobby(s: GameState): void {
   s.powerupTimer = C.POWERUP_FIRST_DELAY;
   s.roundWinner = null;
   s.matchWinner = null;
+  s.roundTeam = null;
+  s.matchTeam = null;
   placeAll(s);
 }
 
@@ -319,6 +367,9 @@ export function startRound(s: GameState): void {
   s.powerups = [];
   s.powerupTimer = C.POWERUP_FIRST_DELAY;
   s.roundWinner = null;
+  s.roundTeam = null;
+  // Someone left and a team is empty: even it out so there's a fight.
+  if (s.teams && (teamSize(s, 0) === 0 || teamSize(s, 1) === 0)) balanceTeams(s);
   placeAll(s);
   s.phase = 'countdown';
   s.phaseTime = 0;
@@ -327,7 +378,9 @@ export function startRound(s: GameState): void {
 /** Resets scores and starts round one. */
 export function startMatch(s: GameState): void {
   s.scores.fill(0);
+  s.teamScores = [0, 0];
   s.matchWinner = null;
+  s.matchTeam = null;
   startRound(s);
 }
 
@@ -717,6 +770,7 @@ function spawnBullets(s: GameState, p: PlayerState, events: GameEvent[]): void {
       s.bullets.push({
         id: s.nextId++,
         owner: p.id,
+        team: p.team,
         weapon: p.weapon,
         x: p.x + d.x * offset,
         y: p.y + d.y * offset,
@@ -743,7 +797,7 @@ function useOffhand(s: GameState, p: PlayerState, events: GameEvent[]): void {
     const fy = Math.sin(p.yaw);
     let hit = false;
     for (const q of s.players) {
-      if (q.id === p.id || !q.inRound || q.falling) continue;
+      if (q.id === p.id || !q.inRound || q.falling || allies(s, p, q)) continue;
       const dx = q.x - p.x;
       const dy = q.y - p.y;
       const flat = Math.hypot(dx, dy);
@@ -773,6 +827,7 @@ function useOffhand(s: GameState, p: PlayerState, events: GameEvent[]): void {
   s.bullets.push({
     id: s.nextId++,
     owner: p.id,
+    team: p.team,
     weapon: SHOCK_WEAPON,
     x: p.x + d.x * offset,
     y: p.y + d.y * offset,
@@ -907,6 +962,7 @@ function explode(s: GameState, b: Bullet, x: number, y: number, z: number, event
       knock(p, dx, dy, dz + 0.5, b.knockback * falloff * C.SELF_SPLASH);
       continue;
     }
+    if (s.teams && p.team === b.team) continue;
     if (p.shield > 0) {
       p.shield = 0;
       events.push({ k: 'block', p: p.id, x: p.x, y: p.y, z: cz });
@@ -937,7 +993,7 @@ function moveBullet(s: GameState, b: Bullet, h: number, standing: PlayerState[],
 
     // Players.
     for (const p of standing) {
-      if (p.id === b.owner) continue;
+      if (p.id === b.owner || (s.teams && p.team === b.team)) continue;
       const rr = C.PLAYER_RADIUS + b.radius;
       if (capsuleDist2(p, b.x, b.y, b.z) >= rr * rr) continue;
       if (w.splash > 0) {
@@ -1025,7 +1081,7 @@ function integrate(s: GameState, h: number, events: GameEvent[]): void {
     if (dead.has(ba.id)) continue;
     for (let c = a + 1; c < s.bullets.length; c++) {
       const bb = s.bullets[c];
-      if (dead.has(bb.id) || bb.owner === ba.owner) continue;
+      if (dead.has(bb.id) || bb.owner === ba.owner || (s.teams && bb.team === ba.team)) continue;
       const rr = ba.radius + bb.radius;
       const dx = bb.x - ba.x;
       const dy = bb.y - ba.y;
@@ -1140,7 +1196,22 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
     }
   }
 
-  if (playing) {
+  if (playing && s.teams) {
+    // Team mode: the round is over once only one team is left standing.
+    const standing = new Set(inRound.filter((p) => !p.falling).map((p) => p.team));
+    if (standing.size <= 1) {
+      const team = standing.size === 1 ? [...standing][0] : -1;
+      if (team >= 0) {
+        s.teamScores[team]++;
+        for (const p of s.players) if (p.team === team) s.scores[p.id]++;
+      }
+      s.roundTeam = team;
+      s.roundWinner = -1;
+      s.phase = 'roundEnd';
+      s.phaseTime = 0;
+      events.push({ k: 'ko', w: -1 });
+    }
+  } else if (playing) {
     const alive = inRound.filter((p) => !p.falling);
     if (alive.length <= 1) {
       const winner: PlayerId = alive.length === 1 ? alive[0].id : -1;
@@ -1153,6 +1224,16 @@ export function step(s: GameState, inputs: ReadonlyMap<PlayerId, InputState>, dt
   } else if (s.phase === 'countdown' && s.phaseTime >= C.COUNTDOWN_TIME) {
     s.phase = 'playing';
     s.phaseTime = 0;
+  } else if (s.phase === 'roundEnd' && s.phaseTime >= C.ROUND_END_TIME && s.teams) {
+    const best = s.teamScores[0] >= s.teamScores[1] ? 0 : 1;
+    if (s.teamScores[best] >= C.WIN_SCORE) {
+      s.phase = 'matchEnd';
+      s.phaseTime = 0;
+      s.matchTeam = best;
+      s.matchWinner = -1;
+    } else {
+      startRound(s);
+    }
   } else if (s.phase === 'roundEnd' && s.phaseTime >= C.ROUND_END_TIME) {
     let best: PlayerId = -1;
     for (const p of s.players) if (best === -1 || s.scores[p.id] > s.scores[best]) best = p.id;

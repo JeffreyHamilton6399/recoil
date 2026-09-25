@@ -29,6 +29,8 @@ import {
   removePlayer,
   setMapChoice,
   setOffhand,
+  setTeam,
+  setTeams,
   setWeapon,
   startMatch,
   step,
@@ -646,6 +648,49 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   walk(-4.2, 0, 0, 160, 2.95);
   assert.ok(p.x / S > 3.6 && Math.abs(p.z - 2.95) < 0.05, `crossed the sky bridge (x=${(p.x / S).toFixed(2)}, z=${p.z.toFixed(2)})`);
   console.log(`ok 14 - tower stairs to ${floor2.toFixed(2)} m and ${deck.toFixed(2)} m, and across the sky bridge`);
+}
+
+// 15. Team mode: even teams, shots pass through teammates, and the round
+//     goes to the last team standing.
+{
+  const g = createGame(77);
+  for (let id = 0; id < 4; id++) addPlayer(g, id, 0);
+  setTeams(g, true);
+  const team = (id: number): number => g.players.find((p) => p.id === id)!.team;
+  assert.deepEqual([0, 1, 2, 3].map(team), [0, 1, 0, 1], 'teams split evenly');
+  setTeam(g, 3, 0);
+  assert.equal(team(3), 0, 'a player can switch team in the lobby');
+  setTeam(g, 3, 1);
+
+  // Friendly fire is off: Red shoots Red point blank and nothing happens.
+  const [a, b, c, d] = [0, 1, 2, 3].map((id) => g.players.find((p) => p.id === id)!);
+  [a, b, c, d].forEach((p, i) => Object.assign(p, { x: -6 + i, y: -6, vx: 0, vy: 0, vz: 0, z: 0, damage: 0, falling: false, fallTime: 0 }));
+  Object.assign(a, { x: 0, y: 0, yaw: 0 });
+  Object.assign(c, { x: 2, y: 0 });
+  for (let i = 0; i < 20; i++) step(g, new Map([[0, { ...NO_INPUT, yaw: 0, firing: i % 4 === 0 }]]));
+  assert.equal(c.damage, 0, 'teammates cannot hurt each other');
+  // ...but an enemy in the same spot gets hit.
+  Object.assign(c, { x: -6, y: 6 });
+  Object.assign(b, { x: 2, y: 0, vx: 0, vy: 0, vz: 0, z: 0, damage: 0 });
+  a.cooldown = 0;
+  for (let i = 0; i < 20; i++) step(g, new Map([[0, { ...NO_INPUT, yaw: 0, firing: i % 4 === 0 }]]));
+  assert.ok(b.damage > 0, 'enemies still get hit');
+
+  // Last team standing wins the round.
+  startMatch(g);
+  while (g.phase !== 'playing') step(g, new Map());
+  b.falling = true;
+  d.falling = true;
+  step(g, new Map());
+  assert.equal(g.phase, 'roundEnd');
+  assert.equal(g.roundTeam, 0, 'Red wins the round');
+  assert.deepEqual(g.teamScores, [1, 0]);
+  // A team emptied by someone leaving gets evened out at the next round.
+  removePlayer(g, 1);
+  removePlayer(g, 3);
+  while (g.phase === 'roundEnd') step(g, new Map());
+  assert.deepEqual(g.players.map((p) => p.team).sort(), [0, 1], 'teams rebalanced');
+  console.log('ok 15 - team mode');
 }
 
 console.log('all simulation tests passed');

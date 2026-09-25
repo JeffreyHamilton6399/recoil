@@ -556,6 +556,27 @@
         cursor: default;
         opacity: 0.85;
       }
+      #team-pick {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      #team-pick.hidden {
+        display: none;
+      }
+      .team-btn {
+        flex: 1;
+        border-color: var(--c);
+        color: var(--c);
+      }
+      .team-btn.selected {
+        background: var(--c);
+        color: #fff;
+      }
+      .ptag.team {
+        color: var(--c);
+        font-weight: 700;
+      }
       #btn-start {
         margin-top: 18px;
       }
@@ -1625,6 +1646,14 @@
           <input type="checkbox" id="chk-nojump" />
           <span><b>No jumping</b> Recoil (R) is the only way up</span>
         </label>
+        <label id="rule-teams" class="rule hidden">
+          <input type="checkbox" id="chk-teams" />
+          <span><b>Teams</b> Red vs Blue, no friendly fire. Last team standing wins</span>
+        </label>
+        <div id="team-pick" class="hidden">
+          <button id="btn-team-red" type="button" class="btn team-btn" style="--c: #ff5a5f">Join Red</button>
+          <button id="btn-team-blue" type="button" class="btn team-btn" style="--c: #4d8bff">Join Blue</button>
+        </div>
 
         <button id="btn-start" class="btn primary hidden">Start match</button>
         <p id="lobby-status"></p>

@@ -10,7 +10,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import * as C from '../shared/constants.js';
 import { MAPS } from '../shared/maps.js';
 import { BOT_LEVEL_NAMES, BotBrain, isBotLevel, type BotLevel } from '../shared/bot.js';
-import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, setOffhand, setWeapon, startMatch, step } from '../shared/sim.js';
+import { NO_INPUT, addPlayer, createGame, enterLobby, getPlayer, playerSnap, removePlayer, setMapChoice, setOffhand, setTeam, setTeams, setWeapon, startMatch, step } from '../shared/sim.js';
 import { OFFHANDS, WEAPONS, isOffhand, isWeapon } from '../shared/weapons.js';
 import {
   POWERUP_KINDS,
@@ -292,9 +292,17 @@ function handleMessage(client: Client, msg: ClientMessage): void {
       break;
     }
     case 'rules': {
-      // The host of a private room can switch the no-jump rule between matches.
+      // The host of a private room can switch the rules (no jumping, teams) between matches.
       const room = client.room;
-      if (room && !room.pub && room.state.phase === 'lobby' && hostId(room) === client.seat) room.state.noJump = msg.noJump;
+      if (room && !room.pub && room.state.phase === 'lobby' && hostId(room) === client.seat) {
+        room.state.noJump = msg.noJump;
+        setTeams(room.state, msg.teams);
+      }
+      break;
+    }
+    case 'team': {
+      const room = client.room;
+      if (room && client.seat !== -1 && room.seats[client.seat]?.client === client) setTeam(room.state, client.seat, msg.team);
       break;
     }
     case 'join': {
@@ -461,7 +469,9 @@ function parseMessage(data: RawData): ClientMessage | null {
         ? { t: 'map', choice: m.choice }
         : null;
     case 'rules':
-      return typeof m.noJump === 'boolean' ? { t: 'rules', noJump: m.noJump } : null;
+      return typeof m.noJump === 'boolean' ? { t: 'rules', noJump: m.noJump, teams: m.teams === true } : null;
+    case 'team':
+      return m.team === 0 || m.team === 1 ? { t: 'team', team: m.team } : null;
     case 'profile':
       return { t: 'profile', name: asName(m.name), color: asColor(m.color) };
     case 'start':
@@ -607,6 +617,7 @@ function tickRoom(room: Room, now: number): void {
         offhand: s.offhand,
         bot: s.bot ? s.bot.level : 0,
         voice: s.voice && s.client !== null,
+        team: state.teams ? (getPlayer(state, id)?.team ?? -1) : -1,
         online: s.client !== null || s.bot !== null,
         host: id === host,
       });
@@ -620,6 +631,7 @@ function tickRoom(room: Room, now: number): void {
     pub: room.pub,
     mapChoice: state.mapChoice,
     noJump: state.noJump,
+    teams: state.teams,
     startsIn,
   } satisfies ServerMessage);
   if (rosterMsg !== room.lastRoster) {
@@ -641,6 +653,11 @@ function tickRoom(room: Room, now: number): void {
     rw: state.roundWinner,
     mw: state.matchWinner,
   };
+  if (state.teams) {
+    snap.ts = state.teamScores;
+    snap.tw = state.roundTeam;
+    snap.tm = state.matchTeam;
+  }
   const data = JSON.stringify(snap, compactReplacer);
   for (const c of clients) sendRaw(c, data);
 }

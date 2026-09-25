@@ -10,7 +10,7 @@ import { FX_KNIFE, POWERUP_KINDS, ROOM_CODE_PATTERN } from '../shared/types.js';
 import { SHOCK_WEAPON, weaponDef } from '../shared/weapons.js';
 import type { GameEvent, InputState, PlayerId, PlayerSnap, PlayerState, RosterEntry, ServerMessage, Snapshot } from '../shared/types.js';
 import { Sfx } from './audio.js';
-import { Hud } from './hud.js';
+import { Hud, type TeamInfo } from './hud.js';
 import { Input } from './input.js';
 import { Net } from './net.js';
 import { Scene3D, type CameraView, type View, type ViewBullet, type ViewPlayer, type ViewPowerup } from './scene.js';
@@ -75,6 +75,10 @@ let spectating = false;
 let wasSpectating = false;
 /** The room's no-jump rule (from the roster). */
 let roomNoJump = false;
+/** The room's team mode rule. */
+let roomTeams = false;
+/** The roster as sent (own colours), for the lobby; `roster` has team colours in team mode. */
+let lobbyRoster: RosterEntry[] = [];
 /** Crosshair spread from firing, easing back to 0. */
 let bloom = 0;
 /** Metres walked since the last footstep. */
@@ -163,7 +167,9 @@ const ui = new UI({
   onLeave: () => leaveToMenu(''),
   onStart: () => net.send({ t: 'start' }),
   onPickMap: (choice) => net.send({ t: 'map', choice }),
-  onNoJump: (on) => net.send({ t: 'rules', noJump: on }),
+  onNoJump: (on) => net.send({ t: 'rules', noJump: on, teams: roomTeams }),
+  onTeams: (on) => net.send({ t: 'rules', noJump: roomNoJump, teams: on }),
+  onPickTeam: (team) => net.send({ t: 'team', team }),
   onProfile: () => {
     if (roomCode && myId !== -1) net.send({ t: 'profile', name: ui.name, color: ui.color });
   },
@@ -391,13 +397,16 @@ function handleMessage(msg: ServerMessage): void {
       // Blip when someone arrives or leaves (not for our own first roster).
       if (roster.length > 0 && msg.players.length > roster.length) sfx.playerJoined();
       if (roster.length > 0 && msg.players.length < roster.length) sfx.playerLeft();
-      roster = msg.players;
+      // Team mode: everyone wears their team's colour in the game.
+      lobbyRoster = msg.players;
+      roster = msg.players.map((r) => (r.team >= 0 ? { ...r, color: C.TEAM_COLORS[r.team] ?? r.color } : r));
       voice.sync(roster);
       spectators = msg.spectators;
       roomPub = msg.pub;
       mapChoice = msg.mapChoice;
       startsIn = msg.startsIn;
       roomNoJump = msg.noJump;
+      roomTeams = msg.teams === true;
       refreshRoomUi();
       break;
     case 'error':
@@ -426,7 +435,7 @@ function refreshRoomUi(): void {
   hud.setVisible(true);
   ui.setLobby(
     phase === 'lobby'
-      ? { code: roomCode, roster, spectators, myId, pub: roomPub, mapChoice, startsIn, noJump: roomNoJump, muted: [...voice.muted], speaking: [...voice.speaking] }
+      ? { code: roomCode, roster: lobbyRoster, spectators, myId, pub: roomPub, mapChoice, startsIn, noJump: roomNoJump, teams: roomTeams, muted: [...voice.muted], speaking: [...voice.speaking] }
       : null,
   );
 }
@@ -726,6 +735,7 @@ const attractRoster: RosterEntry[] = [0, 1, 2, 3].map((i) => ({
   offhand: i % 2,
   bot: 0,
   voice: false,
+  team: -1,
   score: 0,
   online: true,
   host: false,
@@ -868,9 +878,12 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
     case 'pickup':
       sfx.pickup(ev.u, scene.panFor(ev.x, ev.y, C.POWERUP_HEIGHT));
       break;
-    case 'ko':
-      sfx.ko(myId === -1 || ev.w === myId);
+    case 'ko': {
+      const tw = snaps[snaps.length - 1]?.tw;
+      const myTeam = roster.find((r) => r.id === myId)?.team ?? -1;
+      sfx.ko(myId === -1 || ev.w === myId || (tw !== undefined && tw !== null && tw >= 0 && tw === myTeam));
       break;
+    }
     case 'respawn': {
       const p = view.players.find((q) => q.id === ev.p);
       sfx.respawn(p ? scene.panFor(p.x, p.y, p.z) : 0);
@@ -915,6 +928,7 @@ function frame(): void {
   let me: ViewPlayer | undefined;
   let roundWinner: PlayerId | null = null;
   let matchWinner: PlayerId | null = null;
+  let teamInfo: TeamInfo | null = null;
 
   if (roomCode && clockOffset !== null && snaps.length > 0) {
     // Fixed-rate input ticks; several per frame if the tab fell behind.
@@ -933,6 +947,7 @@ function frame(): void {
     const latest = snaps[snaps.length - 1];
     roundWinner = latest.rw;
     matchWinner = latest.mw;
+    teamInfo = latest.ts ? { scores: latest.ts, round: latest.tw ?? null, match: latest.tm ?? null } : null;
     // Fire effects and sounds when the interpolated time reaches them.
     while (pendingEvents.length > 0 && pendingEvents[0].time <= renderTime + 1e-6) {
       const item = pendingEvents.shift();
@@ -1042,6 +1057,7 @@ function frame(): void {
         touch: ui.isTouch,
         roundWinner,
         matchWinner,
+        teams: teamInfo,
         weapon: pred?.weapon ?? 0,
         spread,
         rush,

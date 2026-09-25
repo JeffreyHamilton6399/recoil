@@ -98,11 +98,15 @@ export interface PlayerState {
   knifeOut: boolean;
   /** Recoil mode is on: shots throw you backwards hard. */
   recoilMode: boolean;
+  /** Team mode: 0 (Red) or 1 (Blue). Ignored otherwise. */
+  team: number;
 }
 
 export interface Bullet {
   id: number;
   owner: PlayerId;
+  /** The owner's team (team mode: it passes through teammates). */
+  team: number;
   /** Weapon it came from (for explosions, drop and looks). */
   weapon: number;
   x: number;
@@ -168,6 +172,13 @@ export interface GameState {
   mapChoice: number;
   /** Room rule, set by the host: no jumping, so recoil is the only way up. */
   noJump: boolean;
+  /** Room rule, set by the host: two teams, Red and Blue, instead of everyone for themselves. */
+  teams: boolean;
+  /** Team mode: round wins for Red and Blue. */
+  teamScores: number[];
+  /** Team mode: the team that won the round just finished (-1 for nobody, null during play), and the match. */
+  roundTeam: number | null;
+  matchTeam: number | null;
   players: PlayerState[];
   bullets: Bullet[];
   powerups: Powerup[];
@@ -234,6 +245,10 @@ export interface Snapshot {
   e: GameEvent[];
   rw: PlayerId | null;
   mw: PlayerId | null;
+  /** Team mode only: team round wins, and the team that won the round and the match. */
+  ts?: number[];
+  tw?: number | null;
+  tm?: number | null;
 }
 
 export interface RosterEntry {
@@ -250,6 +265,8 @@ export interface RosterEntry {
   bot: number;
   /** Has voice chat switched on. */
   voice: boolean;
+  /** Team mode: 0 (Red) or 1 (Blue); -1 when teams are off. */
+  team: number;
   online: boolean;
   host: boolean;
 }
@@ -262,7 +279,9 @@ export type ClientMessage =
   /** Host of a private room picks the map (-1 = random). */
   | { t: 'map'; choice: number }
   /** Host of a private room sets the room's rules. */
-  | { t: 'rules'; noJump: boolean }
+  | { t: 'rules'; noJump: boolean; teams: boolean }
+  /** Team mode: switch to team 0 (Red) or 1 (Blue), in the lobby. */
+  | { t: 'team'; team: number }
   | { t: 'profile'; name: string; color: number }
   | { t: 'start' }
   /** Pick a weapon (index into WEAPONS). */
@@ -295,6 +314,8 @@ export type ServerMessage =
       mapChoice: number;
       /** The room's no-jump rule. */
       noJump: boolean;
+      /** The room's team mode rule. */
+      teams: boolean;
       /** Public rooms: seconds until the match starts automatically, or -1. */
       startsIn: number;
     }

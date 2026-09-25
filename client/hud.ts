@@ -19,6 +19,13 @@ function el(id: string): HTMLElement {
 
 const RING = 2 * Math.PI * 20;
 
+/** Team mode: Red and Blue round wins, and who won the round and the match (-1 nobody, null not yet). */
+export interface TeamInfo {
+  scores: number[];
+  round: number | null;
+  match: number | null;
+}
+
 export interface HudInfo {
   view: View;
   /** Your player (predicted), or undefined when watching. */
@@ -29,6 +36,8 @@ export interface HudInfo {
   touch: boolean;
   roundWinner: PlayerId | null;
   matchWinner: PlayerId | null;
+  /** Team mode info, or null when it's everyone for themselves. */
+  teams: TeamInfo | null;
   /** Your weapon, and how ready it is to fire again (0..1). */
   weapon: number;
   ready: number;
@@ -195,7 +204,7 @@ export class Hud {
       }
     }
 
-    this.updateScorebar(view);
+    this.updateScorebar(view, info.teams);
     this.updateBanners(info);
 
     // Click-to-play hint for mouse players.
@@ -205,15 +214,37 @@ export class Hud {
     if (showHint) this.lockHint.textContent = view.phase === 'lobby' ? 'Click to warm up · Esc frees the mouse' : 'Click to play';
   }
 
-  private updateScorebar(view: View): void {
+  private updateScorebar(view: View, teams: TeamInfo | null): void {
     const inMatch = view.phase !== 'lobby';
     const outIds = new Set(view.players.filter((p) => p.fallTime >= 0).map((p) => p.id));
     const inRound = new Set(view.players.map((p) => p.id));
-    const key = inMatch ? JSON.stringify([view.roster, [...outIds], [...inRound], view.myId]) : '';
+    const key = inMatch ? JSON.stringify([view.roster, [...outIds], [...inRound], view.myId, teams?.scores]) : '';
     if (key === this.lastScoreKey) return;
     this.lastScoreKey = key;
     this.scorebar.textContent = '';
     if (!inMatch) return;
+    if (teams) {
+      // Team mode: one line per team, its players' names and the team's points.
+      for (const team of [0, 1]) {
+        const members = view.roster.filter((r) => r.team === team);
+        const item = document.createElement('div');
+        item.className = 'sb';
+        item.classList.toggle('me', members.some((r) => r.id === view.myId));
+        item.classList.toggle('out', members.every((r) => outIds.has(r.id) || !inRound.has(r.id)));
+        const dot = document.createElement('span');
+        dot.className = 'pdot';
+        dot.style.setProperty('--c', C.PLAYER_PALETTE[C.TEAM_COLORS[team]]);
+        const name = document.createElement('span');
+        name.textContent = `${C.TEAM_NAMES[team]}: ${members.map((r) => r.name).join(', ') || '—'}`;
+        const score = teams.scores[team] ?? 0;
+        const pts = document.createElement('span');
+        pts.className = 'pts';
+        pts.textContent = '●'.repeat(Math.min(score, C.WIN_SCORE)) + '○'.repeat(Math.max(0, C.WIN_SCORE - score));
+        item.append(dot, name, pts);
+        this.scorebar.append(item);
+      }
+      return;
+    }
     for (const r of view.roster) {
       const item = document.createElement('div');
       item.className = 'sb';
@@ -235,6 +266,7 @@ export class Hud {
   private updateBanners(info: HudInfo): void {
     const { view, me } = info;
     const nameOf = (id: PlayerId | null): string => view.roster.find((r: RosterEntry) => r.id === id)?.name ?? 'Nobody';
+    const myTeam = view.roster.find((r: RosterEntry) => r.id === view.myId)?.team ?? -1;
     let center = '';
     let small = false;
     let sub = '';
@@ -254,11 +286,25 @@ export class Hud {
         }
         break;
       case 'roundEnd':
+        if (info.teams) {
+          const t = info.teams.round;
+          center = t === null || t < 0 ? 'NOBODY WINS' : `${C.TEAM_NAMES[t].toUpperCase()} TEAM WINS!`;
+          small = true;
+          sub = t !== null && t >= 0 && t === myTeam ? 'Round point for your team!' : 'Next round coming up';
+          break;
+        }
         center = info.roundWinner === null || info.roundWinner < 0 ? 'NOBODY WINS' : `${nameOf(info.roundWinner).toUpperCase()} WINS!`;
         small = true;
         sub = info.roundWinner === view.myId ? 'Round point for you!' : 'Next round coming up';
         break;
       case 'matchEnd':
+        if (info.teams) {
+          const t = info.teams.match ?? 0;
+          center = `${C.TEAM_NAMES[t].toUpperCase()} TEAM TAKES IT!`;
+          small = true;
+          sub = t === myTeam ? 'Champions of the rooftops!' : 'Back to the lobby soon';
+          break;
+        }
         center = `${nameOf(info.matchWinner).toUpperCase()} TAKES IT!`;
         small = true;
         sub = info.matchWinner === view.myId ? 'Champion of the rooftops!' : 'Back to the lobby soon';

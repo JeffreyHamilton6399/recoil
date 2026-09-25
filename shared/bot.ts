@@ -11,7 +11,7 @@
 import * as C from './constants.js';
 import { floorAt, inBlock, isOffMap, type MapDef } from './maps.js';
 import { clearLine, climbs, findPath, navGrid, type Climb, type NavGrid } from './nav.js';
-import { NO_INPUT, angleDiff, clamp, currentMap, phaseRules, wrapAngle } from './sim.js';
+import { NO_INPUT, allies, angleDiff, clamp, currentMap, phaseRules, wrapAngle } from './sim.js';
 import type { GameState, InputState, PlayerId, PlayerState } from './types.js';
 import { weaponDef } from './weapons.js';
 
@@ -121,7 +121,7 @@ export class BotBrain {
     const map = currentMap(s);
     const R = s.arenaRadius;
     const { canMove, canFire } = phaseRules(s.phase);
-    const enemies = s.players.filter((p) => p.id !== me.id && p.inRound && !p.falling);
+    const enemies = s.players.filter((p) => p.id !== me.id && p.inRound && !p.falling && !allies(s, me, p));
     this.remember(s);
 
     // ---- Target ---------------------------------------------------------
