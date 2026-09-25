@@ -45,6 +45,8 @@ export interface UiHandlers {
   onVolume(volume: number): void;
   /** Mouse sensitivity multiplier (1 = default). */
   onSensitivity(sensitivity: number): void;
+  /** How loud other players' voices are (1 = as sent). */
+  onVoiceVolume(volume: number): void;
 }
 
 export interface LobbyInfo {
@@ -119,6 +121,8 @@ export class UI {
   private readonly copyRoomBtn = el<HTMLButtonElement>('btn-copy-room');
   private readonly volumeInput = el<HTMLInputElement>('volume');
   private readonly sensInput = el<HTMLInputElement>('sensitivity');
+  private readonly voiceVolInput = el<HTMLInputElement>('voice-volume');
+  private readonly voiceVolValue = el('voice-vol-value');
   private readonly sensValue = el('sens-value');
   private readonly muteBtn = el<HTMLButtonElement>('btn-mute');
   private readonly voiceBtn = el<HTMLButtonElement>('btn-voice');
@@ -186,6 +190,11 @@ export class UI {
     });
     this.copyRoomBtn.addEventListener('click', () => void this.copyLink(this.copyRoomBtn));
     this.volumeInput.addEventListener('input', () => handlers.onVolume(Number(this.volumeInput.value) / 100));
+    this.voiceVolInput.addEventListener('input', () => {
+      const v = Number(this.voiceVolInput.value) / 100;
+      this.voiceVolValue.textContent = `${Math.round(v * 100)}%`;
+      handlers.onVoiceVolume(v);
+    });
     this.sensInput.addEventListener('input', () => {
       const v = Number(this.sensInput.value) / 100;
       this.sensValue.textContent = `${v.toFixed(2)}×`;
@@ -714,8 +723,10 @@ export class UI {
   }
 
   /** Puts the saved settings on the menu's sliders. */
-  setSettings(volume: number, sensitivity: number): void {
+  setSettings(volume: number, sensitivity: number, voiceVolume: number): void {
     this.volumeInput.value = String(Math.round(volume * 100));
+    this.voiceVolInput.value = String(Math.round(voiceVolume * 100));
+    this.voiceVolValue.textContent = `${Math.round(voiceVolume * 100)}%`;
     this.sensInput.value = String(Math.round(sensitivity * 100));
     this.sensValue.textContent = `${sensitivity.toFixed(2)}×`;
   }

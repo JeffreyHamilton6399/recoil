@@ -189,6 +189,7 @@ const ui = new UI({
     sfx.unlock();
     sfx.setVolume(v);
   },
+  onVoiceVolume: (v) => voice.setVolume(v),
   onSensitivity: (v) => {
     userSensitivity = v;
     try {
@@ -250,7 +251,7 @@ function loadNumber(key: string, fallback: number): number {
     return fallback;
   }
 }
-ui.setSettings(sfx.volume, userSensitivity);
+ui.setSettings(sfx.volume, userSensitivity, voice.volume);
 ui.onPauseChange = (open) => sfx.menu(open);
 input.onOffhandPress = () => setKnife(!holdKnife);
 input.onWheel = () => setKnife(!holdKnife);

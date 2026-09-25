@@ -14,6 +14,7 @@ import type { ClientMessage, PlayerId, RosterEntry, RtcSignal } from '../shared/
 export type VoiceMode = 'off' | 'ptt' | 'open';
 
 const MODE_KEY = 'recoil-voice';
+const VOLUME_KEY = 'recoil-voice-volume';
 const ICE_SERVERS: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 /** Loudness (RMS, 0..1) above which a player counts as talking. */
 const SPEAK_LEVEL = 0.025;
@@ -43,6 +44,10 @@ export class Voice {
   private modeValue: VoiceMode = 'off';
   private stream: MediaStream | null = null;
   private ctx: AudioContext | null = null;
+  /** Everyone's voices pass through here: the voice volume, then a limiter so loud doesn't crackle. */
+  private bus: GainNode | null = null;
+  /** The voice volume slider: 1 = as sent, up to 4× louder. */
+  private volumeValue = 2.5;
   private readonly peers = new Map<PlayerId, Peer>();
   private readonly mutedIds = new Set<PlayerId>();
   private myId: PlayerId | -1 = -1;
@@ -55,6 +60,8 @@ export class Voice {
     try {
       const saved = localStorage.getItem(MODE_KEY);
       if (saved === 'ptt' || saved === 'open') this.modeValue = saved;
+      const vol = Number(localStorage.getItem(VOLUME_KEY));
+      if (localStorage.getItem(VOLUME_KEY) !== null && Number.isFinite(vol)) this.volumeValue = Math.max(0, Math.min(4, vol));
     } catch {
       // Storage unavailable: start with voice off.
     }
@@ -126,6 +133,23 @@ export class Voice {
     return error;
   }
 
+  /** How loud other players' voices are (0..4, 1 = as sent). */
+  get volume(): number {
+    return this.volumeValue;
+  }
+
+  /** Sets how loud other players' voices are, remembered between visits. */
+  setVolume(v: number): void {
+    this.volumeValue = Math.max(0, Math.min(4, v));
+    try {
+      localStorage.setItem(VOLUME_KEY, String(this.volumeValue));
+    } catch {
+      // Not remembered, but it still works this session.
+    }
+    if (this.ctx && this.bus) this.bus.gain.setTargetAtTime(this.volumeValue, this.ctx.currentTime, 0.02);
+    for (const peer of this.peers.values()) if (peer.audio && !peer.gain) peer.audio.volume = Math.min(1, this.volumeValue);
+  }
+
   toggleMute(id: PlayerId): void {
     if (this.mutedIds.has(id)) this.mutedIds.delete(id);
     else this.mutedIds.add(id);
@@ -169,6 +193,17 @@ export class Voice {
     }
     const Ctx = window.AudioContext ?? window.webkitAudioContext;
     this.ctx ??= Ctx ? new Ctx() : null;
+    if (this.ctx && !this.bus) {
+      const limiter = this.ctx.createDynamicsCompressor();
+      limiter.threshold.value = -6;
+      limiter.knee.value = 6;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.15;
+      this.bus = this.ctx.createGain();
+      this.bus.gain.value = this.volumeValue;
+      this.bus.connect(limiter).connect(this.ctx.destination);
+    }
     void this.ctx?.resume();
     this.applyTrack();
     this.send({ t: 'voice', on: true });
@@ -268,22 +303,24 @@ export class Voice {
     void audio.play().catch(() => {});
     peer.audio = audio;
     const ctx = this.ctx;
-    if (!ctx) {
+    if (!ctx || !this.bus) {
       audio.muted = false;
+      audio.volume = Math.min(1, this.volumeValue);
       return;
     }
     const source = ctx.createMediaStreamSource(stream);
     const panner = ctx.createPanner();
     panner.panningModel = 'HRTF';
     panner.distanceModel = 'inverse';
-    panner.refDistance = 5;
-    panner.rolloffFactor = 0.5;
+    // Fades a little with distance, but you can still hear someone across the map.
+    panner.refDistance = 12;
+    panner.rolloffFactor = 0.4;
     const gain = ctx.createGain();
     gain.gain.value = this.mutedIds.has(id) ? 0 : 1;
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;
     source.connect(analyser);
-    source.connect(panner).connect(gain).connect(ctx.destination);
+    source.connect(panner).connect(gain).connect(this.bus);
     peer.panner = panner;
     peer.gain = gain;
     peer.analyser = analyser;
