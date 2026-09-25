@@ -579,7 +579,7 @@ export function movePlayer(p: PlayerState, h: number, map: MapDef, arenaRadius: 
   // Ramps are walls from the side and the tall end, and a slope from the low end.
   for (const r of scaledRamps(map, arenaRadius)) {
     const top = rampHeight(r, clamp(p.x, r.minX, r.maxX), clamp(p.y, r.minY, r.maxY));
-    if (p.z >= top - C.STEP_HEIGHT) continue;
+    if (p.z >= top - C.STEP_HEIGHT || p.z + C.PLAYER_HEIGHT <= r.base) continue;
     sides.push({ minX: r.minX, maxX: r.maxX, minY: r.minY, maxY: r.maxY, top: r.h, low: true });
   }
   for (const b of sides) {

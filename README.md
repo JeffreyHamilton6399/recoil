@@ -16,9 +16,11 @@ first to 5 round wins takes the match.
   recoil mode (`R`) is the only way up.
 - **Rooms** hold up to 8 players plus spectators. You can warm up in the
   lobby while you wait, and pick a name and colour.
-- **12 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
+- **14 rooftop maps:** Helipad, Skylight, Arcade Roof, The Block,
   Vent Farm, Chimneys, Hex Plaza, Billboard, Sky Garden, Split Level, Parking
-  Deck, and Solar Farm. Arenas can be circles, squares, hexagons, or diamonds,
+  Deck, Solar Farm, Downtown and High Rise. Downtown and High Rise have
+  two-storey towers to walk into: stairs up to the second floor, again up to
+  a roof deck, and sky bridges between them. Arenas can be circles, squares, hexagons, or diamonds,
   with open vents to fall through, bouncy pillars, obstacles and jump pads.
 - **Movement:** run, sprint, slide (tap Ctrl while moving; jump out of a
   slide to keep the speed), aim down sights (the Longshot has a scope), and climb any ledge up to 2.7 m by jumping into it.

@@ -210,11 +210,19 @@ input.onTouchDetected = () => {
   ui.enableTouch();
   refreshRoomUi();
 };
+/** When a mouse button last went down, and when the browser last tried to go Back (ms). */
+let lastClickAt = 0;
+let lastBackAt = 0;
+window.addEventListener('mousedown', () => (lastClickAt = performance.now()), { capture: true });
 input.onLockChange = (locked) => {
   ui.setLocked(locked);
   // Letting go of the mouse mid-match (Esc) opens the menu; not when spectating
-  // (the game lets go itself so you can pick a loadout) or on touch.
-  if (!locked && roomCode && myId !== -1 && !spectating && !ui.isTouch) ui.setPause(true);
+  // (the game lets go itself so you can pick a loadout), on touch, or when the
+  // mouse was lost right after a click or a Back gesture (a browser mouse
+  // gesture, not you asking for the menu): then a click just carries on.
+  const now = performance.now();
+  const accidental = now - lastClickAt < 500 || now - lastBackAt < 500;
+  if (!locked && roomCode && myId !== -1 && !spectating && !ui.isTouch && !accidental) ui.setPause(true);
   if (locked) ui.setPause(false);
 };
 // Esc with the mouse already free toggles the menu.
@@ -225,11 +233,11 @@ window.addEventListener('keydown', (e) => {
   } else ui.setPause(true);
 });
 // A Back gesture (or button) while in a room should not leave the game: keep a
-// history entry to fall back on, and open the menu instead.
+// history entry to fall back on, and quietly stay put.
 window.addEventListener('popstate', () => {
   if (!roomCode) return;
+  lastBackAt = performance.now();
   window.history.pushState({ recoil: true }, '', location.href);
-  ui.setPause(true);
 });
 /** Settings from the menu, remembered between visits. */
 let userSensitivity = loadNumber('recoil-sensitivity', 1);

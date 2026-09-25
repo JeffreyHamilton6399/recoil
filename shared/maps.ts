@@ -62,8 +62,10 @@ export interface Block {
 }
 
 /**
- * A ramp: a wedge you can walk up, rising from 0 to h metres towards `dir`
- * (0 = +x, 1 = +y, 2 = -x, 3 = -y). Footprint in design units, like a Block.
+ * A ramp (or a flight of stairs): a wedge you can walk up, rising from z
+ * (default 0, the roof) to h metres towards `dir` (0 = +x, 1 = +y, 2 = -x,
+ * 3 = -y). Footprint in design units, like a Block. A ramp with a z starts
+ * on an upper floor.
  */
 export interface Ramp {
   x: number;
@@ -72,6 +74,7 @@ export interface Ramp {
   d: number;
   h: number;
   dir: 0 | 1 | 2 | 3;
+  z?: number;
 }
 
 export interface MapDef {
@@ -168,6 +171,127 @@ function slab(x: number, y: number, w: number, d: number, top = ROOF_TOP): Block
 /** A ramp rising to a roof or bridge. */
 function ramp(x: number, y: number, w: number, d: number, dir: 0 | 1 | 2 | 3, h = ROOF_TOP): Ramp {
   return { x, y, w, d, h, dir };
+}
+
+/** Second floor of a tower: its floor, its walls' top, and the roof deck on top. */
+const FLOOR2 = ROOF_TOP;
+const WALL2_TOP = FLOOR2 + 2.55;
+const DECK_TOP = WALL2_TOP + 0.35;
+/** Windows on the upper floor: width (design units), sill and head heights above the floor (m). */
+const WIN_W = 0.55;
+const WIN_SILL = 0.95;
+const WIN_HEAD = 1.95;
+/** Stairs: width and run (design units). */
+const STAIR_W = 0.5;
+const STAIR_RUN = 1.7;
+
+/** A building's parts: its solid blocks and its ramps and stairs. */
+export interface Parts {
+  blocks: Block[];
+  ramps: Ramp[];
+}
+
+/** Merges parts (towers, bridges, loose blocks and ramps) into one set. */
+function parts(...list: (Parts | Block | Ramp)[]): Parts {
+  const out: Parts = { blocks: [], ramps: [] };
+  for (const p of list) {
+    if ('blocks' in p) {
+      out.blocks.push(...p.blocks);
+      out.ramps.push(...p.ramps);
+    } else if ('dir' in p) out.ramps.push(p);
+    else out.blocks.push(p);
+  }
+  return out;
+}
+
+/**
+ * One wall of a storey, from z0 to z1 metres, along x (alongX) or y, centred at
+ * (cx, cy): solid, with a doorway, or with a window.
+ */
+function wallRun(out: Block[], cx: number, cy: number, len: number, alongX: boolean, kind: 'solid' | 'door' | 'window', z0: number, z1: number): void {
+  const box = (off: number, l: number, lo: number, hi: number): void => {
+    out.push(alongX ? { x: cx + off, y: cy, w: l, d: WALL_T, z: lo, h: hi } : { x: cx, y: cy + off, w: WALL_T, d: l, z: lo, h: hi });
+  };
+  if (kind === 'solid') {
+    box(0, len, z0, z1);
+    return;
+  }
+  const gap = kind === 'door' ? DOOR_W : WIN_W;
+  const seg = (len - gap) / 2;
+  box(-(gap + seg) / 2, seg, z0, z1);
+  box((gap + seg) / 2, seg, z0, z1);
+  if (kind === 'door') {
+    box(0, gap, z0 + DOOR_H, z1);
+  } else {
+    box(0, gap, z0, z0 + WIN_SILL);
+    box(0, gap, z0 + WIN_HEAD, z1);
+  }
+}
+
+/** A floor slab over a rectangle, leaving a stairwell (hole) open. */
+function slabWithHole(out: Block[], x0: number, x1: number, y0: number, y1: number, hole: [number, number, number, number], z: number, top: number): void {
+  const [hx0, hx1, hy0, hy1] = hole;
+  const rect = (a: number, b: number, c: number, d: number): void => {
+    if (b - a > 0.01 && d - c > 0.01) out.push({ x: (a + b) / 2, y: (c + d) / 2, w: b - a, d: d - c, z, h: top });
+  };
+  rect(x0, hx0, y0, y1); // west of the hole
+  rect(hx1, x1, y0, y1); // east of the hole
+  rect(hx0, hx1, y0, hy0); // south of the hole
+  rect(hx0, hx1, hy1, y1); // north of the hole
+}
+
+/**
+ * A two-storey tower you can walk into and climb.
+ *  - Ground floor: doorways on the `doors` sides ('n' +y, 'e' +x, 'w' -x; the
+ *    south wall holds the stairs), and a flight of stairs along the south wall
+ *    up through a stairwell to the second floor.
+ *  - Second floor: windows all round, doorways on the `links` sides (for
+ *    bridges), and a second flight along the north wall up to the roof deck.
+ *  - Roof deck: flat, open, a long way to fall.
+ */
+function tower(x: number, y: number, w: number, d: number, doors: string, links = ''): Parts {
+  const blocks: Block[] = [];
+  const ramps: Ramp[] = [];
+  const x0 = x - w / 2;
+  const x1 = x + w / 2;
+  const y0 = y - d / 2;
+  const y1 = y + d / 2;
+  const inset = WALL_T / 2 + 0.05;
+
+  // Ground floor walls.
+  wallRun(blocks, x, y1, w, true, doors.includes('n') ? 'door' : 'solid', 0, FLOOR2 - 0.35);
+  wallRun(blocks, x, y0, w, true, 'solid', 0, FLOOR2 - 0.35);
+  wallRun(blocks, x1, y, d - WALL_T, false, doors.includes('e') ? 'door' : 'solid', 0, FLOOR2 - 0.35);
+  wallRun(blocks, x0, y, d - WALL_T, false, doors.includes('w') ? 'door' : 'solid', 0, FLOOR2 - 0.35);
+
+  // Stairs up along the south wall, rising towards +x, under a stairwell.
+  const s1x0 = x0 + inset;
+  const s1y0 = y0 + inset;
+  ramps.push({ x: s1x0 + STAIR_RUN / 2, y: s1y0 + STAIR_W / 2, w: STAIR_RUN, d: STAIR_W, h: FLOOR2, dir: 0 });
+  slabWithHole(blocks, x0 - WALL_T / 2, x1 + WALL_T / 2, y0 - WALL_T / 2, y1 + WALL_T / 2, [s1x0 - 0.02, s1x0 + STAIR_RUN, s1y0 - 0.1, s1y0 + STAIR_W + 0.05], FLOOR2 - 0.35, FLOOR2);
+
+  // Upper floor walls: windows, or doorways out to bridges.
+  const up = (side: string): 'door' | 'window' => (links.includes(side) ? 'door' : 'window');
+  wallRun(blocks, x, y1, w, true, up('n'), FLOOR2, WALL2_TOP);
+  wallRun(blocks, x, y0, w, true, up('s'), FLOOR2, WALL2_TOP);
+  wallRun(blocks, x1, y, d - WALL_T, false, up('e'), FLOOR2, WALL2_TOP);
+  wallRun(blocks, x0, y, d - WALL_T, false, up('w'), FLOOR2, WALL2_TOP);
+
+  // Stairs from the second floor along the north wall, rising towards -x, up to the roof deck.
+  const s2x1 = x1 - inset;
+  const s2y1 = y1 - inset;
+  ramps.push({ x: s2x1 - STAIR_RUN / 2, y: s2y1 - STAIR_W / 2, w: STAIR_RUN, d: STAIR_W, h: DECK_TOP, dir: 2, z: FLOOR2 });
+  slabWithHole(blocks, x0 - WALL_T / 2, x1 + WALL_T / 2, y0 - WALL_T / 2, y1 + WALL_T / 2, [s2x1 - STAIR_RUN, s2x1 + 0.02, s2y1 - STAIR_W - 0.05, s2y1 + 0.1], WALL2_TOP, DECK_TOP);
+  return { blocks, ramps };
+}
+
+/** A sky bridge between two towers' upper floors, from x0 to x1 at y (or y0 to y1 at x). */
+function skyBridge(from: number, to: number, at: number, alongX: boolean, width = 0.7): Block {
+  const mid = (from + to) / 2;
+  const len = Math.abs(to - from);
+  return alongX
+    ? { x: mid, y: at, w: len, d: width, z: FLOOR2 - 0.35, h: FLOOR2 }
+    : { x: at, y: mid, w: width, d: len, z: FLOOR2 - 0.35, h: FLOOR2 };
 }
 
 export const MAPS: readonly MapDef[] = [
@@ -326,8 +450,49 @@ export const MAPS: readonly MapDef[] = [
     pads: [0, 1, 2, 3, 4, 5].map((k) => pad(6.3, k * 60)),
     theme: { top: '#3a5ea3', shade: '#29467f', side: '#56607a', sideShade: '#3c455c', surface: 'solar', bumper: '#ffd93d' },
   },
+  {
+    name: 'Downtown',
+    blurb: 'Two towers and a sky bridge. Fight up the stairs or across the gap.',
+    shape: 'square',
+    holes: [],
+    bumpers: [],
+    ...parts(
+      tower(-4.6, 0, 2.4, 2.4, 'new', 'e'),
+      tower(4.6, 0, 2.4, 2.4, 'new', 'w'),
+      skyBridge(-3.35, 3.35, 0, true),
+      // Ramps up to the bridge from both sides of the street.
+      { x: 0, y: -1.45, w: 0.7, d: 2.2, h: FLOOR2, dir: 1 },
+      { x: 0, y: 1.45, w: 0.7, d: 2.2, h: FLOOR2, dir: 3 },
+      crate(6.4, 45, 0.7, 1.1),
+      crate(6.4, 225, 0.7, 1.1),
+      crate(3.2, 90, 0.8, 1.1),
+      crate(3.2, 270, 0.8, 1.1),
+    ),
+    pads: [pad(6.2, 135), pad(6.2, 315)],
+    theme: { top: '#5d5a73', shade: '#46435a', side: '#6b5a7a', sideShade: '#4d3f5c', surface: 'tar', bumper: '#ff3d8b' },
+  },
+  {
+    name: 'High Rise',
+    blurb: 'Climb the tower in the middle. Its bridges reach out over the edge.',
+    shape: 'circle',
+    holes: [polar(6.9, 45, 0.8), polar(6.9, 135, 0.8), polar(6.9, 225, 0.8), polar(6.9, 315, 0.8)],
+    bumpers: [],
+    ...parts(
+      tower(0, 0, 2.6, 2.6, 'new', 'ew'),
+      // Bridges out to two lookout platforms on posts, with ramps down to the roof.
+      skyBridge(1.4, 5.0, 0, true),
+      skyBridge(-5.0, -1.4, 0, true),
+      ...pergola(5.8, 0, 1.6, 1.6),
+      ...pergola(-5.8, 0, 1.6, 1.6),
+      ramp(5.8, 1.9, 0.6, 2.2, 3),
+      ramp(-5.8, -1.9, 0.6, 2.2, 1),
+      crate(4.2, 90, 0.8, 1.1),
+      crate(4.2, 270, 0.8, 1.1),
+    ),
+    pads: [pad(3.6, 45), pad(3.6, 225)],
+    theme: { top: '#c9c3b6', shade: '#a59e8f', side: '#5a6a8a', sideShade: '#3f4d6b', surface: 'paving', bumper: '#ff3d8b' },
+  },
 ];
-
 /** Vertex radius and first vertex angle of the polygon shapes, relative to the arena radius. */
 export const POLY_SHAPES: Record<'hex' | 'diamond', { sides: number; scale: number; rot: number }> = {
   hex: { sides: 6, scale: 1.03, rot: 0 },
@@ -411,6 +576,8 @@ export interface RampBox {
   maxY: number;
   h: number;
   dir: 0 | 1 | 2 | 3;
+  /** Height of the low end. */
+  base: number;
 }
 
 /** Ramps at the current arena size, in world units. */
@@ -423,6 +590,7 @@ export function scaledRamps(map: MapDef, arenaRadius: number): RampBox[] {
     maxY: (r.y + r.d / 2) * s,
     h: r.h,
     dir: r.dir,
+    base: r.z ?? 0,
   }));
 }
 
@@ -431,7 +599,7 @@ export function rampHeight(r: RampBox, x: number, y: number): number {
   const tx = clamp01((x - r.minX) / (r.maxX - r.minX));
   const ty = clamp01((y - r.minY) / (r.maxY - r.minY));
   const t = r.dir === 0 ? tx : r.dir === 1 ? ty : r.dir === 2 ? 1 - tx : 1 - ty;
-  return r.h * t;
+  return r.base + (r.h - r.base) * t;
 }
 
 function clamp01(v: number): number {
@@ -470,7 +638,7 @@ export function inBlock(map: MapDef, arenaRadius: number, x: number, y: number, 
     if (z < b.top + margin && z > b.bottom - margin && x > b.minX - margin && x < b.maxX + margin && y > b.minY - margin && y < b.maxY + margin) return true;
   }
   for (const r of scaledRamps(map, arenaRadius)) {
-    if (x > r.minX - margin && x < r.maxX + margin && y > r.minY - margin && y < r.maxY + margin && z < rampHeight(r, x, y) + margin) return true;
+    if (x > r.minX - margin && x < r.maxX + margin && y > r.minY - margin && y < r.maxY + margin && z < rampHeight(r, x, y) + margin && z > r.base - margin) return true;
   }
   return false;
 }

@@ -212,6 +212,7 @@ export function findPath(g: NavGrid, sx: number, sy: number, gx: number, gy: num
 export function climbs(map: MapDef, arenaRadius: number): Climb[] {
   const out: Climb[] = [];
   for (const r of scaledRamps(map, arenaRadius)) {
+    if (r.base > 0) continue;
     const cx = (r.minX + r.maxX) / 2;
     const cy = (r.minY + r.maxY) / 2;
     const [dx, dy] = r.dir === 0 ? [1, 0] : r.dir === 1 ? [0, 1] : r.dir === 2 ? [-1, 0] : [0, -1];

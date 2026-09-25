@@ -150,19 +150,21 @@ export function buildBlocks(map: MapDef, S: number): THREE.Group {
   return group;
 }
 
-/** A ramp: a box with its top tilted from the roof up to its full height. */
+/** A ramp: a box with its top tilted from its base (the roof, or an upper floor) up to its full height. */
 function rampGeometry(r: Ramp, S: number): THREE.BufferGeometry {
   const W = r.w * S;
   const D = r.d * S;
-  const geo = new THREE.BoxGeometry(W, r.h, D).translate(0, r.h / 2, 0);
+  const base = r.z ?? 0;
+  const rise = r.h - base;
+  const geo = new THREE.BoxGeometry(W, rise, D).translate(0, base + rise / 2, 0);
   const pos = geo.getAttribute('position');
   for (let i = 0; i < pos.count; i++) {
-    if (pos.getY(i) < r.h / 2) continue;
+    if (pos.getY(i) < base + rise / 2) continue;
     const x = pos.getX(i);
     const z = pos.getZ(i); // three.js z is -y in game coordinates
     const t =
       r.dir === 0 ? (x + W / 2) / W : r.dir === 2 ? 1 - (x + W / 2) / W : r.dir === 1 ? (-z + D / 2) / D : (z + D / 2) / D;
-    pos.setY(i, Math.max(0.02, r.h * t));
+    pos.setY(i, Math.max(base + 0.02, base + rise * t));
   }
   geo.computeVertexNormals();
   return geo;

@@ -14,7 +14,7 @@
 
 import assert from 'node:assert/strict';
 import * as C from './constants.js';
-import { MAPS, inBlock, isOffMap, mapScale, rampHeight, scaledBumpers, scaledRamps, spawnPoint } from './maps.js';
+import { MAPS, floorAt, inBlock, isOffMap, mapScale, rampHeight, scaledBumpers, scaledRamps, spawnPoint } from './maps.js';
 import {
   NO_INPUT,
   addPlayer,
@@ -614,6 +614,38 @@ function randomInputs(rand: () => number, s: GameState, prev: Map<PlayerId, Inpu
   step(g, new Map());
   assert.deepEqual([p.weapon, p.offhand, p.offCd], [2, C.OFFHAND_SHOCK, 0], 'the new loadout arrives on the next spawn');
   console.log('ok 13 - loadout picks mid-match apply on the next spawn');
+}
+
+// 14. Towers: walk up the stairs to the second floor, up again to the roof deck,
+//     and across the sky bridge to the other tower (Downtown).
+{
+  const idx = MAPS.findIndex((m) => m.name === 'Downtown');
+  assert.ok(idx >= 0, 'Downtown exists');
+  const g = createGame(60);
+  addPlayer(g, 0);
+  setMapChoice(g, idx);
+  const p = g.players[0];
+  const S = mapScale(g.arenaRadius);
+  const walk = (dx: number, dy: number, yaw: number, ticks: number, onFloor: number): number => {
+    Object.assign(p, { x: dx * S, y: dy * S, vx: 0, vy: 0, vz: 0, grounded: true, falling: false });
+    p.z = floorAt(MAPS[idx], g.arenaRadius, p.x, p.y, onFloor + 0.05);
+    let top = p.z;
+    for (let i = 0; i < ticks; i++) {
+      step(g, new Map([[0, { ...NO_INPUT, yaw, forward: 1 }]]));
+      top = Math.max(top, p.z);
+    }
+    return top;
+  };
+  // Ground floor: the foot of the stairs along the south wall, walking east.
+  const floor2 = walk(-5.6, -0.86, 0, 40, 0);
+  assert.ok(Math.abs(floor2 - 2.95) < 0.05 && p.grounded, `stairs reach the second floor (z=${p.z.toFixed(2)})`);
+  // Second floor: the foot of the next flight along the north wall, walking west.
+  const deck = walk(-3.6, 0.86, Math.PI, 40, 2.95);
+  assert.ok(deck > 5.8, `stairs reach the roof deck (z=${p.z.toFixed(2)})`);
+  // Across the sky bridge from one tower's upper floor into the other's.
+  walk(-4.2, 0, 0, 160, 2.95);
+  assert.ok(p.x / S > 3.6 && Math.abs(p.z - 2.95) < 0.05, `crossed the sky bridge (x=${(p.x / S).toFixed(2)}, z=${p.z.toFixed(2)})`);
+  console.log(`ok 14 - tower stairs to ${floor2.toFixed(2)} m and ${deck.toFixed(2)} m, and across the sky bridge`);
 }
 
 console.log('all simulation tests passed');
