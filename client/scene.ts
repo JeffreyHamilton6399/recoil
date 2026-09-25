@@ -225,6 +225,53 @@ function wrapAngleLocal(a: number): number {
   return ((((a + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) - Math.PI;
 }
 
+const tmpColor = new THREE.Color();
+
+let ringTex: THREE.CanvasTexture | null = null;
+/** A soft ring, for impact rings. */
+function ringTexture(): THREE.CanvasTexture {
+  if (ringTex) return ringTex;
+  const [cv, ctx] = textCanvas(128, 128);
+  if (ctx) {
+    const g = ctx.createRadialGradient(64, 64, 34, 64, 64, 62);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.55, 'rgba(255,255,255,1)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 128, 128);
+  }
+  ringTex = new THREE.CanvasTexture(cv);
+  ringTex.colorSpace = THREE.SRGBColorSpace;
+  return ringTex;
+}
+
+let flashTex: THREE.CanvasTexture | null = null;
+/** A spiky muzzle-flash star. */
+function flashTexture(): THREE.CanvasTexture {
+  if (flashTex) return flashTex;
+  const [cv, ctx] = textCanvas(128, 128);
+  if (ctx) {
+    ctx.translate(64, 64);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 60);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.35, 'rgba(255,230,160,0.9)');
+    g.addColorStop(1, 'rgba(255,160,60,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    const spikes = 7;
+    for (let i = 0; i < spikes * 2; i++) {
+      const a = (i / (spikes * 2)) * Math.PI * 2;
+      const r = i % 2 === 0 ? 60 : 18;
+      ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+  flashTex = new THREE.CanvasTexture(cv);
+  flashTex.colorSpace = THREE.SRGBColorSpace;
+  return flashTex;
+}
+
 const numberTextures = new Map<string, THREE.CanvasTexture>();
 /** Damage numbers: bold, inked, white (yellow for heavy hits). */
 function numberTexture(text: string, heavy: boolean): THREE.CanvasTexture {
@@ -511,6 +558,28 @@ interface BulletObj {
   group: THREE.Group;
   tail: THREE.Mesh;
   weapon: number;
+  /** Pool key (shooter colour and kind); finished bullets go back to their pool. */
+  key: string;
+  /** Already whizzed past your head. */
+  whizzed: boolean;
+}
+
+/** A shell casing flying out of your gun. */
+interface Casing {
+  mesh: THREE.Mesh;
+  vel: THREE.Vector3;
+  spin: THREE.Vector3;
+  life: number;
+  floorY: number;
+  bounced: boolean;
+}
+
+/** An expanding ring where a shot landed. */
+interface Ring {
+  sprite: THREE.Sprite;
+  life: number;
+  max: number;
+  size: number;
 }
 
 interface PowerupObj {
@@ -547,6 +616,18 @@ export class Scene3D {
 
   private readonly rigs = new Map<PlayerId, Rig>();
   private readonly bullets = new Map<number, BulletObj>();
+  private readonly bulletPool = new Map<string, BulletObj[]>();
+  private casings: Casing[] = [];
+  private rings: Ring[] = [];
+  /** A quick light at your muzzle when you fire (always in the scene, so no shader rebuilds). */
+  private readonly muzzleLight = new THREE.PointLight('#ffd89a', 0, 7, 2);
+  private readonly flashSprite: THREE.Sprite;
+  private flashLife = 0;
+  /** Seconds until the next slide-dust puff. */
+  private dustIn = 0;
+  /** Called when an enemy shot whizzes past (pan, closeness 0..1), and when a casing lands. */
+  onWhizz: (pan: number, close: number) => void = () => {};
+  onCasing: (pan: number) => void = () => {};
   private readonly powerups = new Map<number, PowerupObj>();
   private words: Word[] = [];
   private shocks: Shock[] = [];
@@ -586,6 +667,9 @@ export class Scene3D {
   private time = 0;
 
   private readonly bulletGeo = new THREE.SphereGeometry(1, 14, 10);
+  private readonly casingGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.04, 8);
+  private readonly casingMat = new THREE.MeshBasicMaterial({ color: '#e0b04a' });
+  private readonly shellMat = new THREE.MeshBasicMaterial({ color: '#d8423c' });
   /** A small round, 1 unit long along +Y (scaled per weapon). */
   private readonly roundGeo = new THREE.CapsuleGeometry(0.22, 0.56, 3, 8);
   private readonly tailGeo = new THREE.ConeGeometry(1, 1, 10, 1, true).translate(0, 0.5, 0);
@@ -664,6 +748,12 @@ export class Scene3D {
 
     // Your gun, attached to the camera.
     this.viewmodel.scale.setScalar(0.48);
+    this.flashSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture(), color: '#fff2c8', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+    this.flashSprite.visible = false;
+    this.flashSprite.renderOrder = 12;
+    this.scene.add(this.flashSprite);
+    this.camera.add(this.muzzleLight);
+    this.muzzleLight.position.set(0.15, -0.1, -0.6);
     this.camera.add(this.viewmodel);
     this.scene.add(this.camera);
 
@@ -913,7 +1003,7 @@ export class Scene3D {
       toThree(p.x, p.y, p.z, rig.group.position);
       rig.group.rotation.set(0, p.yaw - Math.PI / 2, 0);
       // Walk, jump and slide poses; lean back into a slide.
-      animateCharacter(rig.char, dt, rig.group.position, (p.fx & FX_GROUNDED) !== 0, p.sliding, p.pitch);
+      animateCharacter(rig.char, dt, rig.group.position, p.yaw - Math.PI / 2, (p.fx & FX_GROUNDED) !== 0, p.sliding, p.pitch);
       rig.lean += ((p.sliding ? 1 : 0) - rig.lean) * Math.min(1, dt * 12);
       rig.body.rotation.x = rig.lean * 0.9;
       rig.body.position.y -= rig.lean * 0.2;
@@ -950,6 +1040,18 @@ export class Scene3D {
       const w = weaponDef(b.weapon);
       // Boomer bombs and shock grenades are thrown objects, not bullets.
       const bomb = b.weapon === 3 || b.weapon === SHOCK_WEAPON;
+      const key = `${this.colorOf(view, b.owner)}|${bomb ? b.weapon : 'round'}`;
+      if (!obj) {
+        // Reuse a finished bullet of the same look if there is one.
+        const pooled = this.bulletPool.get(key)?.pop();
+        if (pooled) {
+          pooled.group.visible = true;
+          pooled.weapon = b.weapon;
+          pooled.whizzed = false;
+          obj = pooled;
+          this.bullets.set(b.id, obj);
+        }
+      }
       if (!obj) {
         const color = new THREE.Color(this.colorOf(view, b.owner));
         const accent = new THREE.Color(w.accent);
@@ -974,7 +1076,7 @@ export class Scene3D {
         );
         this.scene.add(tail);
         this.scene.add(group);
-        obj = { group, tail, weapon: b.weapon };
+        obj = { group, tail, weapon: b.weapon, key, whizzed: false };
         this.bullets.set(b.id, obj);
       }
       toThree(b.x, b.y, b.z, obj.group.position);
@@ -1001,18 +1103,35 @@ export class Scene3D {
       }
       if (bomb && Math.random() < 0.5) {
         // Bombs trail sparks from their fuse.
-        this.particles.burst(obj.group.position, 1, new THREE.Color(w.accent), 1, 0.3, -1);
+        this.particles.burst(obj.group.position, 1, tmpColor.set(w.accent), 1, 0.3, -1);
+      }
+      // Someone else's shot passing close by your head: a whizz.
+      if (!obj.whizzed && b.owner !== view.myId && !bomb) {
+        const d = obj.group.position.distanceTo(this.camera.position);
+        if (d < 2.4) {
+          obj.whizzed = true;
+          this.onWhizz(this.panFor(b.x, b.y, b.z), 1 - d / 2.4);
+        }
       }
     }
     for (const [id, obj] of this.bullets) {
       if (seen.has(id)) continue;
-      this.scene.remove(obj.group);
-      this.scene.remove(obj.tail);
-      for (const o of [obj.group, obj.tail]) {
-        o.traverse((c) => {
-          const mesh = c as THREE.Mesh;
-          if (mesh.material) (mesh.material as THREE.Material).dispose();
-        });
+      // Back to the pool (a handful per look), or gone for good.
+      obj.group.visible = false;
+      obj.tail.visible = false;
+      const pool = this.bulletPool.get(obj.key) ?? [];
+      if (pool.length < 24) {
+        pool.push(obj);
+        this.bulletPool.set(obj.key, pool);
+      } else {
+        this.scene.remove(obj.group);
+        this.scene.remove(obj.tail);
+        for (const o of [obj.group, obj.tail]) {
+          o.traverse((c) => {
+            const mesh = c as THREE.Mesh;
+            if (mesh.material) (mesh.material as THREE.Material).dispose();
+          });
+        }
       }
       this.bullets.delete(id);
     }
@@ -1100,10 +1219,110 @@ export class Scene3D {
     this.trauma = Math.min(1, this.trauma + amount);
   }
 
-  /** A hard landing: the camera dips, harder the faster you came down. */
+  /** A hard landing: the camera dips, harder the faster you came down, and dust puffs out. */
   landImpact(speed: number): void {
     if (speed < 4) return;
     this.landVel += Math.min(3.5, speed * 0.16);
+    const feet = tmpV.copy(this.camera.position);
+    feet.y -= C.EYE_HEIGHT - 0.1;
+    this.particles.burst(feet, Math.min(40, 8 + Math.round(speed * 2)), tmpColor.set('#e9e2d6'), 3 + speed * 0.25, 0.5, 2, tmpV2.set(0, 0.2, 0), 3);
+  }
+
+  /** A brass casing (a red shell for the Scatter) flipping out of your gun. */
+  private ejectCasing(weapon: number): void {
+    if (weapon === 3 || !this.vmGun) return;
+    let casing = this.casings.length >= 16 ? this.casings.shift() : undefined;
+    if (!casing) {
+      const mesh = new THREE.Mesh(this.casingGeo, this.casingMat);
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      casing = { mesh, vel: new THREE.Vector3(), spin: new THREE.Vector3(), life: 0, floorY: 0, bounced: false };
+    }
+    const shell = weapon === 1;
+    casing.mesh.material = shell ? this.shellMat : this.casingMat;
+    casing.mesh.scale.set(shell ? 1.6 : 1, shell ? 1.8 : 1, shell ? 1.6 : 1);
+    casing.mesh.visible = true;
+    this.vmGun.group.getWorldPosition(casing.mesh.position);
+    const right = tmpV.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    const up = tmpV2.set(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    casing.mesh.position.addScaledVector(right, 0.05).addScaledVector(up, 0.04);
+    casing.vel.copy(right).multiplyScalar(2.2 + Math.random()).addScaledVector(up, 1.8 + Math.random() * 0.8);
+    casing.spin.set(Math.random() * 20 - 10, Math.random() * 20 - 10, Math.random() * 20 - 10);
+    casing.life = 1.6;
+    casing.floorY = this.camera.position.y - C.EYE_HEIGHT + 0.02;
+    casing.bounced = false;
+    this.casings.push(casing);
+  }
+
+  private updateCasings(dt: number): void {
+    for (const c of this.casings) {
+      if (c.life <= 0) continue;
+      c.life -= dt;
+      c.vel.y -= 14 * dt;
+      c.mesh.position.addScaledVector(c.vel, dt);
+      c.mesh.rotation.x += c.spin.x * dt;
+      c.mesh.rotation.y += c.spin.y * dt;
+      c.mesh.rotation.z += c.spin.z * dt;
+      if (c.mesh.position.y < c.floorY && c.vel.y < 0) {
+        c.mesh.position.y = c.floorY;
+        c.vel.y *= -0.35;
+        c.vel.x *= 0.5;
+        c.vel.z *= 0.5;
+        c.spin.multiplyScalar(0.5);
+        if (!c.bounced) {
+          c.bounced = true;
+          this.onCasing(0.3);
+        }
+      }
+      if (c.life <= 0) c.mesh.visible = false;
+    }
+  }
+
+  /** An expanding ring at a sim position (a shot landing). */
+  private ring(x: number, y: number, z: number, color: THREE.ColorRepresentation, size: number, life = 0.25): void {
+    let r = this.rings.find((q) => q.life <= 0);
+    if (!r) {
+      if (this.rings.length >= 24) return;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+      this.scene.add(sprite);
+      r = { sprite, life: 0, max: life, size };
+      this.rings.push(r);
+    }
+    toThree(x, y, z, r.sprite.position);
+    r.sprite.material.color.set(color);
+    r.sprite.material.rotation = Math.random() * Math.PI;
+    r.sprite.visible = true;
+    r.life = r.max = life;
+    r.size = size;
+  }
+
+  private updateRings(dt: number): void {
+    for (const r of this.rings) {
+      if (r.life <= 0) continue;
+      r.life -= dt;
+      const t = 1 - Math.max(0, r.life) / r.max;
+      r.sprite.scale.setScalar(r.size * (0.3 + t * 1.2));
+      r.sprite.material.opacity = (1 - t) * 0.9;
+      if (r.life <= 0) r.sprite.visible = false;
+    }
+  }
+
+  /** Dust and sparks from the feet of anyone sliding (you included). */
+  private slideTrails(view: View, cam: CameraView, dt: number): void {
+    this.dustIn -= dt;
+    if (this.dustIn > 0) return;
+    this.dustIn = 0.035;
+    for (const p of view.players) {
+      if (!p.sliding || p.fallTime >= 0) continue;
+      const at = toThree(p.x, p.y, p.z + 0.08, tmpV);
+      if (p.id === view.myId && cam.kind === 'first') {
+        // Your own trail: a little ahead of the camera, so you see it stream past.
+        const f = tmpV2.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        at.addScaledVector(f.setY(0).normalize(), 0.9);
+      }
+      this.particles.burst(at, 3, tmpColor.set('#efe6d8'), 2.4, 0.45, 1.5, tmpV2.set(0, 0.6, 0), 2);
+      if (Math.random() < 0.5) this.particles.burst(at, 1, tmpColor.set('#ffcf6b'), 5, 0.25, 6);
+    }
   }
 
   /** A floating "+12%" where your shot landed, rising and fading. */
@@ -1134,6 +1353,12 @@ export class Scene3D {
     // The view punches up (and a touch sideways), then springs back.
     this.punchPitch += def.viewKick;
     this.punchYaw += (Math.random() - 0.5) * def.viewKick * 0.5;
+    // A star-shaped flash and a quick burst of light, and a casing flips out.
+    this.flashLife = 0.05 + heavy * 0.03;
+    this.flashSprite.material.rotation = Math.random() * Math.PI;
+    this.flashSprite.scale.setScalar(0.18 + heavy * 0.2);
+    this.muzzleLight.intensity = 2.5 + heavy * 4;
+    this.ejectCasing(weapon);
     if (!this.vmGun) return;
     this.vmGun.muzzle.getWorldPosition(tmpV);
     const dir = this.camera.getWorldDirection(tmpV2);
@@ -1166,6 +1391,7 @@ export class Scene3D {
         this.particles.burst(at, 8, new THREE.Color('#ffd93d'), 10, 0.25, 0);
         const rig = this.rigs.get(ev.p);
         if (rig) rig.flash = 0.12;
+        this.ring(ev.x, ev.y, ev.z, this.colorOf(view, ev.o), heavy ? 2.4 : 1.4, heavy ? 0.32 : 0.22);
         if (heavy) this.addWord(at.add(tmpV.set(0, 0.8, 0)), WORDS[Math.floor(Math.random() * WORDS.length)], 2.6 + ev.f * 0.06);
         if (ev.p === view.myId) this.addTrauma(0.2 + ev.f / 35);
         return heavy;
@@ -1360,7 +1586,7 @@ export class Scene3D {
     if (this.edgeMat) {
       // The edge pulses red while the roof shrinks.
       const warn = view.shrinking ? 0.5 + 0.5 * Math.sin(this.time * 8) : 0;
-      this.edgeMat.color.set('#ffd93d').lerp(new THREE.Color('#ff3b4e'), warn);
+      this.edgeMat.color.set('#ffd93d').lerp(tmpColor.set('#ff3b4e'), warn);
     }
 
     this.syncPlayers(view, cam, dt);
@@ -1369,6 +1595,14 @@ export class Scene3D {
     this.particles.update(dt);
     this.updateWords(dt);
     this.updateShocks(dt);
+    this.updateCasings(dt);
+    this.updateRings(dt);
+    this.slideTrails(view, cam, dt);
+    // Muzzle flash: a star at the barrel and a quick light, gone in a blink.
+    this.flashLife = Math.max(0, this.flashLife - dt);
+    this.muzzleLight.intensity *= Math.exp(-dt * 30);
+    this.flashSprite.visible = this.flashLife > 0 && cam.kind === 'first' && this.viewmodel.visible;
+    if (this.flashSprite.visible && this.vmGun) this.vmGun.muzzle.getWorldPosition(this.flashSprite.position);
 
     // Camera.
     this.trauma = Math.max(0, this.trauma - C.SHAKE_DECAY * dt);

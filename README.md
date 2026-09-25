@@ -115,8 +115,9 @@ before leaving the page instead.
 | Pick a weapon | Click a card in the lobby, or `1` to `5` | Tap a card |
 | Knife | `E`, the mouse wheel, or `1`/`2` to swap gun and knife; fire to slash (as often as you like) | E button |
 | Recoil mode | `R`: your shots throw you backwards hard, to fly back onto the roof | RCL button |
-| Voice chat | Mic button (top right); hold `V` to talk in push-to-talk | Mic button |
-| Mute | `M` | Speaker icon, top right |
+| Voice chat | In the menu (Esc); hold `V` to talk in push-to-talk | In the menu |
+| Menu | `Esc`: room code and link, volume, mouse sensitivity, voice chat, ping, leave | ☰ button, top left |
+| Mute | `M` | In the menu |
 
 ## Project layout
 

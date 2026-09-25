@@ -35,6 +35,8 @@ export interface HudInfo {
   aiming: boolean;
   /** How spread out the crosshair is (0 = tight). */
   spread: number;
+  /** How much of a rush you're in (sliding, going fast): 0..1, for speed lines. */
+  rush: number;
   /** Your offhand, and seconds until it's ready (0 = ready). */
   offhand: number;
   /** Holding the knife, and whether recoil mode is on. */
@@ -58,6 +60,7 @@ export class Hud {
   private readonly chips = el('chips');
   private readonly lockHint = el('lock-hint');
   private readonly vignette = el('vignette');
+  private readonly speedlines = el('speedlines');
   private readonly scope = el('scope');
 
   private hurtLevel = 0;
@@ -110,6 +113,7 @@ export class Hud {
     if (this.hitTimer <= 0) this.hit.classList.remove('on', 'kill');
     this.hurtLevel = Math.max(0, this.hurtLevel - dt * 2.5);
     this.vignette.style.opacity = this.hurtLevel.toFixed(3);
+    this.speedlines.style.opacity = (info.firstPerson ? info.rush * 0.55 : 0).toFixed(2);
 
     // Crosshair: a ring fills while a slow gun readies its next shot (hidden
     // once ready), and the ticks spread with movement and firing.
@@ -135,6 +139,12 @@ export class Hud {
     if (me) {
       const d = Math.round(me.damage);
       if (d !== this.lastDmg) {
+        // The number punches up when it rises.
+        if (d > this.lastDmg && this.lastDmg >= 0) {
+          this.dmg.classList.remove('bump');
+          void this.dmg.offsetWidth;
+          this.dmg.classList.add('bump');
+        }
         this.lastDmg = d;
         this.dmg.innerHTML = `${d}<small>%</small>`;
         const t = Math.min(1, d / 150);

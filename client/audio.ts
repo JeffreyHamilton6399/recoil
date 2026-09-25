@@ -9,6 +9,7 @@
 import type { PowerupKind } from '../shared/types.js';
 
 const MUTE_KEY = 'recoil-muted';
+const VOLUME_KEY = 'recoil-volume';
 const MASTER = 0.8;
 
 export class Sfx {
@@ -18,13 +19,32 @@ export class Sfx {
   private room: GainNode | null = null;
   private noise: AudioBuffer | null = null;
   private muted = false;
+  /** The volume slider, 0..1. */
+  private volumeValue = 0.8;
 
   constructor() {
     try {
       this.muted = localStorage.getItem(MUTE_KEY) === '1';
+      const v = Number(localStorage.getItem(VOLUME_KEY));
+      if (localStorage.getItem(VOLUME_KEY) !== null && Number.isFinite(v)) this.volumeValue = Math.max(0, Math.min(1, v));
     } catch {
       this.muted = false;
     }
+  }
+
+  get volume(): number {
+    return this.volumeValue;
+  }
+
+  /** Sets the master volume (0..1), remembered between visits. */
+  setVolume(v: number): void {
+    this.volumeValue = Math.max(0, Math.min(1, v));
+    try {
+      localStorage.setItem(VOLUME_KEY, String(this.volumeValue));
+    } catch {
+      // Not remembered, but it still works this session.
+    }
+    if (this.ctx && this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : MASTER * this.volumeValue * 1.25, this.ctx.currentTime, 0.02);
   }
 
   get isMuted(): boolean {
@@ -47,7 +67,7 @@ export class Sfx {
       comp.release.value = 0.15;
       comp.connect(ctx.destination);
       const master = ctx.createGain();
-      master.gain.value = this.muted ? 0 : MASTER;
+      master.gain.value = this.muted ? 0 : MASTER * this.volumeValue * 1.25;
       master.connect(comp);
 
       // One second of white noise, reused by every noisy sound.
@@ -87,7 +107,7 @@ export class Sfx {
     } catch {
       // Storage may be unavailable (private mode); muting still works this session.
     }
-    if (this.ctx && this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : MASTER, this.ctx.currentTime, 0.02);
+    if (this.ctx && this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : MASTER * this.volumeValue * 1.25, this.ctx.currentTime, 0.02);
     return this.muted;
   }
 
@@ -344,9 +364,43 @@ export class Sfx {
     this.noiseBurst('lowpass', 800, 3000, 0.7, 0.25, 0.12, pan, 0.02, 0, 0.3);
   }
 
-  /** Sliding: a scrape across the roof. */
+  /** Sliding: a long scrape across the roof with a rush of wind. */
   slide(pan: number, volume = 1): void {
-    this.noiseBurst('bandpass', 1500, 600, 0.8, 0.38, 0.16 * volume, pan, 0.02, 0, 0.15);
+    this.noiseBurst('bandpass', 1600, 500, 0.8, 0.8, 0.2 * volume, pan, 0.02, 0, 0.15);
+    this.noiseBurst('lowpass', 700, 200, 0.6, 0.7, 0.12 * volume, pan, 0.03, 0, 0.1);
+    this.noiseBurst('highpass', 3500, 2500, 0.7, 0.5, 0.05 * volume, pan, 0.05, 0.05, 0.3);
+  }
+
+  /** A shot zipping past your head: a quick whizz that drops in pitch. */
+  whizz(pan: number, close: number): void {
+    const v = 0.08 + 0.18 * close;
+    this.noiseBurst('bandpass', 3800, 900, 3, 0.16, v, pan, 0.02, 0, 0.2);
+    this.tone('sine', 1500, 600, 0.14, v * 0.3, pan, 0, 0.2);
+  }
+
+  /** A brass casing landing: two tiny metallic tinks. */
+  casing(pan: number): void {
+    const f = 4200 + Math.random() * 1200;
+    this.tone('sine', f, f * 0.98, 0.07, 0.035, pan, 0, 0.3);
+    this.tone('sine', f * 1.3, f * 1.28, 0.05, 0.02, pan, 0.09, 0.3);
+  }
+
+  /** You got hit: a body thud under the hit sound, heavier the harder it was. */
+  hurt(force: number): void {
+    const k = Math.min(1, force / 25);
+    this.tone('sine', 95, 45, 0.18 + 0.12 * k, 0.4 + 0.3 * k, 0, 0, 0.05);
+    this.noiseBurst('lowpass', 600, 120, 0.8, 0.12, 0.2 + 0.2 * k, 0, 0.002, 0, 0.05);
+  }
+
+  /** A heartbeat when your damage is dangerously high. */
+  heartbeat(): void {
+    this.tone('sine', 62, 40, 0.12, 0.35, 0, 0, 0);
+    this.tone('sine', 58, 38, 0.14, 0.28, 0, 0.17, 0);
+  }
+
+  /** The menu opening and closing. */
+  menu(open: boolean): void {
+    this.tone('sine', open ? 520 : 700, open ? 700 : 520, 0.08, 0.1, 0, 0, 0.2);
   }
 
   /** Pulling yourself up a ledge: a grab and a shuffle. */
@@ -355,11 +409,12 @@ export class Sfx {
     this.noiseBurst('bandpass', 900, 1400, 1, 0.1, 0.1 * volume, pan, 0.01, 0.06, 0.1);
   }
 
-  /** Soft thump when you land. */
+  /** A thump when you land, with a crunch of grit on hard landings. */
   land(force: number): void {
     const k = Math.min(1, force / 20);
-    this.tone('sine', 130, 55, 0.1, 0.12 + 0.25 * k, 0, 0, 0.05);
-    this.noiseBurst('lowpass', 800, 200, 0.7, 0.07, 0.05 + 0.12 * k, 0, 0.002, 0, 0.05);
+    this.tone('sine', 130, 50, 0.12 + 0.08 * k, 0.14 + 0.35 * k, 0, 0, 0.05);
+    this.noiseBurst('lowpass', 900, 180, 0.7, 0.08 + 0.06 * k, 0.06 + 0.16 * k, 0, 0.002, 0, 0.05);
+    if (k > 0.4) this.noiseBurst('bandpass', 2400, 1200, 1.2, 0.12, 0.08 * k, 0, 0.004, 0.01, 0.1);
   }
 
   /** Recoil mode switched on or off: a latch clack, higher when turning on. */

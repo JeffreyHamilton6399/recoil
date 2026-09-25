@@ -39,6 +39,12 @@ export interface UiHandlers {
   /** Mute or unmute one player's voice. */
   onMutePlayer(id: PlayerId): void;
   onToggleMute(): void;
+  /** Resume from the Esc menu (recapture the mouse). */
+  onResume(): void;
+  /** Master volume, 0..1. */
+  onVolume(volume: number): void;
+  /** Mouse sensitivity multiplier (1 = default). */
+  onSensitivity(sensitivity: number): void;
 }
 
 export interface LobbyInfo {
@@ -107,6 +113,13 @@ export class UI {
   private readonly hud = el('hud');
   private readonly ping = el('ping');
   private readonly roomTag = el('room-tag');
+  private readonly pause = el('pause');
+  private readonly micLive = el('mic-live');
+  private readonly voiceLabel = el('voice-label');
+  private readonly copyRoomBtn = el<HTMLButtonElement>('btn-copy-room');
+  private readonly volumeInput = el<HTMLInputElement>('volume');
+  private readonly sensInput = el<HTMLInputElement>('sensitivity');
+  private readonly sensValue = el('sens-value');
   private readonly muteBtn = el<HTMLButtonElement>('btn-mute');
   private readonly voiceBtn = el<HTMLButtonElement>('btn-voice');
   private readonly touch = el('touch');
@@ -151,11 +164,33 @@ export class UI {
         if (e.key === 'Enter') input.blur();
       });
     }
-    this.copyBtn.addEventListener('click', () => void this.copyLink());
+    this.copyBtn.addEventListener('click', () => void this.copyLink(this.copyBtn));
     this.startBtn.addEventListener('click', () => handlers.onStart());
     this.noJumpBox.addEventListener('change', () => handlers.onNoJump(this.noJumpBox.checked));
     el('btn-lobby-leave').addEventListener('click', () => handlers.onLeave());
-    el('btn-leave').addEventListener('click', () => handlers.onLeave());
+    el('btn-leave').addEventListener('click', () => {
+      this.setPause(false);
+      handlers.onLeave();
+    });
+    // The Esc menu: the ☰ button opens it; Resume, a click outside the card, or Esc closes it.
+    el('btn-menu').addEventListener('click', () => this.setPause(!this.pauseOpen));
+    el('btn-resume').addEventListener('click', () => {
+      this.setPause(false);
+      handlers.onResume();
+    });
+    this.pause.addEventListener('click', (e) => {
+      if (e.target === this.pause) {
+        this.setPause(false);
+        handlers.onResume();
+      }
+    });
+    this.copyRoomBtn.addEventListener('click', () => void this.copyLink(this.copyRoomBtn));
+    this.volumeInput.addEventListener('input', () => handlers.onVolume(Number(this.volumeInput.value) / 100));
+    this.sensInput.addEventListener('input', () => {
+      const v = Number(this.sensInput.value) / 100;
+      this.sensValue.textContent = `${v.toFixed(2)}×`;
+      handlers.onSensitivity(v);
+    });
     el('btn-lobby-toggle').addEventListener('click', () => {
       this.lobby.classList.toggle('collapsed');
     });
@@ -485,6 +520,8 @@ export class UI {
   // -------------------------------------------------------------------------
 
   showMenu(error = ''): void {
+    this.setPause(false);
+    this.micLive.classList.add('hidden');
     this.menu.classList.remove('hidden');
     this.lobby.classList.add('hidden');
     this.hud.classList.add('hidden');
@@ -504,6 +541,7 @@ export class UI {
     this.menu.classList.add('hidden');
     this.hud.classList.remove('hidden');
     this.roomTag.textContent = code;
+    this.shareUrl = `${location.origin}/?room=${code}`;
     this.touch.classList.toggle('hidden', !(this.touchEnabled && canPlay));
   }
 
@@ -657,6 +695,29 @@ export class UI {
     const label = mode === 'off' ? 'Voice chat: off (click to turn on)' : mode === 'ptt' ? 'Voice chat: hold V to talk (click for open mic)' : 'Voice chat: open mic (click to turn off)';
     b.title = label;
     b.setAttribute('aria-label', label);
+    this.voiceLabel.textContent = mode === 'off' ? 'Off' : mode === 'ptt' ? 'Hold V to talk' : 'Open mic';
+    this.micLive.classList.toggle('hidden', !live);
+  }
+
+  get pauseOpen(): boolean {
+    return !this.pause.classList.contains('hidden');
+  }
+
+  /** Called when the Esc menu opens or closes. */
+  onPauseChange: (open: boolean) => void = () => {};
+
+  /** Opens or closes the Esc menu. */
+  setPause(open: boolean): void {
+    if (open === this.pauseOpen) return;
+    this.pause.classList.toggle('hidden', !open);
+    this.onPauseChange(open);
+  }
+
+  /** Puts the saved settings on the menu's sliders. */
+  setSettings(volume: number, sensitivity: number): void {
+    this.volumeInput.value = String(Math.round(volume * 100));
+    this.sensInput.value = String(Math.round(sensitivity * 100));
+    this.sensValue.textContent = `${sensitivity.toFixed(2)}×`;
   }
 
   setMuted(muted: boolean): void {
@@ -664,7 +725,7 @@ export class UI {
     this.muteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
   }
 
-  private async copyLink(): Promise<void> {
+  private async copyLink(button: HTMLButtonElement): Promise<void> {
     let ok = false;
     try {
       await navigator.clipboard.writeText(this.shareUrl);
@@ -684,8 +745,8 @@ export class UI {
       }
       ta.remove();
     }
-    this.copyBtn.textContent = ok ? 'Copied' : 'Copy failed';
-    window.setTimeout(() => (this.copyBtn.textContent = 'Copy link'), 1800);
+    button.textContent = ok ? 'Copied' : 'Copy failed';
+    window.setTimeout(() => (button.textContent = 'Copy link'), 1800);
   }
 }
 

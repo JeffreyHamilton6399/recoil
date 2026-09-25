@@ -12,6 +12,8 @@ import { TOON, outlined, toon } from './toon.js';
 
 export interface Character {
   root: THREE.Group;
+  /** Holds the legs; turns towards the way you're moving, so strafing side-steps. */
+  hips: THREE.Group;
   /** Everything above the hips: leans into slides and bobs with the walk. */
   upper: THREE.Group;
   head: THREE.Group;
@@ -20,9 +22,11 @@ export interface Character {
   chest: THREE.Vector3;
   /** Materials that flash white when this player is hit. */
   flashMats: THREE.MeshToonMaterial[];
-  /** Walk cycle phase, and a smoothed estimate of speed from movement. */
+  /** Walk cycle phase, and a smoothed estimate of speed and direction from movement. */
   phase: number;
   speed: number;
+  vx: number;
+  vz: number;
   prev: THREE.Vector3 | null;
 }
 
@@ -41,6 +45,8 @@ export function makeCharacter(color: string): Character {
   const cream = toon('#fff6e0');
 
   const root = new THREE.Group();
+  const hips = new THREE.Group();
+  root.add(hips);
 
   // Legs: pivot at the hips so they swing.
   const legs: THREE.Group[] = [];
@@ -55,7 +61,7 @@ export function makeCharacter(color: string): Character {
     boot.position.set(0, -0.76, -0.05);
     boot.castShadow = true;
     leg.add(boot);
-    root.add(leg);
+    hips.add(leg);
     legs.push(leg);
   }
 
@@ -117,6 +123,7 @@ export function makeCharacter(color: string): Character {
 
   return {
     root,
+    hips,
     upper,
     head,
     legs: [legs[0], legs[1]],
@@ -124,40 +131,90 @@ export function makeCharacter(color: string): Character {
     flashMats: [suit, pants, helmet],
     phase: 0,
     speed: 0,
+    vx: 0,
+    vz: 0,
     prev: null,
   };
 }
 
+/** Moves a value towards a target by a fraction per second. */
+function ease(v: number, target: number, rate: number, dt: number): number {
+  return v + (target - v) * Math.min(1, dt * rate);
+}
+
 /**
- * Animates a character: a walk cycle from how fast it's moving, legs tucked
- * in the air, legs out front in a slide, and the head following the aim.
+ * Animates a character from how it's moving:
+ *  - walking: the legs stride in the direction of travel. The hips turn
+ *    towards it, so strafing side-steps and backing up backpedals, and the
+ *    body leans into the strafe.
+ *  - in the air: a tucked jump pose.
+ *  - sliding: low to the ground, lead leg out straight, back leg tucked.
+ * `facing` is the model's yaw (its rotation.y); the head follows the aim.
  */
-export function animateCharacter(c: Character, dt: number, pos: THREE.Vector3, grounded: boolean, sliding: boolean, pitch: number): void {
-  // Speed from how far the model moved (other players are interpolated, so this is smooth).
+export function animateCharacter(c: Character, dt: number, pos: THREE.Vector3, facing: number, grounded: boolean, sliding: boolean, pitch: number): void {
+  // Velocity from how far the model moved (other players are interpolated, so this is smooth).
   if (c.prev && dt > 0) {
-    const flat = Math.hypot(pos.x - c.prev.x, pos.z - c.prev.z) / dt;
-    c.speed += (Math.min(flat, 20) - c.speed) * Math.min(1, dt * 10);
+    const vx = (pos.x - c.prev.x) / dt;
+    const vz = (pos.z - c.prev.z) / dt;
+    const k = Math.min(1, dt * 10);
+    c.vx += (Math.max(-20, Math.min(20, vx)) - c.vx) * k;
+    c.vz += (Math.max(-20, Math.min(20, vz)) - c.vz) * k;
+    c.speed = Math.hypot(c.vx, c.vz);
   }
   c.prev = (c.prev ?? new THREE.Vector3()).copy(pos);
 
+  // Movement relative to where the model faces (it looks down -z, turned by `facing`).
+  const fx = -Math.sin(facing);
+  const fz = -Math.cos(facing);
+  const along = c.vx * fx + c.vz * fz;
+  const side = c.vx * -fz + c.vz * fx; // + is to the model's right
+  const moving = c.speed > 0.6;
+
   const [l, r] = c.legs;
-  let swing = 0;
   if (sliding) {
-    l.rotation.x = r.rotation.x = -1.25;
-  } else if (!grounded) {
-    // A tucked jump pose.
-    l.rotation.x += (-0.7 - l.rotation.x) * Math.min(1, dt * 12);
-    r.rotation.x += (0.35 - r.rotation.x) * Math.min(1, dt * 12);
+    // Slide: drop low, lead leg straight out, back leg folded under.
+    c.root.position.y = ease(c.root.position.y, -0.32, 16, dt);
+    c.hips.rotation.y = ease(c.hips.rotation.y, 0.25, 12, dt);
+    l.rotation.x = ease(l.rotation.x, -1.5, 18, dt);
+    r.rotation.x = ease(r.rotation.x, -0.55, 18, dt);
+    l.rotation.z = ease(l.rotation.z, 0, 18, dt);
+    r.rotation.z = ease(r.rotation.z, 0.25, 18, dt);
+    c.upper.rotation.z = ease(c.upper.rotation.z, 0.12, 10, dt);
   } else {
-    // Walk: stride length grows with speed; cadence too.
-    if (c.speed > 0.4) c.phase += dt * (4 + c.speed * 0.9);
-    const amp = Math.min(0.75, c.speed * 0.09);
-    swing = Math.sin(c.phase) * amp;
-    l.rotation.x += (swing - l.rotation.x) * Math.min(1, dt * 20);
-    r.rotation.x += (-swing - r.rotation.x) * Math.min(1, dt * 20);
+    c.root.position.y = ease(c.root.position.y, 0, 12, dt);
+    l.rotation.z = ease(l.rotation.z, 0, 12, dt);
+    r.rotation.z = ease(r.rotation.z, 0, 12, dt);
+    if (!grounded) {
+      // A tucked jump pose.
+      l.rotation.x = ease(l.rotation.x, -0.7, 12, dt);
+      r.rotation.x = ease(r.rotation.x, 0.35, 12, dt);
+      c.hips.rotation.y = ease(c.hips.rotation.y, 0, 8, dt);
+    } else {
+      // Which way the legs point: the travel direction, flipped when backing up
+      // (then the stride runs backwards: a backpedal).
+      let angle = moving ? Math.atan2(side, along) : 0;
+      let dir = 1;
+      if (angle > Math.PI * 0.6) {
+        angle -= Math.PI;
+        dir = -1;
+      } else if (angle < -Math.PI * 0.6) {
+        angle += Math.PI;
+        dir = -1;
+      }
+      c.hips.rotation.y = ease(c.hips.rotation.y, -Math.max(-1.2, Math.min(1.2, angle)), 10, dt);
+      // Stride length and cadence grow with speed.
+      if (moving) c.phase += dt * (4 + c.speed * 0.9) * dir;
+      const amp = Math.min(0.75, c.speed * 0.09);
+      const swing = Math.sin(c.phase) * amp;
+      l.rotation.x = ease(l.rotation.x, swing, 20, dt);
+      r.rotation.x = ease(r.rotation.x, -swing, 20, dt);
+    }
+    // Lean into strafes and runs.
+    c.upper.rotation.z = ease(c.upper.rotation.z, grounded ? -Math.max(-1, Math.min(1, side / 8)) * 0.14 : 0, 8, dt);
   }
-  // A small bob with each step, and a lean into the run.
-  c.upper.position.y = HIPS + Math.abs(Math.sin(c.phase)) * 0.035 * Math.min(1, c.speed / 6) * (grounded && !sliding ? 1 : 0);
+  // A small bob with each step.
+  const bob = grounded && !sliding ? Math.abs(Math.sin(c.phase)) * 0.035 * Math.min(1, c.speed / 6) : 0;
+  c.upper.position.y = HIPS + bob;
   c.head.rotation.x = pitch * 0.45;
 }
 

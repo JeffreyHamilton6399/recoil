@@ -72,6 +72,7 @@ let tickAcc = 0;
 let lookReset = true; // face where the server puts you on the next snapshot
 /** Out of the round in a match (knocked off, or waiting to join): the loadout panel is up. */
 let spectating = false;
+let wasSpectating = false;
 /** The room's no-jump rule (from the roster). */
 let roomNoJump = false;
 /** Crosshair spread from firing, easing back to 0. */
@@ -80,6 +81,10 @@ let bloom = 0;
 let stepDist = 0;
 /** How spread out the crosshair is right now (0..1). */
 let spread = 0;
+/** Seconds until the next heartbeat (when your damage is high). */
+let heartIn = 0;
+/** Speed-lines strength (sliding, going fast), eased. */
+let rush = 0;
 let lastInput: InputState | null = null;
 /** Knife in hand (knife players), and recoil mode (remembered between visits). */
 let holdKnife = false;
@@ -132,6 +137,8 @@ const scene = new Scene3D(canvas);
 const sfx = new Sfx();
 const hud = new Hud();
 const voice = new Voice((msg) => net.send(msg));
+scene.onWhizz = (pan, close) => sfx.whizz(pan, close);
+scene.onCasing = (pan) => sfx.casing(pan);
 voice.onChange = () => {
   ui.setVoice(voice.mode, voice.transmitting);
   refreshRoomUi();
@@ -175,6 +182,21 @@ const ui = new UI({
     void voice.cycleMode().then((err) => err && hud.addFeed([err]));
   },
   onMutePlayer: (id) => voice.toggleMute(id),
+  onResume: () => {
+    if (roomCode && myId !== -1 && !ui.isTouch && !spectating) input.requestLock();
+  },
+  onVolume: (v) => {
+    sfx.unlock();
+    sfx.setVolume(v);
+  },
+  onSensitivity: (v) => {
+    userSensitivity = v;
+    try {
+      localStorage.setItem('recoil-sensitivity', String(v));
+    } catch {
+      // Not remembered, but it still works this session.
+    }
+  },
   onToggleMute: () => {
     sfx.unlock();
     ui.setMuted(sfx.toggleMute());
@@ -188,7 +210,40 @@ input.onTouchDetected = () => {
   ui.enableTouch();
   refreshRoomUi();
 };
-input.onLockChange = (locked) => ui.setLocked(locked);
+input.onLockChange = (locked) => {
+  ui.setLocked(locked);
+  // Letting go of the mouse mid-match (Esc) opens the menu; not when spectating
+  // (the game lets go itself so you can pick a loadout) or on touch.
+  if (!locked && roomCode && myId !== -1 && !spectating && !ui.isTouch) ui.setPause(true);
+  if (locked) ui.setPause(false);
+};
+// Esc with the mouse already free toggles the menu.
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Escape' || !roomCode || input.locked) return;
+  if (ui.pauseOpen) {
+    ui.setPause(false);
+  } else ui.setPause(true);
+});
+// A Back gesture (or button) while in a room should not leave the game: keep a
+// history entry to fall back on, and open the menu instead.
+window.addEventListener('popstate', () => {
+  if (!roomCode) return;
+  window.history.pushState({ recoil: true }, '', location.href);
+  ui.setPause(true);
+});
+/** Settings from the menu, remembered between visits. */
+let userSensitivity = loadNumber('recoil-sensitivity', 1);
+function loadNumber(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    const v = raw === null ? NaN : Number(raw);
+    return Number.isFinite(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+ui.setSettings(sfx.volume, userSensitivity);
+ui.onPauseChange = (open) => sfx.menu(open);
 input.onOffhandPress = () => setKnife(!holdKnife);
 input.onWheel = () => setKnife(!holdKnife);
 input.onRecoilPress = () => setRecoilMode(!recoilMode);
@@ -317,6 +372,7 @@ function handleMessage(msg: ServerMessage): void {
       roomCode = msg.code;
       myId = msg.you;
       window.history.replaceState(null, '', `/?room=${msg.code}`);
+      if (!(window.history.state as { recoil?: boolean } | null)?.recoil) window.history.pushState({ recoil: true }, '', `/?room=${msg.code}`);
       ui.setBanner(null);
       void voice.setSeat(myId).then((err) => err && hud.addFeed([err]));
       if (myId !== -1) net.send({ t: 'offhand', o: ui.offhand });
@@ -759,7 +815,10 @@ function playEvent(ev: GameEvent, view: View, time: number): void {
         sfx.hitmarker(heavy);
         scene.damageNumber(ev.x, ev.y, ev.z, ev.d, heavy);
       }
-      if (ev.p === myId) hud.hurt(ev.f);
+      if (ev.p === myId) {
+        hud.hurt(ev.f);
+        sfx.hurt(ev.f);
+      }
       if (heavy && ev.o === myId) scene.addTrauma(0.1);
       break;
     case 'block':
@@ -911,6 +970,16 @@ function frame(): void {
       } else {
         stepDist = 1.6; // the first step comes quickly once you start moving
       }
+      // Speed lines: on in a slide or at high speed (flying after a hit, a jump pad...).
+      const flying = Math.hypot(pred.vx, pred.vy, pred.vz);
+      const rushTarget = pred.slide > 0 ? 1 : Math.max(0, Math.min(1, (flying - 12) / 10));
+      rush += (rushTarget - rush) * Math.min(1, dt * 8);
+      // A heartbeat once your damage gets dangerous: faster the worse it is.
+      heartIn -= dt;
+      if (!out && me.damage >= 100 && heartIn <= 0) {
+        sfx.heartbeat();
+        heartIn = Math.max(0.55, 1.1 - (me.damage - 100) / 200);
+      }
       // Crosshair spread: wider when moving fast or in the air, tighter aiming down sights.
       bloom = Math.max(0, bloom - dt * 2.5);
       const moving = Math.min(1, speed / (C.MOVE_SPEED * C.SPRINT_MULT));
@@ -947,10 +1016,12 @@ function frame(): void {
     voice.update(scene.listener(), heads);
   }
   // Slower look while zoomed in, so aiming stays steady.
-  input.sensitivity = scene.zoom;
+  input.sensitivity = scene.zoom * userSensitivity;
   // The loadout panel while you're out of a round.
   const phase = snaps[snaps.length - 1]?.ph ?? 'lobby';
   spectating = !!roomCode && myId !== -1 && phase !== 'lobby' && (!pred || (pred.falling && pred.fallTime > C.FALL_DURATION * 0.5));
+  if (spectating && !wasSpectating) input.releaseMouse();
+  wasSpectating = spectating;
   ui.setLoadout(spectating);
   if (roomCode) {
     hud.update(
@@ -964,6 +1035,7 @@ function frame(): void {
         matchWinner,
         weapon: pred?.weapon ?? 0,
         spread,
+        rush,
         aiming: cam.kind === 'first' && cam.aiming,
         ready: pred ? 1 - Math.min(1, pred.cooldown / Math.max(0.05, weaponDef(pred.weapon).cooldown)) : 1,
         offhand: pred?.offhand ?? ui.offhand,

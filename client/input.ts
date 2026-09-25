@@ -62,8 +62,10 @@ export interface TouchElements {
 export class Input {
   yaw = 0;
   pitch = 0;
-  /** Look sensitivity multiplier (lower while zoomed in). */
+  /** Look sensitivity multiplier (your setting, scaled down while zoomed in). */
   sensitivity = 1;
+  /** Set while letting go of the mouse on purpose (spectating), so fullscreen stays. */
+  private keepFullscreen = false;
   /** Called on the first touch, so the UI can reveal the touch controls. */
   onTouchDetected: () => void = () => {};
   /** Called when fire is pressed or released (for instant sound feedback). */
@@ -143,6 +145,13 @@ export class Input {
       this.fireChanged();
     });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Some browsers read right+left clicks (a "rocker") as a Back gesture; a
+    // game's clicks should never navigate, so swallow their default actions.
+    for (const type of ['mousedown', 'mouseup', 'auxclick'] as const) {
+      canvas.addEventListener(type, (e) => {
+        if (this.locked) e.preventDefault();
+      });
+    }
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
       const k = C.MOUSE_SENSITIVITY * this.sensitivity;
@@ -153,8 +162,10 @@ export class Input {
         this.mouseFire = false;
         this.mouseAim = false;
         this.fireChanged();
-        // Letting go of the mouse (Esc) leaves fullscreen too, in one press.
-        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        // Letting go of the mouse (Esc) leaves fullscreen too, in one press;
+        // unless the game let go on purpose (you're spectating).
+        if (document.fullscreenElement && !this.keepFullscreen) document.exitFullscreen().catch(() => {});
+        this.keepFullscreen = false;
       }
       this.onLockChange(this.locked);
     });
@@ -215,6 +226,13 @@ export class Input {
   exitLock(): void {
     if (this.locked) document.exitPointerLock();
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  }
+
+  /** Lets go of the mouse but stays fullscreen (so you can click the loadout while spectating). */
+  releaseMouse(): void {
+    if (!this.locked) return;
+    this.keepFullscreen = true;
+    document.exitPointerLock();
   }
 
   /** Points the view somewhere (on spawn, the server faces you at the centre). */
